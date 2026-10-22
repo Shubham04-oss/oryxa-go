@@ -169,6 +169,9 @@ const (
 	// BrokerPipedream is Pipedream Connect: Pipedream holds the credential and
 	// runs the calls, for the toolkits neither Oryxa nor Composio serves.
 	BrokerPipedream = "pipedream"
+	// BrokerNative is the integrations service: it holds the credential and
+	// runs the calls, and apps learns of the connection from its events.
+	BrokerNative = "native"
 )
 
 // CheckBroker normalizes and checks a broker; empty is Composio.
@@ -176,10 +179,10 @@ func CheckBroker(broker string) (string, error) {
 	switch broker = strings.ToLower(strings.TrimSpace(broker)); broker {
 	case "", BrokerComposio:
 		return BrokerComposio, nil
-	case BrokerOryxa, BrokerPipedream:
+	case BrokerOryxa, BrokerPipedream, BrokerNative:
 		return broker, nil
 	}
-	return "", errors.Join(ErrInvalid, errors.New("a broker is composio, oryxa or pipedream"))
+	return "", errors.Join(ErrInvalid, errors.New("a broker is composio, oryxa, pipedream or native"))
 }
 
 // ConnectionStatus is where a connection is in its life.
@@ -222,6 +225,9 @@ type Connection struct {
 	// PipedreamAccountID is Pipedream's account, known once a Pipedream
 	// connection finished connecting.
 	PipedreamAccountID string
+	// NativeConnectionID is the integrations service's id for a native
+	// connection, which its events and tool calls name it by.
+	NativeConnectionID string
 	Status             ConnectionStatus
 	StatusReason       string
 	// Label identifies the connected account to the member, such as
@@ -258,6 +264,9 @@ func (connection Connection) Composio() bool {
 
 // Pipedream says Pipedream Connect holds the connection's credential.
 func (connection Connection) Pipedream() bool { return connection.Broker == BrokerPipedream }
+
+// Native says the integrations service holds the connection's credential.
+func (connection Connection) Native() bool { return connection.Broker == BrokerNative }
 
 // ConnectionQuery narrows a listing. An org admin may list the organization's
 // connections; anyone else lists their own.

@@ -141,6 +141,8 @@ type toolRoute struct {
 	hasOwn bool
 	// pipedream is the Pipedream action a PD_ slug names, or nil.
 	pipedream *pipedreamAction
+	// native says the slug names a tool of a native connection.
+	native bool
 }
 
 // routeTool answers the route for a slug, for one member. A PD_ slug is
@@ -153,6 +155,9 @@ func (s *Service) routeTool(ctx context.Context, organizationID, memberID, slug 
 		return toolRoute{
 			slug: slug, toolkit: own.Toolkit, readOnly: own.Spec.ReadOnly, own: own, hasOwn: true,
 		}, nil
+	}
+	if route, ok, err := s.nativeRoute(ctx, organizationID, memberID, slug); ok || err != nil {
+		return route, err
 	}
 	if s.pipedream != nil && strings.HasPrefix(slug, pipedreamPrefix) {
 		return s.pipedreamRoute(ctx, organizationID, memberID, slug)

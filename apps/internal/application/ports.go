@@ -41,6 +41,10 @@ type Store interface {
 	// Connection reads one connection of an organization, whatever its
 	// status. ErrNotFound for another organization's.
 	Connection(ctx context.Context, organizationID, id string) (domain.Connection, error)
+	// ApplyNativeConnection records what the integrations service reported
+	// of a connection; see postgres.Store.ApplyNativeConnection for the order
+	// it applies reports in.
+	ApplyNativeConnection(ctx context.Context, connection domain.Connection, at time.Time) error
 	// ConnectionByAccount reads the connection a Composio account backs.
 	ConnectionByAccount(ctx context.Context, composioAccountID string) (domain.Connection, error)
 	// Connections lists an organization's connections, newest first.

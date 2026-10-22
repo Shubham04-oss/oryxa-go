@@ -317,6 +317,12 @@ func (server *Server) connect(writer http.ResponseWriter, request *http.Request)
 		server.handleError(writer, request, err)
 		return
 	}
+	if broker == domain.BrokerNative {
+		// The connection is the integrations service's until the member
+		// finishes, and a row appears here when it says so.
+		writeJSON(writer, http.StatusCreated, map[string]any{"redirect_url": redirectURL})
+		return
+	}
 	writeJSON(writer, http.StatusCreated, map[string]any{"connection": viewConnection(connection), "redirect_url": redirectURL})
 }
 

@@ -60,9 +60,9 @@ var userSuppliedSchemes = []string{"API_KEY", "BEARER_TOKEN", "BASIC"}
 // has an auth config for the app, asks Composio for a link, and records the
 // pending connection. The member finishes in their browser, at RedirectURL.
 func (s *Service) Connect(ctx context.Context, credentials authclient.Credentials, organizationID string, input ConnectInput) (domain.Connection, string, error) {
-	// ponytail: a native connect records no apps connection yet, so it
-	// answers an empty one with the redirect; the integrations service owns
-	// the connection until it reports them (#372).
+	// A native connect records nothing here: the connection's row arrives
+	// with the integrations service's connection.created event once the
+	// member finishes, so the answer is the redirect alone.
 	if toolkit, err := domain.CheckToolkit(input.Toolkit); err == nil && s.nativeServes(toolkit) {
 		redirect, err := s.connectNative(ctx, credentials, organizationID, input)
 		return domain.Connection{}, redirect, err
@@ -468,6 +468,11 @@ func (s *Service) remove(ctx context.Context, connection domain.Connection, reas
 	}
 	if connection.Pipedream() {
 		return s.removePipedream(ctx, connection, reason)
+	}
+	if connection.Native() {
+		// The integrations service revokes its own credential (it publishes
+		// the member leaving as its removed event); apps only retires its row.
+		return s.recordRemoved(ctx, connection, reason)
 	}
 	if !connection.Composio() {
 		// Deleting at Composio would leave the account alive wherever it

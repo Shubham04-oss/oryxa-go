@@ -18,7 +18,7 @@ const connectionColumns = `id, organization_id, member_id, toolkit, broker,
 		WHERE credential.connection_id = apps_connections.id), '') AS credential_kind,
 	auth_config_id, composio_user_id,
 	composio_account_id, status, status_reason, label, return_to, auto_subscribe, auto_subscribed_at,
-	auto_subscribe_attempts, created_at, updated_at, connected_at, removed_at, pipedream_account_id`
+	auto_subscribe_attempts, created_at, updated_at, connected_at, removed_at, pipedream_account_id, native_connection_id`
 
 // brokerOf is the broker a connection is stored under: Composio's unless it
 // says otherwise, as every connection made before Oryxa's sign-in is.
@@ -466,18 +466,50 @@ func queryConnections(ctx context.Context, db querier, sql string, args ...any) 
 func scanConnection(rows pgx.Rows) (domain.Connection, error) {
 	var connection domain.Connection
 	var status string
-	var composioAccountID, pipedreamAccountID *string
+	var composioAccountID, pipedreamAccountID, nativeConnectionID *string
 	if err := rows.Scan(&connection.ID, &connection.OrganizationID, &connection.MemberID, &connection.Toolkit,
 		&connection.Broker, &connection.CredentialKind, &connection.AuthConfigID, &connection.ComposioUserID, &composioAccountID, &status, &connection.StatusReason,
 		&connection.Label, &connection.ReturnTo, &connection.AutoSubscribe, &connection.AutoSubscribedAt,
 		&connection.AutoSubscribeAttempts, &connection.CreatedAt, &connection.UpdatedAt,
-		&connection.ConnectedAt, &connection.RemovedAt, &pipedreamAccountID); err != nil {
+		&connection.ConnectedAt, &connection.RemovedAt, &pipedreamAccountID, &nativeConnectionID); err != nil {
 		return domain.Connection{}, fmt.Errorf("scan connection: %w", err)
 	}
 	connection.ComposioAccountID = text(composioAccountID)
 	connection.PipedreamAccountID = text(pipedreamAccountID)
+	connection.NativeConnectionID = text(nativeConnectionID)
 	connection.Status = domain.ConnectionStatus(status)
 	connection.CreatedAt = connection.CreatedAt.UTC()
 	connection.UpdatedAt = connection.UpdatedAt.UTC()
 	return connection, nil
+}
+
+// ApplyNativeConnection records what the integrations service reported of a
+// connection: a new row, or a change to the one it already named. The row's
+// status and at (the event's UpdatedAt) are what is applied, and only when
+// at is newer than the newest already applied, so an old event arriving late
+// or twice changes nothing. A removed status is final: it applies whatever
+// its time, and nothing changes a removed row afterwards. A removed event for
+// a connection never seen leaves a removed row behind, so a created event
+// that was overtaken cannot bring it back.
+func (store *Store) ApplyNativeConnection(ctx context.Context, connection domain.Connection, at time.Time) error {
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO apps_connections (
+			id, organization_id, member_id, toolkit, auth_config_id, composio_user_id, status, status_reason,
+			auto_subscribe, created_at, updated_at, connected_at, removed_at, broker, native_connection_id, native_updated_at
+		) VALUES ($1, $2, $3, $4, '', $5, $6, $7, false, $8, $8,
+			CASE WHEN $6 = 'active' THEN $8::timestamptz END, CASE WHEN $6 = 'removed' THEN $8::timestamptz END,
+			'native', $9, $8)
+		ON CONFLICT (native_connection_id) DO UPDATE SET
+			status = EXCLUDED.status, status_reason = EXCLUDED.status_reason, updated_at = EXCLUDED.updated_at,
+			native_updated_at = EXCLUDED.native_updated_at,
+			connected_at = COALESCE(apps_connections.connected_at, EXCLUDED.connected_at),
+			removed_at = EXCLUDED.removed_at
+		WHERE apps_connections.status <> 'removed'
+		  AND (EXCLUDED.status = 'removed' OR apps_connections.native_updated_at < EXCLUDED.native_updated_at)`,
+		connection.ID, connection.OrganizationID, connection.MemberID, connection.Toolkit,
+		domain.ComposioUserID(connection.OrganizationID, connection.MemberID),
+		string(connection.Status), connection.StatusReason, at, connection.NativeConnectionID); err != nil {
+		return mapWriteError("apply native connection", err)
+	}
+	return nil
 }

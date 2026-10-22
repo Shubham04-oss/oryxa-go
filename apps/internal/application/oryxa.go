@@ -262,6 +262,8 @@ func eventBroker(connection domain.Connection) string {
 		return appsv1.BrokerOryxa
 	case connection.Pipedream():
 		return appsv1.BrokerPipedream
+	case connection.Native():
+		return domain.BrokerNative
 	}
 	return ""
 }

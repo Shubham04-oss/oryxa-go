@@ -167,3 +167,35 @@ func TestDefinitionNamesAppsAndItsURL(t *testing.T) {
 		t.Fatalf("definition = %+v", Definition)
 	}
 }
+
+// logged mounts apps with values and answers what it logged.
+func logged(t *testing.T, values map[string]string) string {
+	t.Helper()
+	var output strings.Builder
+	mounted := platform(values)
+	mounted.Logger = slog.New(slog.NewTextHandler(&output, nil))
+	if _, err := Mount(context.Background(), mounted); err != nil {
+		t.Fatal(err)
+	}
+	return output.String()
+}
+
+func TestNativeStaysOffWithoutItsURLOrItsKey(t *testing.T) {
+	values := required()
+	values["APPS_NATIVE_TOOLKITS"] = "github"
+	values["APPS_INTEGRATIONS_URL"] = "https://integrations.oryxa.test"
+	if out := logged(t, values); !strings.Contains(out, "APPS_SERVICE_KEY_ID is not set") || strings.Contains(out, "the integrations service is configured") {
+		t.Fatalf("without the key, log = %s", out)
+	}
+	delete(values, "APPS_NATIVE_TOOLKITS")
+	delete(values, "APPS_INTEGRATIONS_URL")
+	if out := logged(t, values); !strings.Contains(out, "APPS_INTEGRATIONS_URL is not set") {
+		t.Fatalf("without the URL, log = %s", out)
+	}
+	values["APPS_NATIVE_TOOLKITS"] = "github"
+	values["APPS_INTEGRATIONS_URL"] = "https://integrations.oryxa.test"
+	values["APPS_SERVICE_KEY_ID"] = "alias/oryxa-apps"
+	if out := logged(t, values); !strings.Contains(out, "the integrations service is configured") {
+		t.Fatalf("with both, log = %s", out)
+	}
+}

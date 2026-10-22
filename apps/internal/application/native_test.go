@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
+
+	integrationsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/integrations/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/nativeclient"
@@ -45,7 +48,7 @@ func TestANativeToolkitConnectsThroughTheIntegrationsService(t *testing.T) {
 	t.Parallel()
 	h, received := nativeHarness(t, http.StatusOK, `{"url":"https://github.com/login/oauth/authorize?state=s"}`)
 
-	if broker, err := h.service.BrokerFor(context.Background(), "github"); err != nil || broker != brokerNative {
+	if broker, err := h.service.BrokerFor(context.Background(), "github"); err != nil || broker != domain.BrokerNative {
 		t.Fatalf("BrokerFor() = %q, %v", broker, err)
 	}
 	connection, redirect, err := h.service.Connect(context.Background(), memberToken, "org_1",
@@ -138,4 +141,168 @@ type nativeStub struct{}
 
 func (nativeStub) Connect(context.Context, nativeclient.ConnectRequest) (string, error) {
 	return "", nil
+}
+
+func (nativeStub) CallTool(context.Context, nativeclient.CallRequest) (nativeclient.CallResult, error) {
+	return nativeclient.CallResult{}, nil
+}
+
+func nativeEvent(status string, at time.Time) integrationsv1.Connection {
+	return integrationsv1.Connection{
+		ID: "icn_1", OrganizationID: "org_1", MemberID: "user-1", Level: integrationsv1.LevelPersonal,
+		App: "github", Mode: "oryxa", Status: status, UpdatedAt: at,
+	}
+}
+
+func onlyConnection(t *testing.T, h harness) domain.Connection {
+	t.Helper()
+	if len(h.store.connections) != 1 {
+		t.Fatalf("connections = %d, want 1", len(h.store.connections))
+	}
+	for _, connection := range h.store.connections {
+		return connection
+	}
+	return domain.Connection{}
+}
+
+func TestNativeConnectionEventsCreateUpdateAndRetireTheRow(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	if err := h.service.NativeConnectionChanged(ctx, nativeEvent(integrationsv1.StatusOK, testClock)); err != nil {
+		t.Fatal(err)
+	}
+	row := onlyConnection(t, h)
+	if row.Broker != domain.BrokerNative || row.NativeConnectionID != "icn_1" || row.Status != domain.ConnectionActive || row.Toolkit != "github" {
+		t.Fatalf("row = %+v", row)
+	}
+	if err := h.service.NativeConnectionChanged(ctx, nativeEvent(integrationsv1.StatusNeedsReauth, testClock.Add(time.Minute))); err != nil {
+		t.Fatal(err)
+	}
+	if row = onlyConnection(t, h); row.Status != domain.ConnectionExpired {
+		t.Fatalf("status after needs_reauth = %s", row.Status)
+	}
+	if err := h.service.NativeConnectionRemoved(ctx, nativeEvent(integrationsv1.StatusRevoked, testClock.Add(2*time.Minute))); err != nil {
+		t.Fatal(err)
+	}
+	if row = onlyConnection(t, h); row.Status != domain.ConnectionRemoved {
+		t.Fatalf("status after removed = %s", row.Status)
+	}
+}
+
+func TestNativeConnectionEventsThatNameNoRowAreDropped(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	org := nativeEvent(integrationsv1.StatusOK, testClock)
+	org.Level, org.MemberID = integrationsv1.LevelOrg, ""
+	bad := nativeEvent(integrationsv1.StatusOK, testClock)
+	bad.App = "NOT A SLUG"
+	for _, event := range []integrationsv1.Connection{org, bad} {
+		if err := h.service.NativeConnectionChanged(context.Background(), event); err != nil || len(h.store.connections) != 0 {
+			t.Fatalf("event %+v: err = %v, rows = %d", event, err, len(h.store.connections))
+		}
+	}
+}
+
+// nativeToolHarness has github connected natively for user-1, and a fake
+// integrations service that answers every tool call with status and answer.
+func nativeToolHarness(t *testing.T, status int, answer string) (harness, *[]nativeclient.CallRequest) {
+	t.Helper()
+	var received []nativeclient.CallRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request nativeclient.CallRequest
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		received = append(received, request)
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(answer))
+	}))
+	t.Cleanup(server.Close)
+	client, err := nativeclient.New(nativeclient.Config{BaseURL: server.URL, Signer: nativeSigner{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t)
+	h.service.native = client
+	if err := h.service.NativeConnectionChanged(context.Background(), nativeEvent(integrationsv1.StatusOK, testClock)); err != nil {
+		t.Fatal(err)
+	}
+	return h, &received
+}
+
+func TestRunToolRunsANativeToolThroughTheIntegrationsService(t *testing.T) {
+	t.Parallel()
+	h, received := nativeToolHarness(t, http.StatusOK, `{"output":{"issues":[]}}`)
+	run, err := h.service.RunTool(context.Background(), memberToken, "org_1", RunToolInput{
+		Tool: "github_list_issues", Arguments: json.RawMessage(`{"repo":"oryxa"}`),
+	})
+	if err != nil || run.Action.Status != domain.ActionSucceeded || string(run.Data) != `{"issues":[]}` {
+		t.Fatalf("run = %+v, %v", run, err)
+	}
+	want := nativeclient.CallRequest{
+		Org: "org_1", Member: "user-1", Agent: "member", Role: "member", Connection: "icn_1",
+		Tool: "github.list_issues", Input: json.RawMessage(`{"repo":"oryxa"}`), Confirmed: true,
+	}
+	if len(*received) != 1 || (*received)[0].Tool != want.Tool || (*received)[0].Connection != want.Connection ||
+		(*received)[0].Member != want.Member || !(*received)[0].Confirmed || string((*received)[0].Input) != string(want.Input) {
+		t.Fatalf("integrations received %+v, want %+v", *received, want)
+	}
+	if len(h.composio.executed) != 0 {
+		t.Fatal("a native tool reached Composio")
+	}
+}
+
+func TestRunToolLeavesAnUnconfirmedCallerUnconfirmed(t *testing.T) {
+	t.Parallel()
+	h, received := nativeToolHarness(t, http.StatusConflict, `{"error":{"code":"confirmation_required"}}`)
+	_, err := h.service.RunTool(context.Background(), agentToken, "org_1", RunToolInput{Tool: "GITHUB_CREATE_ISSUE", OnlyReads: true})
+	if !errors.Is(err, domain.ErrNotReadOnly) {
+		t.Fatalf("error = %v, want not read-only", err)
+	}
+	if len(*received) != 1 || (*received)[0].Confirmed {
+		t.Fatalf("received = %+v, want one unconfirmed call", *received)
+	}
+}
+
+func TestRunToolMapsTheIntegrationsServiceErrors(t *testing.T) {
+	t.Parallel()
+	for name, testCase := range map[string]struct {
+		status int
+		body   string
+		want   error
+	}{
+		"no such tool":    {http.StatusNotFound, `{"error":{"code":"not_found"}}`, domain.ErrNotFound},
+		"needs reauth":    {http.StatusConflict, `{"error":{"code":"needs_reauth"}}`, domain.ErrNeedsReconnect},
+		"unavailable":     {http.StatusConflict, `{"error":{"code":"connection_unavailable"}}`, domain.ErrNotConnected},
+		"invalid":         {http.StatusBadRequest, `{"error":{"code":"invalid_request"}}`, domain.ErrInvalid},
+		"output too big":  {http.StatusBadGateway, `{"error":{"code":"output_too_large"}}`, domain.ErrUnavailable},
+		"service is down": {http.StatusInternalServerError, `{"error":{"code":"internal"}}`, domain.ErrUnavailable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h, _ := nativeToolHarness(t, testCase.status, testCase.body)
+			_, err := h.service.RunTool(context.Background(), memberToken, "org_1", RunToolInput{Tool: "GITHUB_LIST_ISSUES"})
+			if !errors.Is(err, testCase.want) {
+				t.Fatalf("error = %v, want %v", err, testCase.want)
+			}
+		})
+	}
+}
+
+func TestRunToolAnswersAnAppsRefusalAsAFailedRun(t *testing.T) {
+	t.Parallel()
+	h, _ := nativeToolHarness(t, http.StatusOK, `{"tool_error":{"code":"rate_limited","message":"slow down"}}`)
+	run, err := h.service.RunTool(context.Background(), memberToken, "org_1", RunToolInput{Tool: "GITHUB_LIST_ISSUES"})
+	if err != nil || run.Action.Status != domain.ActionFailed || run.Action.Error != "slow down" {
+		t.Fatalf("run = %+v, %v", run, err)
+	}
+}
+
+func TestANativeSlugIsOnlyTheMembersOwn(t *testing.T) {
+	t.Parallel()
+	h, received := nativeToolHarness(t, http.StatusOK, `{"output":{}}`)
+	// user-2 has no native github connection, so the slug is read as Composio's.
+	_, err := h.service.RunTool(context.Background(), otherToken, "org_1", RunToolInput{Tool: "GITHUB_LIST_ISSUES"})
+	if err == nil || len(*received) != 0 {
+		t.Fatalf("error = %v, integrations calls = %d", err, len(*received))
+	}
 }

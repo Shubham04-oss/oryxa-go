@@ -108,3 +108,76 @@ func TestNewRefusesAURLAServiceTokenShouldNotTravelOn(t *testing.T) {
 		t.Errorf("no signer: %v", err)
 	}
 }
+
+func TestCallToolSendsTheRequestAndAnswersOutputOrTheAppsError(t *testing.T) {
+	t.Parallel()
+	for name, testCase := range map[string]struct {
+		answer    string
+		output    string
+		toolError *ToolError
+	}{
+		"output":     {`{"output":{"n":1}}`, `{"n":1}`, nil},
+		"tool error": {`{"tool_error":{"code":"rate_limited","message":"slow"}}`, "", &ToolError{Code: "rate_limited", Message: "slow"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var got CallRequest
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != "/v1/tools/call" {
+					t.Errorf("request = %s %s", r.Method, r.URL.Path)
+				}
+				_ = json.NewDecoder(r.Body).Decode(&got)
+				_, _ = w.Write([]byte(testCase.answer))
+			}))
+			defer server.Close()
+			signer := &fixedSigner{}
+			client, err := New(Config{BaseURL: server.URL, Signer: signer})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := CallRequest{
+				Org: "org_1", Member: "usr_1", Agent: "member", Role: "member", Connection: "icn_1",
+				Tool: "github.list_issues", Input: json.RawMessage(`{"a":1}`), Confirmed: true,
+			}
+			result, err := client.CallTool(context.Background(), want)
+			if err != nil || string(result.Output) != testCase.output || (result.ToolError == nil) != (testCase.toolError == nil) ||
+				(testCase.toolError != nil && *result.ToolError != *testCase.toolError) {
+				t.Fatalf("CallTool() = %+v, %v", result, err)
+			}
+			if string(got.Input) != `{"a":1}` || got.Tool != want.Tool || got.Connection != want.Connection || !got.Confirmed || signer.purpose != ToolsPurpose {
+				t.Fatalf("sent %+v as purpose %q", got, signer.purpose)
+			}
+		})
+	}
+}
+
+func TestCallToolMapsTheServicesRefusals(t *testing.T) {
+	t.Parallel()
+	for name, testCase := range map[string]struct {
+		status int
+		code   string
+		want   error
+	}{
+		"not found":        {http.StatusNotFound, "not_found", ErrNotFound},
+		"confirmation":     {http.StatusConflict, "confirmation_required", ErrConfirmation},
+		"needs reauth":     {http.StatusConflict, "needs_reauth", ErrNeedsReauth},
+		"unavailable":      {http.StatusConflict, "connection_unavailable", ErrUnavailable},
+		"output too large": {http.StatusBadGateway, "output_too_large", ErrOutputTooLarge},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(testCase.status)
+				_, _ = w.Write([]byte(`{"error":{"code":"` + testCase.code + `","message":"words"}}`))
+			}))
+			defer server.Close()
+			client, err := New(Config{BaseURL: server.URL, Signer: &fixedSigner{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.CallTool(context.Background(), CallRequest{}); !errors.Is(err, testCase.want) {
+				t.Fatalf("CallTool() error = %v, want %v", err, testCase.want)
+			}
+		})
+	}
+}

@@ -29,7 +29,7 @@ func (s *Service) brokerFor(ctx context.Context, toolkit string) (string, error)
 		return broker, nil
 	}
 	if s.nativeServes(toolkit) {
-		return brokerNative, nil
+		return domain.BrokerNative, nil
 	}
 	if s.oryxa != nil && s.oryxa.enabled[toolkit] {
 		return domain.BrokerOryxa, nil
