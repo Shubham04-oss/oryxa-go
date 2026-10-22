@@ -20,6 +20,7 @@ import (
 type Native interface {
 	Connect(ctx context.Context, request nativeclient.ConnectRequest) (string, error)
 	CallTool(ctx context.Context, request nativeclient.CallRequest) (nativeclient.CallResult, error)
+	Remove(ctx context.Context, org, connection string) error
 }
 
 // nativeLevel is the level of every connect made here: the org-level

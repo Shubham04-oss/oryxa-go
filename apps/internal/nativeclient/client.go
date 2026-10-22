@@ -25,6 +25,8 @@ const (
 	ConnectPurpose = "connect"
 	// ToolsPurpose is the purpose of the token that runs a tool.
 	ToolsPurpose = "tools"
+	// ConnectionsPurpose is the purpose of the token that removes a connection.
+	ConnectionsPurpose = "connections"
 
 	requestTimeout   = 30 * time.Second
 	maxResponseBytes = 1 << 20
@@ -171,21 +173,42 @@ func (client *Client) CallTool(ctx context.Context, request CallRequest) (CallRe
 	return result, err
 }
 
+// Remove revokes a connection of the org at the integrations service. A
+// connection it does not know (already removed, or never there) is
+// ErrNotFound.
+func (client *Client) Remove(ctx context.Context, org, connection string) error {
+	var answer struct {
+		ProviderRevoked bool `json:"provider_revoked"`
+	}
+	path := "/v1/connections/" + url.PathEscape(connection) + "?" + url.Values{"org": {org}}.Encode()
+	return client.do(ctx, http.MethodDelete, path, ConnectionsPurpose, nil, &answer)
+}
+
 func (client *Client) post(ctx context.Context, path, purpose string, body, into any) error {
-	encoded, err := json.Marshal(body)
-	if err != nil {
-		return fmt.Errorf("nativeclient: encode request: %w", err)
+	return client.do(ctx, http.MethodPost, path, purpose, body, into)
+}
+
+func (client *Client) do(ctx context.Context, method, path, purpose string, body, into any) error {
+	var encoded io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("nativeclient: encode request: %w", err)
+		}
+		encoded = bytes.NewReader(data)
 	}
 	token, err := client.signer.Token(ctx, Audience, purpose)
 	if err != nil {
 		return fmt.Errorf("nativeclient: sign service token: %w", err)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+path, bytes.NewReader(encoded))
+	request, err := http.NewRequestWithContext(ctx, method, client.baseURL+path, encoded)
 	if err != nil {
 		return fmt.Errorf("nativeclient: build request: %w", err)
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	response, err := client.http.Do(request)
 	if err != nil {
 		return fmt.Errorf("nativeclient: %s: %w", path, err)

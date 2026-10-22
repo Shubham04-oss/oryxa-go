@@ -147,6 +147,8 @@ func (nativeStub) CallTool(context.Context, nativeclient.CallRequest) (nativecli
 	return nativeclient.CallResult{}, nil
 }
 
+func (nativeStub) Remove(context.Context, string, string) error { return nil }
+
 func nativeEvent(status string, at time.Time) integrationsv1.Connection {
 	return integrationsv1.Connection{
 		ID: "icn_1", OrganizationID: "org_1", MemberID: "user-1", Level: integrationsv1.LevelPersonal,
@@ -304,5 +306,54 @@ func TestANativeSlugIsOnlyTheMembersOwn(t *testing.T) {
 	_, err := h.service.RunTool(context.Background(), otherToken, "org_1", RunToolInput{Tool: "GITHUB_LIST_ISSUES"})
 	if err == nil || len(*received) != 0 {
 		t.Fatalf("error = %v, integrations calls = %d", err, len(*received))
+	}
+}
+
+// Removing a native connection revokes it at the integrations service first;
+// the row is retired only once the service has, or no longer knows it.
+func TestRemovingANativeConnectionRevokesItAtTheIntegrationsService(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		status      int
+		answer      string
+		wantErr     error
+		wantRetired bool
+	}{
+		"revoked":         {http.StatusOK, `{"provider_revoked":true}`, nil, true},
+		"already gone":    {http.StatusNotFound, `{"error":{"code":"not_found"}}`, nil, true},
+		"service failing": {http.StatusInternalServerError, `{"error":{"code":"internal"}}`, domain.ErrUnavailable, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var method, path string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				method, path = r.Method, r.URL.RequestURI()
+				w.WriteHeader(c.status)
+				_, _ = w.Write([]byte(c.answer))
+			}))
+			t.Cleanup(server.Close)
+			client, err := nativeclient.New(nativeclient.Config{BaseURL: server.URL, Signer: nativeSigner{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			h := newHarness(t)
+			h.service.native = client
+			if err := h.service.NativeConnectionChanged(context.Background(), nativeEvent(integrationsv1.StatusOK, testClock)); err != nil {
+				t.Fatal(err)
+			}
+			var id string
+			for id = range h.store.connections {
+			}
+			err = h.service.RemoveConnection(context.Background(), memberToken, "org_1", id)
+			if !errors.Is(err, c.wantErr) && !(c.wantErr == nil && err == nil) {
+				t.Fatalf("remove = %v, want %v", err, c.wantErr)
+			}
+			if method != http.MethodDelete || path != "/v1/connections/icn_1?org=org_1" {
+				t.Fatalf("integrations saw %s %s", method, path)
+			}
+			if retired := h.store.connections[id].Status == domain.ConnectionRemoved; retired != c.wantRetired {
+				t.Fatalf("retired = %v, want %v", retired, c.wantRetired)
+			}
+		})
 	}
 }

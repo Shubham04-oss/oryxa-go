@@ -17,6 +17,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/apps/internal/nativeclient"
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
 )
 
@@ -470,8 +471,17 @@ func (s *Service) remove(ctx context.Context, connection domain.Connection, reas
 		return s.removePipedream(ctx, connection, reason)
 	}
 	if connection.Native() {
-		// The integrations service revokes its own credential (it publishes
-		// the member leaving as its removed event); apps only retires its row.
+		// The credential is the integrations service's: it is revoked there
+		// before the row is retired, as with every other broker, so a member
+		// who disconnects (or leaves) leaves nothing live. One the service no
+		// longer knows is already gone.
+		if s.native == nil {
+			return fmt.Errorf("remove the connection: the integrations service is not configured: %w", domain.ErrUnavailable)
+		}
+		if err := s.native.Remove(ctx, connection.OrganizationID, connection.NativeConnectionID); err != nil && !errors.Is(err, nativeclient.ErrNotFound) {
+			s.logger.ErrorContext(ctx, "remove a native connection", "connection_id", connection.ID, "error", err)
+			return fmt.Errorf("remove the connection: the integrations service did not answer: %w", domain.ErrUnavailable)
+		}
 		return s.recordRemoved(ctx, connection, reason)
 	}
 	if !connection.Composio() {
