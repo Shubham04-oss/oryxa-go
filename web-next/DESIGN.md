@@ -1319,8 +1319,20 @@ not permission to copy every incidental value into a new component.
   Oct 2026; boards OnbV3s1–s5 and Onb3Model) uses the sign-in layout through
   `OnboardingFrame` (`components/onboarding-frame.tsx`). Naming the
   workspace is step 1 (routes/index `NewWorkspace`); `?setup=` carries steps
-  2–5 in `components/onboarding.tsx`: Krude (background access), Tools
-  (connect apps), Crew (invite by email) and Teamspace (the first one).
+  2–5 in `components/onboarding.tsx`: Your agent (its name, and background
+  access), Tools (connect apps), Crew (invite by email) and Teamspace (the
+  first one).
+  - **Your agent** (owner, 22 Oct 2026: ask the member what to call their
+    agent) asks "What should your agent be called?" with one Name field,
+    started from the name Go gave it (a plain friendly one, such as Nia), and
+    the miniature and the step's lines name it as it is typed. Continue, or
+    Enter in the field, saves a changed name (`PATCH …/agents/{id}`, 1 to 60
+    characters once trimmed) and moves on; the name it already has needs no
+    save. A name another agent in the workspace has is refused in words
+    ("Another agent in this workspace already has that name. Try another.")
+    and the step stays. Skip for now keeps the name it has. When the agent
+    cannot be read the field is left out, with one line pointing to
+    Settings → Your agent, where Rename stays.
   - **The scene** on the left holds a miniature of the member's workspace
     (`WorkspaceModel`): navigation, the page and Krude's panel, as three
     panes. One part fills in per step, from what is really set up: the

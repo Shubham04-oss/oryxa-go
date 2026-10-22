@@ -2,7 +2,7 @@
 // 2026; boards OnbV3s1–s5 and Onb3Model). Naming it is step 1 (routes/index
 // NewWorkspace); these are steps 2 to 5, in OnboardingFrame. Every step does
 // real work through the existing APIs, and every one can be skipped:
-//   agent     — meet Krude; turn on background access (the agent grant)
+//   agent     — meet the agent: name it, turn on background access (the agent grant)
 //   tools     — connect the apps work happens in
 //   crew      — invite people by email
 //   teamspace — open the first teamspace (a team of the same name, then it)
@@ -27,6 +27,13 @@ import { getInvitations, sendInvitation } from "@/lib/auth/invitations"
 import { connect, connectionsQueryOptions } from "@/lib/apps/client"
 import { createTeam } from "@/lib/settings/client"
 import { createTeamspace } from "@/lib/teamspaces/client"
+import { updateAgent } from "@/lib/agents/managed-agents"
+import type { ManagedAgent } from "@/lib/agents/managed-agents"
+import { primaryAgent } from "@/lib/agents/policy"
+import { agentKeys, agentsQueryOptions } from "@/lib/agents/queries"
+
+/** The longest name Go keeps for an agent (managedagents' maxNameRunes). */
+const MAX_AGENT_NAME = 60
 
 export const setupSteps = ["agent", "tools", "crew", "teamspace"] as const
 export type SetupStep = (typeof setupSteps)[number]
@@ -36,35 +43,36 @@ export function isSetupStep(value: unknown): value is SetupStep {
 }
 
 const stepNames: Record<SetupStep, string> = {
-  agent: "Krude",
+  agent: "Your agent",
   tools: "Tools",
   crew: "Crew",
   teamspace: "Teamspace",
 }
 
+/** Each step's scene and caption; a caption may name the member's agent. */
 const stepScenes: Record<
   SetupStep,
-  { scene: OnboardingScene; line: string; sub: string }
+  { scene: OnboardingScene; line: string; sub: (agent: string) => string }
 > = {
   agent: {
     scene: "nest",
     line: "An agent in the crow’s nest.",
-    sub: "It keeps watch, so you don’t have to.",
+    sub: () => "It keeps watch, so you don’t have to.",
   },
   tools: {
     scene: "deck",
     line: "Charts for every sea.",
-    sub: "Krude reads where your work already lives.",
+    sub: (agent) => `${agent} reads where your work already lives.`,
   },
   crew: {
     scene: "ships",
     line: "A crew, and their agents.",
-    sub: "Everyone keeps their own Krude.",
+    sub: () => "Everyone keeps their own agent.",
   },
   teamspace: {
     scene: "sea",
     line: "Your first harbour.",
-    sub: "A teamspace is where a crew works on one thing.",
+    sub: () => "A teamspace is where a crew works on one thing.",
   },
 }
 
@@ -173,6 +181,9 @@ export function Onboarding({
   const art = stepScenes[step]
   const [teamspaceName, setTeamspaceName] = useState("")
   const [sent, setSent] = useState<string[]>([])
+  // The name being typed in the agent step, for the miniature; undefined
+  // until the member types, so the miniature shows the saved name.
+  const [typedAgentName, setTypedAgentName] = useState<string>()
 
   // What the miniature shows: the member's real setup, read where it lives.
   const grant = useQuery({
@@ -184,6 +195,15 @@ export function Onboarding({
     ...connectionsQueryOptions(organizationId),
     retry: false,
   })
+  const agents = useQuery({
+    ...agentsQueryOptions(organizationId),
+    retry: false,
+  })
+  const agent = agents.data ? primaryAgent(agents.data) : undefined
+  const agentName =
+    (step === "agent" ? typedAgentName?.trim() : undefined) ||
+    agent?.name ||
+    "Krude"
   const invitations = useQuery({
     queryKey: ["organizations", organizationId, "invitations", "setup"],
     queryFn: () => getInvitations(organizationId),
@@ -211,6 +231,7 @@ export function Onboarding({
     workspaceName: organizationName,
     firstName: first,
     agent: true,
+    agentName,
     agentAway: grant.data?.granted === true,
     tools,
     invited,
@@ -220,19 +241,38 @@ export function Onboarding({
     (
       document.getElementById("setup-teamspace") as HTMLFormElement | null
     )?.requestSubmit()
+  // Continue in the agent step saves the name first, when there is a field
+  // to save it from; without one (the agent could not be read) it moves on.
+  const submitAgent = () => {
+    const form = document.getElementById(
+      "setup-agent"
+    ) as HTMLFormElement | null
+    if (form) form.requestSubmit()
+    else next()
+  }
 
   return (
     <OnboardingFrame
       step={index + 2}
       stepName={stepNames[step]}
       scene={art.scene}
-      caption={{ line: art.line, sub: art.sub }}
+      caption={{ line: art.line, sub: art.sub(agentName) }}
       sketch={sketch}
-      onEnter={step === "teamspace" ? submitTeamspace : next}
+      onEnter={
+        step === "teamspace"
+          ? submitTeamspace
+          : step === "agent"
+            ? submitAgent
+            : next
+      }
     >
       {step === "agent" && (
         <AgentStep
           organizationId={organizationId}
+          agent={agent}
+          agentPending={agents.isPending}
+          agentName={agentName}
+          onNameChange={setTypedAgentName}
           granted={grant.data?.granted === true}
           checking={grant.isPending}
           onNext={next}
@@ -272,15 +312,37 @@ export function Onboarding({
 
 function AgentStep({
   organizationId,
+  agent,
+  agentPending,
+  agentName,
+  onNameChange,
   granted,
   checking,
   onNext,
 }: {
   organizationId: string
+  /** The member's primary agent, once it has been read. */
+  agent?: ManagedAgent
+  agentPending: boolean
+  /** What to call it: the name as typed, else as saved. */
+  agentName: string
+  onNameChange: (name: string) => void
   granted: boolean
   checking: boolean
   onNext: () => void
 }) {
+  const queryClient = useQueryClient()
+  const [nameError, setNameError] = useState("")
+  const rename = useMutation({
+    mutationFn: (name: string) =>
+      updateAgent(organizationId, agent!.id, { name }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: agentKeys.agentList(organizationId),
+      })
+      onNext()
+    },
+  })
   const turnOn = useMutation({
     mutationFn: () => authorizeAgentGrant(setupHref(organizationId, "agent")),
     onSuccess: ({ authorization_url }) =>
@@ -289,20 +351,78 @@ function AgentStep({
       ),
   })
 
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const name = String(
+      new FormData(event.currentTarget).get("name") || ""
+    ).trim()
+    if (!name || name.length > MAX_AGENT_NAME) {
+      setNameError(
+        name
+          ? `Use ${MAX_AGENT_NAME} characters or fewer.`
+          : "Give your agent a name."
+      )
+      return
+    }
+    setNameError("")
+    // The name it already has needs no save.
+    if (name === agent?.name) return onNext()
+    rename.mutate(name)
+  }
+
   return (
     <>
       <StepIntro
         eyebrow="Meet your agent"
-        title="Krude works for you, and only you."
-        lede="It reads what you share, keeps watch on requests, and takes notes in parleys. Only you see your chats with it."
+        title="What should your agent be called?"
+        lede="It works for you, and only you: it reads what you share, keeps watch on requests, and takes notes in parleys. Only you see your chats with it."
       />
+      {rename.isError && (
+        <AuthNotice>
+          {rename.error instanceof ApiError && rename.error.status === 409
+            ? "Another agent in this workspace already has that name. Try another."
+            : "Couldn’t save that name. Try again."}
+        </AuthNotice>
+      )}
+      {agent ? (
+        <form
+          className="auth-form"
+          onSubmit={submit}
+          noValidate
+          id="setup-agent"
+          // The miniature shows the name as it is typed.
+          onChange={(event) =>
+            onNameChange(
+              String(new FormData(event.currentTarget).get("name") ?? "")
+            )
+          }
+        >
+          <AuthField
+            // Read once the agent is: a field rendered before would keep its
+            // empty start.
+            key={agent.id}
+            defaultValue={agent.name}
+            error={nameError}
+            label="Name"
+            name="name"
+            autoComplete="off"
+          />
+        </form>
+      ) : agentPending ? (
+        <p className="onb-note">Getting your agent ready…</p>
+      ) : (
+        <p className="onb-note">
+          Your agent couldn’t be loaded. You can name it later in Settings →
+          Your agent.
+        </p>
+      )}
       <div className="onb-option" data-on={granted || undefined}>
         <span className="onb-grow">
           <strong>Works while you’re away</strong>
           <small>
             {granted
-              ? "On. Krude can act for you in the background."
-              : "Krude can answer and follow up in the background, within what you allow."}
+              ? `On. ${agentName} can act for you in the background.`
+              : `${agentName} can answer and follow up in the background, within what you allow.`}
           </small>
         </span>
         {granted ? (
@@ -325,7 +445,19 @@ function AgentStep({
       )}
       <StepNav
         skip={granted ? undefined : onNext}
-        primary={<ContinueButton onClick={onNext} />}
+        primary={
+          agent ? (
+            <ContinueButton
+              type="submit"
+              form="setup-agent"
+              disabled={rename.isPending}
+            >
+              {rename.isPending ? "Saving…" : "Continue"}
+            </ContinueButton>
+          ) : (
+            <ContinueButton onClick={onNext} disabled={agentPending} />
+          )
+        }
       />
     </>
   )

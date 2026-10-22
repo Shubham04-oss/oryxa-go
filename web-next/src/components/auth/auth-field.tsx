@@ -3,6 +3,8 @@ import { Eye, EyeOff } from "lucide-react"
 
 type AuthFieldProps = {
   autoComplete: string
+  /** What the field starts with, such as a name to keep or change. */
+  defaultValue?: string
   error?: string
   label: string
   name: string
@@ -12,6 +14,7 @@ type AuthFieldProps = {
 
 export function AuthField({
   autoComplete,
+  defaultValue,
   error,
   label,
   name,
@@ -29,6 +32,7 @@ export function AuthField({
           name={name}
           type={isPassword && revealed ? "text" : type}
           autoComplete={autoComplete}
+          defaultValue={defaultValue}
           placeholder={placeholder}
           aria-invalid={Boolean(error)}
           aria-describedby={error ? `auth-${name}-error` : undefined}
