@@ -58,3 +58,36 @@ func TestServeHTTPForwardsToTheAppHost(t *testing.T) {
 		}
 	}
 }
+
+// The proxy's redaction must see the token: in headers, and in a body the
+// connector can't ask to have compressed or cut into ranges.
+func TestTheTokenNeverReachesTheConnector(t *testing.T) {
+	var gotEncoding, gotRange string
+	app := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotEncoding, gotRange = r.Header.Get("Accept-Encoding"), r.Header.Get("Range")
+		w.Header().Set("Location", "https://api.example.test/next?token="+strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		_, _ = w.Write([]byte(`{"echo":"` + r.Header.Get("Authorization") + `"}`))
+	}))
+	defer app.Close()
+	broker := httptest.NewServer(proxyTo(app, &fakeConns{m: testManifest(), tokens: []secrets.Secret{"tok-secret"}}))
+	defer broker.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, broker.URL+"/v1/x", nil)
+	req.Header.Set("Authorization", "Bearer "+handle(t))
+	req.Header.Set(HostHeader, "api.example.test")
+	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("Range", "bytes=0-3")
+	req.Header.Set("If-Range", `"etag"`)
+	resp, err := (&http.Client{Transport: &http.Transport{DisableCompression: true}}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(body), "tok-secret") || strings.Contains(resp.Header.Get("Location"), "tok-secret") {
+		t.Fatalf("token reached the connector: Location %q body %s", resp.Header.Get("Location"), body)
+	}
+	if gotRange != "" || strings.Contains(gotEncoding, "gzip") && resp.Header.Get("Content-Encoding") != "" {
+		t.Fatalf("app saw Range %q, Accept-Encoding %q; connector got Content-Encoding %q", gotRange, gotEncoding, resp.Header.Get("Content-Encoding"))
+	}
+}

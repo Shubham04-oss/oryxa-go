@@ -68,10 +68,16 @@ type Proxy struct {
 }
 
 // requestHeadersDropped are never forwarded from a connector: credentials it
-// should not hold or place, and what the proxy sets itself.
+// should not hold or place, and what the proxy sets itself. Accept-Encoding
+// and the range headers go too: a compressed or partial answer could carry
+// the token past the redaction in Do, so the transport negotiates (and
+// undoes) compression itself.
+// ponytail: no connector can fetch a byte range; allow Range once one needs
+// it, with redaction that works across ranges.
 var requestHeadersDropped = []string{
 	"Authorization", "Proxy-Authorization", "Cookie", "Host", "Content-Length", "Connection", "Upgrade",
 	"Transfer-Encoding", "Te", "Trailer", "Keep-Alive", "Proxy-Connection",
+	"Accept-Encoding", "Range", "If-Range",
 }
 
 // responseHeadersDropped are credentials an app may set that no connector
@@ -135,8 +141,16 @@ func (p *Proxy) Do(ctx context.Context, handle string, request Request) (*Respon
 		}
 		token = fresh
 	}
-	// An app can echo the token it was given; a connector must not read it.
-	response.Body = bytes.ReplaceAll(response.Body, []byte(token.Reveal()), []byte("[redacted]"))
+	// An app can echo the token it was given, in the body or a header such as
+	// Location; a connector must not read it.
+	secret := token.Reveal()
+	response.Body = bytes.ReplaceAll(response.Body, []byte(secret), []byte("[redacted]"))
+	for name, values := range response.Header {
+		for i, value := range values {
+			values[i] = strings.ReplaceAll(value, secret, "[redacted]")
+		}
+		response.Header[name] = values
+	}
 	return response, nil
 }
 
