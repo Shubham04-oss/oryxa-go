@@ -68,3 +68,30 @@ func TestOnReadsWhereBrowsersReachTheServiceAndWhereTheyMayReturnTo(t *testing.T
 		t.Fatalf("config = %+v, err = %v", config, err)
 	}
 }
+
+func TestOnReadsConnectorsEgressKeysAndTheBrokerAddress(t *testing.T) {
+	key := strings.Repeat("s", 32)
+	config, err := FromEnv(env(map[string]string{
+		"INTEGRATIONS_ENABLED":        "true",
+		"INTEGRATIONS_CONNECTORS_DIR": " /connectors ",
+		"INTEGRATIONS_EGRESS_KEYS":    `{"current":"k1","keys":{"k1":"` + key + `"}}`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.ConnectorsDir != "/connectors" || config.EgressKeys.Current != "k1" || config.BrokerAddress != "127.0.0.1:8091" {
+		t.Fatalf("config = %+v", config)
+	}
+	for name, raw := range map[string]string{
+		"not JSON":   key,
+		"short key":  `{"current":"k1","keys":{"k1":"short"}}`,
+		"no current": `{"current":"k2","keys":{"k1":"` + key + `"}}`,
+	} {
+		_, err := FromEnv(env(map[string]string{"INTEGRATIONS_ENABLED": "true", "INTEGRATIONS_EGRESS_KEYS": raw}))
+		if err == nil {
+			t.Errorf("%s: accepted", name)
+		} else if strings.Contains(err.Error(), key) {
+			t.Errorf("%s: the error quotes the key: %v", name, err)
+		}
+	}
+}

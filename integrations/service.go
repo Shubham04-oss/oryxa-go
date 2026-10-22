@@ -10,16 +10,24 @@ package integrations
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 
+	"github.com/Shubham04-oss/oryxa-go/integrations/egress"
+	connectorhost "github.com/Shubham04-oss/oryxa-go/integrations/host"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/connect"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/orgapps"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/serviceconfig"
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/tools"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/vault"
 	"github.com/Shubham04-oss/oryxa-go/integrations/manifest"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
@@ -83,53 +91,129 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		platform.Logger.Warn("INTEGRATIONS_SERVICE_CALLERS is not set: every internal call is refused")
 	}
 	server := httpserver.New(verifier, platform.Logger)
-	if err := mountOrgApps(ctx, server, platform, config); err != nil {
+	connectors, err := startConnectors(ctx, platform, config.ConnectorsDir)
+	if err != nil {
 		return host.Service{}, err
 	}
-	return host.Service{
+	service := host.Service{
 		Handler:  server,
-		Routes:   server.Patterns(),
 		Timeouts: host.Timeouts{Read: 15 * time.Second, Write: 30 * time.Second},
-	}, nil
+		Close:    func() { _ = connectors.Close() },
+	}
+	connections, err := mountOrgApps(ctx, server, platform, config, connectors.Manifest)
+	if err == nil {
+		service.Workers, err = mountTools(server, platform, config, connectors, connections)
+	}
+	if err != nil {
+		service.Close()
+		return host.Service{}, err
+	}
+	service.Routes = server.Patterns()
+	return service, nil
 }
 
-// mountOrgApps serves the org apps API and loads Oryxa's own apps. Without a
-// KMS key nothing can be sealed, so it serves nothing and says so; apps that
-// were configured but cannot be loaded stop the start.
-func mountOrgApps(ctx context.Context, server *httpserver.Server, platform host.Platform, config serviceconfig.Config) error {
+// startConnectors starts every connector binary in dir, each named by its
+// manifest id. One that does not come up stops the start: a connector that is
+// shipped is meant to run.
+func startConnectors(ctx context.Context, platform host.Platform, dir string) (*connectorhost.Host, error) {
+	connectors, err := connectorhost.New(connectorhost.Config{Logger: platform.Logger})
+	if err != nil {
+		return nil, err
+	}
+	if dir == "" {
+		platform.Logger.Warn("INTEGRATIONS_CONNECTORS_DIR is not set: no connector runs")
+		return connectors, nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		_ = connectors.Close()
+		return nil, fmt.Errorf("INTEGRATIONS_CONNECTORS_DIR: %w", err)
+	}
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		spec := connectorhost.Spec{ID: entry.Name(), Path: filepath.Join(dir, entry.Name())}
+		if err := connectors.Start(ctx, spec); err != nil {
+			_ = connectors.Close()
+			return nil, fmt.Errorf("start the %s connector: %w", spec.ID, err)
+		}
+		platform.Logger.Info("integrations connector started", "connector", spec.ID)
+	}
+	return connectors, nil
+}
+
+// mountTools serves tool calls and runs the egress proxy connectors reach
+// apps through. Both need signed-in connections and the keys handles are
+// signed with; without either, tool calls are off and it says why.
+func mountTools(server *httpserver.Server, platform host.Platform, config serviceconfig.Config, connectors *connectorhost.Host, connections *connect.Service) ([]host.Worker, error) {
+	switch {
+	case connections == nil:
+		platform.Logger.Warn("tool calls are off: they need connections (INTEGRATIONS_KMS_KEY_ID and INTEGRATIONS_PUBLIC_URL)")
+		return nil, nil
+	case config.EgressKeys.Current == "":
+		platform.Logger.Warn("INTEGRATIONS_EGRESS_KEYS is not set: tool calls are off")
+		return nil, nil
+	}
+	// Listening here, not in the worker, so an address in use stops the start
+	// instead of leaving every tool call to fail.
+	listener, err := net.Listen("tcp", config.BrokerAddress)
+	if err != nil {
+		return nil, fmt.Errorf("INTEGRATIONS_BROKER_ADDRESS: %w", err)
+	}
+	tools.Routes(server, tools.New(platform.Database.Pool, connectors, tools.Config{
+		Keys: config.EgressKeys, BrokerOrigin: "http://" + listener.Addr().String(),
+	}), platform.Logger)
+	broker := &http.Server{
+		Handler:           &egress.Proxy{Keys: config.EgressKeys, Connections: connections},
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	return []host.Worker{func(ctx context.Context) {
+		go func() {
+			<-ctx.Done()
+			shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			_ = broker.Shutdown(shutdown)
+		}()
+		if err := broker.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			platform.Logger.Error("integrations egress proxy stopped", "error", err)
+		}
+	}}, nil
+}
+
+// mountOrgApps serves the org apps API and loads Oryxa's own apps, then the
+// sign-ins, whose service it returns (nil when they are off). Without a KMS
+// key nothing can be sealed, so it serves nothing and says so; apps that were
+// configured but cannot be loaded stop the start.
+func mountOrgApps(ctx context.Context, server *httpserver.Server, platform host.Platform, config serviceconfig.Config, manifestOf func(string) (*manifest.Manifest, bool)) (*connect.Service, error) {
 	if config.KMSKeyID == "" {
 		platform.Logger.Warn("INTEGRATIONS_KMS_KEY_ID is not set: the org apps API is off")
-		return nil
+		return nil, nil
 	}
 	sealer, err := vault.New(secrets.KMSDataKeys{Client: kms.NewFromConfig(platform.AWS), KeyID: config.KMSKeyID}, config.KMSKeyID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	apps := orgapps.New(platform.Database.Pool, sealer)
 	for _, app := range config.OryxaApps {
 		if _, _, err := apps.Load(ctx, app.App, orgapps.Input{
 			ClientID: app.ClientID, Secret: app.Secret, WebhookSecret: app.WebhookSecret, Extra: app.Extra,
 		}); err != nil {
-			return fmt.Errorf("load Oryxa's %s app: %w", app.App, err)
+			return nil, fmt.Errorf("load Oryxa's %s app: %w", app.App, err)
 		}
 	}
 	orgapps.Routes(server, apps, platform.Logger)
 	if config.PublicURL == "" {
 		platform.Logger.Warn("INTEGRATIONS_PUBLIC_URL is not set: connecting apps is off")
-		return nil
+		return nil, nil
 	}
 	connections := connect.New(platform.Database.Pool, sealer, apps, connect.Config{
 		RedirectURI: config.PublicURL + connect.CallbackPath, ReturnOrigins: config.ReturnOrigins,
 		Manifest: manifestOf, Logger: platform.Logger,
 	})
 	connect.Routes(server, connections, platform.Logger)
-	return nil
+	return connections, nil
 }
-
-// manifestOf answers an app's manifest. ponytail: no connector is registered
-// with the service yet, so every connect answers "not found"; the host
-// (#291) fills this in from the connectors it runs.
-func manifestOf(string) (*manifest.Manifest, bool) { return nil, false }
 
 // namedIn reports whether services, ORYXA_SERVICES's value, names this
 // service itself rather than leaving the process to run every service.
