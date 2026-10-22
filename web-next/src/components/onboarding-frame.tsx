@@ -29,8 +29,10 @@ export type OnboardingScene = keyof typeof sceneImages
 export type WorkspaceSketch = {
   workspaceName: string
   firstName?: string
-  /** Krude has been met (step 2 reached). */
+  /** The agent has been met (step 2 reached). */
   agent: boolean
+  /** What the member's agent is called, as it is typed in step 2. */
+  agentName?: string
   /** Background access is on. */
   agentAway?: boolean
   /** Active app connections. */
@@ -55,7 +57,7 @@ function Ghost({
   return <Skeleton className="onb-ghost" style={{ width, height }} />
 }
 
-/** The miniature: navigation, the page and Krude's panel, as set up so far. */
+/** The miniature: navigation, the page and the agent's panel, as set up so far. */
 export function WorkspaceModel({
   step,
   sketch,
@@ -64,6 +66,7 @@ export function WorkspaceModel({
   sketch: WorkspaceSketch
 }) {
   const initial = sketch.workspaceName.trim().charAt(0).toUpperCase()
+  const agentName = sketch.agentName?.trim() || "Krude"
   return (
     <div
       className="onb-model"
@@ -134,7 +137,7 @@ export function WorkspaceModel({
         {step >= 5 && sketch.teamspace?.trim() && (
           <div className="onb-row" data-fresh>
             <span>
-              <b>{sketch.teamspace.trim()}</b> · you and Krude
+              <b>{sketch.teamspace.trim()}</b> · you and {agentName}
             </span>
           </div>
         )}
@@ -143,7 +146,7 @@ export function WorkspaceModel({
         {step >= 2 && sketch.agent ? (
           <div className="onb-krude" data-fresh={step === 2 || undefined}>
             <b>
-              Krude <span>· only you</span>
+              {agentName} <span>· only you</span>
             </b>
             <p className="onb-bubble">
               {sketch.agentAway

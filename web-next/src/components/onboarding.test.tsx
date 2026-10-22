@@ -84,7 +84,7 @@ describe("Onboarding", () => {
   it("names the step it is on, with a five-part bar and the workspace done", () => {
     stubApi({ "GET /v1/agent-grant": () => [200, { granted: false }] })
     renderStep("agent")
-    expect(screen.getByText("Step 2 of 5 · Krude")).toBeTruthy()
+    expect(screen.getByText("Step 2 of 5 · Your agent")).toBeTruthy()
     const bar = screen.getByRole("list", { name: "Step 2 of 5" })
     const parts = within(bar).getAllByRole("listitem")
     expect(parts).toHaveLength(5)
@@ -141,6 +141,127 @@ describe("Onboarding", () => {
     expect(screen.queryByRole("button", { name: "Skip for now" })).toBeNull()
     fireEvent.click(screen.getByRole("button", { name: /Continue/ }))
     expect(onStep).toHaveBeenCalledWith("tools")
+  })
+
+  describe("naming the agent", () => {
+    const primary = {
+      id: "agt_1",
+      organization_id: ORG,
+      owner_user_id: "user_1",
+      kind: "primary",
+      name: "Nia",
+      description: "Your primary Oryxa agent.",
+      instructions: "",
+      status: "active",
+      revision: 1,
+      created_at: "2026-10-22T00:00:00Z",
+      updated_at: "2026-10-22T00:00:00Z",
+    }
+    const agentRoutes = (
+      patch: (body: unknown) => [number, unknown] = (body) => [
+        200,
+        { ...primary, ...(body as object), revision: 2 },
+      ]
+    ) => ({
+      "GET /v1/agent-grant": (): [number, unknown] => [200, { granted: false }],
+      [`GET ${base}/agents`]: (): [number, unknown] => [
+        200,
+        { agents: [primary] },
+      ],
+      [`PATCH ${base}/agents/agt_1`]: patch,
+    })
+    const patches = (calls: Call[]) =>
+      calls.filter((call) => call.method === "PATCH").map((call) => call.body)
+
+    it("starts from the name the agent has, and keeps it without a save", async () => {
+      const calls = stubApi(agentRoutes())
+      const { onStep } = renderStep("agent")
+      const field = await screen.findByLabelText<HTMLInputElement>("Name")
+      expect(field.value).toBe("Nia")
+      fireEvent.click(screen.getByRole("button", { name: /Continue/ }))
+      await waitFor(() => expect(onStep).toHaveBeenCalledWith("tools"))
+      expect(patches(calls)).toEqual([])
+    })
+
+    it("saves the name typed, trimmed, then moves on", async () => {
+      const calls = stubApi(agentRoutes())
+      const { onStep } = renderStep("agent")
+      const field = await screen.findByLabelText("Name")
+      fireEvent.change(field, { target: { value: "  Wren " } })
+      fireEvent.click(screen.getByRole("button", { name: /Continue/ }))
+      await waitFor(() => expect(onStep).toHaveBeenCalledWith("tools"))
+      expect(patches(calls)).toEqual([{ name: "Wren" }])
+    })
+
+    it("shows the name as it is typed, in the step and the miniature", async () => {
+      stubApi(agentRoutes())
+      renderStep("agent")
+      const field = await screen.findByLabelText("Name")
+      fireEvent.change(field, { target: { value: "Wren" } })
+      const model = screen.getByRole("img", {
+        name: "A preview of your workspace as you set it up",
+      })
+      expect(await within(model).findByText("Wren")).toBeTruthy()
+      expect(
+        screen.getByText(/Wren can answer and follow up in the background/)
+      ).toBeTruthy()
+    })
+
+    it("asks for a name rather than saving none, or one too long", async () => {
+      const calls = stubApi(agentRoutes())
+      const { onStep } = renderStep("agent")
+      const field = await screen.findByLabelText("Name")
+      fireEvent.change(field, { target: { value: "   " } })
+      fireEvent.click(screen.getByRole("button", { name: /Continue/ }))
+      expect(await screen.findByText("Give your agent a name.")).toBeTruthy()
+      fireEvent.change(field, { target: { value: "x".repeat(61) } })
+      fireEvent.click(screen.getByRole("button", { name: /Continue/ }))
+      expect(
+        await screen.findByText("Use 60 characters or fewer.")
+      ).toBeTruthy()
+      expect(patches(calls)).toEqual([])
+      expect(onStep).not.toHaveBeenCalled()
+    })
+
+    it("says when another agent has the name, and stays on the step", async () => {
+      stubApi(
+        agentRoutes(() => [
+          409,
+          { error: "name_conflict", message: "agent name is already in use" },
+        ])
+      )
+      const { onStep } = renderStep("agent")
+      const field = await screen.findByLabelText("Name")
+      fireEvent.change(field, { target: { value: "Maya" } })
+      fireEvent.click(screen.getByRole("button", { name: /Continue/ }))
+      expect(
+        await screen.findByText(
+          "Another agent in this workspace already has that name. Try another."
+        )
+      ).toBeTruthy()
+      expect(onStep).not.toHaveBeenCalled()
+    })
+
+    it("saves on Enter in the field too", async () => {
+      const calls = stubApi(agentRoutes())
+      const { onStep } = renderStep("agent")
+      const field = await screen.findByLabelText("Name")
+      fireEvent.change(field, { target: { value: "Wren" } })
+      fireEvent.submit(field.closest("form")!)
+      await waitFor(() => expect(onStep).toHaveBeenCalledWith("tools"))
+      expect(patches(calls)).toEqual([{ name: "Wren" }])
+    })
+
+    it("moves on without a field when the agent can't be read", async () => {
+      stubApi({ "GET /v1/agent-grant": () => [200, { granted: false }] })
+      const { onStep } = renderStep("agent")
+      expect(
+        await screen.findByText(/You can name it later in Settings/)
+      ).toBeTruthy()
+      expect(screen.queryByLabelText("Name")).toBeNull()
+      fireEvent.click(screen.getByRole("button", { name: /Continue/ }))
+      expect(onStep).toHaveBeenCalledWith("tools")
+    })
   })
 
   it("marks an app connected only when its connection is active", async () => {
