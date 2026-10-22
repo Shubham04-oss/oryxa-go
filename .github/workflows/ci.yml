@@ -148,6 +148,11 @@ jobs:
         # agents' session tests read auth's tables, which a laptop's database
         # already has; auth's own tests migrate them into this fresh one.
         run: go test -count=1 ./auth/internal/postgres/
+      - name: Integrations' schema
+        # The service migrates only when switched on, so its internal
+        # packages' tests rely on the root package's test to install the
+        # schema; run it first rather than racing them in the Test step.
+        run: go test -count=1 -run TestVaultTables ./integrations/
       - name: Test
         id: test
         # The JSON events are kept for the step below. What prints is what
