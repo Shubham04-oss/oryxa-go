@@ -13,13 +13,31 @@ import (
 const maxBody = 1 << 20
 
 // Routes registers POST /v1/tools/call (internal: apps calls it for a member
-// and agent it has already authenticated).
+// and agent it has already authenticated) and GET /v1/tools (internal: the
+// tools a member's connections offer, for apps' tool search).
 func Routes(server *httpserver.Server, service *Service, logger *slog.Logger) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	h := handlers{service: service, logger: logger}
 	server.Internal("POST /v1/tools/call", h.call)
+	server.Internal("GET /v1/tools", h.list)
+}
+
+// list answers 200 {"tools": […]} for ?org=&member=, and optionally &app=.
+func (h handlers) list(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	offered, err := h.service.List(r.Context(), query.Get("org"), query.Get("member"), query.Get("app"))
+	switch {
+	case err == nil:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string][]Offered{"tools": offered})
+	case errors.Is(err, ErrInvalid):
+		httpserver.WriteError(w, http.StatusBadRequest, "invalid_request", err.Error())
+	default:
+		h.logger.ErrorContext(r.Context(), "list a member's tools", "error", err)
+		httpserver.WriteError(w, http.StatusInternalServerError, "internal", "the tools could not be listed")
+	}
 }
 
 type handlers struct {
