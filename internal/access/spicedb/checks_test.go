@@ -39,6 +39,8 @@ func TestChecksAsksAnAgentForItsMembersReachOnly(t *testing.T) {
 			[]Check{{connection, "use", sam}, {connection, "granted_write", agent}}},
 		{"an app read needs granted", specialist, access.ActionRead, connection, true,
 			[]Check{{connection, "use", sam}, {connection, "granted", agent}}},
+		{"acting through a connection needs granted", specialist, access.ActionUse, connection, true,
+			[]Check{{connection, "use", sam}, {connection, "granted", agent}}},
 		{"teams have no grant", specialist, ActionManage, Object{"team", "t1"}, true,
 			[]Check{{Object{"team", "t1"}, "manage_member_reach", sam}}},
 	} {

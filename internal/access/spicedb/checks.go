@@ -26,7 +26,7 @@ var permissions = map[string]map[string]string{
 	"file":       {access.ActionRead: "read", access.ActionSearch: "read", access.ActionDelete: "delete"},
 	"team":       {access.ActionRead: "see", access.ActionWrite: "manage", access.ActionDelete: "manage", ActionManage: "manage"},
 	"source":     {access.ActionRead: "manage", access.ActionSearch: "manage", access.ActionWrite: "manage", access.ActionDelete: "manage", ActionManage: "manage"},
-	"connection": {access.ActionRead: "use", access.ActionSearch: "use", access.ActionWrite: "use"},
+	"connection": {access.ActionRead: "use", access.ActionSearch: "use", access.ActionWrite: "use", access.ActionUse: "use"},
 }
 
 var sameForAgents = map[string]bool{"connection": true}
