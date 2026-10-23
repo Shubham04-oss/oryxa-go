@@ -129,7 +129,8 @@ I0–I9 are merged; I9's single primary thread namespace is deferred until A7 la
 
 Still open:
 - the browser and sandbox are not covered by specialist grants;
-- files and knowledge do not enforce grants (rag does: a specialist's `corpora` grant, default all, limits what it can list, read, search and write);
+- specialist grants are enforced by apps, rag (`corpora`: corpus ids), files (`files`: `member`, `org` or team ids) and knowledge (`knowledge`: source ids), each default all, `[]` none, and anything outside the grant is the same not found as something missing; the settings UI does not yet let a member choose corpora, files or knowledge;
+- knowledge's background reads (a source's sync) run under its member's standing grant, not a specialist's, so a specialist's grant limits what it reads of a source, not what the source indexes;
 - guard policy is per member, not per agent;
 - `test/live/agents` attacks across real agents have not been written.
 
