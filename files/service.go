@@ -18,6 +18,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/files/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/files/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/files/internal/teamsclient"
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 )
@@ -33,7 +34,10 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 	if platform.Database == nil {
 		return host.ErrDatabaseRequired
 	}
-	return postgres.New(platform.Database).Migrate(ctx)
+	if err := postgres.New(platform.Database).Migrate(ctx); err != nil {
+		return err
+	}
+	return access.Migrate(ctx, platform.Database)
 }
 
 // Mount assembles files on what the host shares.
@@ -54,7 +58,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	} else {
 		logger.Warn("TEAMS_URL is not set: team-scoped files cannot be created")
 	}
-	service := application.New(store, blobs, authclient.New(config.AuthURL), teams, logger)
+	service := application.New(store, blobs, authclient.New(config.AuthURL), teams, access.NewLog(platform.Database.Pool, logger), logger)
 
 	signer, err := platform.EventAuth.Signer(Name)
 	if err != nil {

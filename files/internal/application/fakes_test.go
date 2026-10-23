@@ -8,6 +8,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/files/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/files/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 )
 
 // agentTokenPrefix marks a credential as auth would answer for a token it
@@ -55,6 +56,7 @@ func (fakeDirectory) Membership(_ context.Context, organizationID string, creden
 		"user-admin":    {OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-admin", Email: "admin@example.com", Role: domain.OrgRoleAdmin},
 		"user-member":   {OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-member", Email: "member@example.com", Role: domain.OrgRoleMember},
 		"user-outsider": {OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-outsider", Email: "outsider@example.com", Role: domain.OrgRoleMember},
+		"user-lead":     {OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-lead", Email: "lead@example.com", Role: domain.OrgRoleMember},
 	}
 	membership, ok := people[token]
 	if !ok || organizationID != "org_1" {
@@ -62,6 +64,7 @@ func (fakeDirectory) Membership(_ context.Context, organizationID string, creden
 	}
 	membership.Agent = agent
 	if agent {
+		membership.AgentID = "agt_" + membership.UserID
 		membership.AgentRole = "specialist"
 		if role != "" {
 			membership.AgentRole = role
@@ -94,6 +97,8 @@ func newFakeTeams() *fakeTeams {
 		"user-owner/team_ops":       {TeamID: "team_ops", CanManage: true, Member: false},
 		"user-admin/team_ops":       {TeamID: "team_ops", CanManage: true, Member: false},
 		"user-outsider/team_design": {TeamID: "team_design", CanManage: false, Member: true},
+		// user-lead is a plain org member who is team_eng's own admin.
+		"user-lead/team_eng": {TeamID: "team_eng", CanManage: true, Member: true, TeamAdmin: true},
 	}}
 }
 
@@ -276,4 +281,26 @@ func (store *fakeStore) DeleteOrganizationFiles(_ context.Context, organizationI
 	org.Deleted = true
 	store.orgs[organizationID] = org
 	return nil
+}
+
+// fakeRecorder keeps every decision it is handed, worth keeping or not:
+// what access.Log drops is its own business, tested there.
+type fakeRecorder struct {
+	mu        sync.Mutex
+	decisions []access.Decision
+}
+
+func (fake *fakeRecorder) Record(_ context.Context, decision access.Decision) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.decisions = append(fake.decisions, decision)
+}
+
+// take answers what was recorded since the last take, and forgets it.
+func (fake *fakeRecorder) take() []access.Decision {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	taken := fake.decisions
+	fake.decisions = nil
+	return taken
 }

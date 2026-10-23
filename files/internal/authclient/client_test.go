@@ -80,7 +80,7 @@ func TestMembershipWithoutCredentials(t *testing.T) {
 
 // TestMembershipReadsASpecialistsFiles: the grant's files ride on the
 // token's claims; absent means all (nil), an explicit empty list means none.
-// An agent token without a role is a primary's.
+// An agent token without a role is a primary's. The agent's id rides along.
 func TestMembershipReadsASpecialistsFiles(t *testing.T) {
 	prefix := `{"organization":{"id":"org_1","name":"Acme"},"membership":{"organization_id":"org_1","user_id":"user-1","role":"admin"},"agent":true,"agent_claims":{"agent":"agt_a","role":"specialist"`
 	for name, tc := range map[string]struct {
@@ -107,8 +107,8 @@ func TestMembershipReadsASpecialistsFiles(t *testing.T) {
 		if (got == nil) != tc.nil_ || !slices.Equal(got, tc.want) {
 			t.Errorf("%s: files = %#v, want %#v", name, got, tc.want)
 		}
-		if membership.AgentRole != "specialist" {
-			t.Errorf("%s: role = %q, want specialist", name, membership.AgentRole)
+		if membership.AgentRole != "specialist" || membership.AgentID != "agt_a" {
+			t.Errorf("%s: role = %q, agent = %q, want specialist agt_a", name, membership.AgentRole, membership.AgentID)
 		}
 	}
 	for body, want := range map[string]string{

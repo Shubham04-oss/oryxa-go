@@ -191,7 +191,7 @@ func named(filter ListFilter, object domain.Object) bool {
 func TestListAsksTeamsOncePerTeam(t *testing.T) {
 	ctx := context.Background()
 	teams := newFakeTeams()
-	service := New(newFakeStore(), blob.NewMemory(), fakeDirectory{}, teams, nil)
+	service := New(newFakeStore(), blob.NewMemory(), fakeDirectory{}, teams, nil, nil)
 	for range 3 {
 		if _, err := service.Create(ctx, creds("user-member"), "org_1", given(CreateInput{
 			Filename: "a.txt", ContentType: "text/plain", Scope: domain.ScopeTeam, TeamID: "team_eng", Content: []byte("a"),

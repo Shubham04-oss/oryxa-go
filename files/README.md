@@ -62,6 +62,15 @@ not on. Creating in a team outside it is `404`, and in its member's own or
 the organization's files outside it is `403`. Primary and organization agents
 and members' own sessions are not limited by it.
 
+Each single decision is kept in the shared access decision log
+(`internal/access`, read by the member's Activity page): a read through get,
+content or download URL, a create (`write`) and a delete, once each and only
+when allowed, with the rule that allowed it: `grant`, `owner`,
+`organization`, `team_member` / `team_admin` or `org_admin`, in that order of
+precedence (see `reason` in `internal/application/service.go`). Lists record
+nothing. The log keeps only what tells someone something; a member opening
+their own file in their own session isn't kept.
+
 Keys follow placement, then the UTC calendar day of `created_at`, so a wipe
 is still a prefix and a day's objects sit together:
 

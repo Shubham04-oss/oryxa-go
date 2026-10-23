@@ -49,6 +49,9 @@ type OrgMembership struct {
 	// What it reads can end up in front of any of them, so it gets a plain
 	// member's reach whatever its member's role; see ActsAsAdmin.
 	Agent bool
+	// AgentID is the agent's id in its claims, when Agent is set and auth
+	// names one; the decision log says which agent reached a file.
+	AgentID string
 	// AgentRole is the agent's role in its claims (primary, specialist or
 	// organization), when Agent is set.
 	AgentRole string

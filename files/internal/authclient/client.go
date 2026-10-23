@@ -57,7 +57,8 @@ type organizationResponse struct {
 	// member's own session.
 	Agent       bool `json:"agent"`
 	AgentClaims struct {
-		Role string `json:"role"`
+		Agent string `json:"agent"`
+		Role  string `json:"role"`
 		// Grant is a specialist's grant; only its files matter here. Absent
 		// or without files means all of them.
 		Grant *struct {
@@ -91,6 +92,7 @@ func (client *Client) Membership(ctx context.Context, organizationID string, cre
 		DisplayName:      decoded.Membership.DisplayName,
 		Role:             domain.OrgRole(decoded.Membership.Role),
 		Agent:            decoded.Agent,
+		AgentID:          decoded.AgentClaims.Agent,
 		AgentRole:        agentRole(decoded.Agent, decoded.AgentClaims.Role),
 		AgentFiles:       files,
 	}, nil
