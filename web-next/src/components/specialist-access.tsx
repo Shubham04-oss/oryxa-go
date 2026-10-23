@@ -1,17 +1,20 @@
 // What a specialist may reach and which model it answers on (I3, I9): its
 // owner chooses the apps it reads, and in which of them it may change
-// things; and lite or main. A grant replaces the whole grant on save.
+// things; the collections (rag corpora) it may search; and lite or main. A
+// grant replaces the whole grant on save, so each card keeps the other's part.
 import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { agentsErrorMessage } from "./agents-format"
+import { countLabel } from "./knowledge-format"
 import { afterUpdateAgent } from "@/lib/agents/invalidation"
-import { ALL_APPS, updateAgent } from "@/lib/agents/managed-agents"
+import { ALL_APPS, ALL_CORPORA, updateAgent } from "@/lib/agents/managed-agents"
 import type {
   AgentGrant,
   ManagedAgent,
   ModelTier,
 } from "@/lib/agents/managed-agents"
 import { connectionsQueryOptions, toolkitName } from "@/lib/apps/client"
+import { corporaQueryOptions } from "@/lib/rag/client"
 import { cn } from "@/lib/utils"
 
 /** A specialist read before it had a grant reads everything, writes nothing. */
@@ -35,7 +38,7 @@ export function choiceOf(grant: AgentGrant): AppChoice {
   }
 }
 
-/** The grant a choice saves as; tools are kept as they were. */
+/** The grant a choice saves as; tools and corpora are kept as they were. */
 export function grantFrom(choice: AppChoice, previous: AgentGrant): AgentGrant {
   const reads = choice.every ? [ALL_APPS] : [...new Set(choice.reads)].sort()
   // An app it may change things in is one it reads.
@@ -47,15 +50,58 @@ export function grantFrom(choice: AppChoice, previous: AgentGrant): AgentGrant {
     tools: previous.tools ?? [],
     write_apps: writes,
     write_tools: previous.write_tools ?? [],
+    corpora: previous.corpora ?? [ALL_CORPORA],
   }
 }
 
-function sameChoice(a: AppChoice, b: AppChoice): boolean {
-  const same = (x: string[], y: string[]) =>
+/** Which collections it may search: all, the ones chosen, or none. */
+export type CorporaChoice = {
+  scope: "all" | "some" | "none"
+  /** The chosen corpus ids, when `scope` is "some". */
+  ids: string[]
+}
+
+/** A grant without corpora, or saved before they existed, searches all. */
+export function corporaChoiceOf(grant: AgentGrant): CorporaChoice {
+  const corpora = grant.corpora
+  if (!corpora || corpora.includes(ALL_CORPORA))
+    return { scope: "all", ids: [] }
+  if (corpora.length === 0) return { scope: "none", ids: [] }
+  return { scope: "some", ids: corpora }
+}
+
+/** The grant a corpora choice saves as; its apps and tools are kept. */
+export function grantWithCorpora(
+  choice: CorporaChoice,
+  previous: AgentGrant
+): AgentGrant {
+  const corpora =
+    choice.scope === "all"
+      ? [ALL_CORPORA]
+      : choice.scope === "none"
+        ? []
+        : [...new Set(choice.ids)].sort()
+  return {
+    apps: previous.apps,
+    tools: previous.tools ?? [],
+    write_apps: previous.write_apps ?? [],
+    write_tools: previous.write_tools ?? [],
+    corpora,
+  }
+}
+
+function sameList(x: string[], y: string[]): boolean {
+  return (
     x.length === y.length &&
     [...x].sort().every((v, i) => v === [...y].sort()[i])
+  )
+}
+
+function sameChoice(a: AppChoice, b: AppChoice): boolean {
   return (
-    a.every === b.every && same(a.reads, b.reads) && same(a.writes, b.writes)
+    a.every === b.every &&
+    sameList(a.reads, b.reads) &&
+    sameList(a.writes, b.writes)
   )
 }
 
@@ -83,6 +129,7 @@ export function SpecialistAccess({
     <>
       <ModelCard organizationId={organizationId} agent={agent} />
       <AppsCard organizationId={organizationId} agent={agent} />
+      <CollectionsCard organizationId={organizationId} agent={agent} />
     </>
   )
 }
@@ -304,6 +351,203 @@ function AppsCard({
           onClick={() => save.mutate(draft)}
         >
           {save.isPending ? "Saving…" : "Save apps"}
+        </button>
+        {dirty && (
+          <button
+            className="workspace-agents-button"
+            type="button"
+            disabled={save.isPending}
+            onClick={() => {
+              save.reset()
+              setDraft(saved)
+            }}
+          >
+            Cancel
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function CollectionsCard({
+  organizationId,
+  agent,
+}: {
+  organizationId: string
+  agent: ManagedAgent
+}) {
+  const queryClient = useQueryClient()
+  const corpora = useQuery(corporaQueryOptions(organizationId))
+  const saved = corporaChoiceOf(grantOf(agent))
+  const [draft, setDraft] = useState<CorporaChoice>(saved)
+  const save = useMutation({
+    mutationFn: (choice: CorporaChoice) =>
+      updateAgent(organizationId, agent.id, {
+        grant: grantWithCorpora(choice, grantOf(agent)),
+      }),
+    onSuccess: (updated) => {
+      setDraft(corporaChoiceOf(grantOf(updated)))
+      return afterUpdateAgent(queryClient, organizationId, updated)
+    },
+  })
+
+  // The collections the owner can see, and any the grant names that they
+  // can't any more (deleted, or no longer shared), so it can be taken off.
+  const collections = useMemo(() => {
+    const seen = corpora.data ?? []
+    const known = new Set(seen.map((corpus) => corpus.id))
+    return [
+      ...[...seen]
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((corpus) => ({
+          id: corpus.id,
+          name: corpus.name,
+          detail: countLabel(corpus.document_count, "file"),
+          available: true,
+        })),
+      ...saved.ids
+        .filter((id) => !known.has(id))
+        .map((id) => ({ id, name: id, detail: "", available: false })),
+    ]
+  }, [corpora.data, saved.ids])
+
+  const dirty =
+    draft.scope !== saved.scope ||
+    (draft.scope === "some" && !sameList(draft.ids, saved.ids))
+  const searches = (id: string) =>
+    draft.scope === "all" || (draft.scope === "some" && draft.ids.includes(id))
+  const scopes: {
+    value: CorporaChoice["scope"]
+    label: string
+    detail: string
+  }[] = [
+    {
+      value: "all",
+      label: "All collections",
+      detail: "Every collection you can see, including ones made later.",
+    },
+    {
+      value: "some",
+      label: "Only these",
+      detail: "It can't see the others at all.",
+    },
+    {
+      value: "none",
+      label: "None",
+      detail: "It searches no collections.",
+    },
+  ]
+
+  return (
+    <div className="workspace-work-card">
+      <h3>Collections</h3>
+      <p className="workspace-agents-note">
+        What it may search in your Library. It never sees a collection you
+        can't.
+      </p>
+      <div
+        className="workspace-access-scope"
+        role="radiogroup"
+        aria-label="Which collections it may search"
+      >
+        {scopes.map((option) => (
+          <label key={option.value}>
+            <input
+              type="radio"
+              name={`corpora-${agent.id}`}
+              checked={draft.scope === option.value}
+              // A pick starts from every collection it can see, so wait
+              // for them.
+              disabled={
+                option.value === "some" &&
+                draft.scope !== "some" &&
+                corpora.isPending
+              }
+              onChange={() =>
+                setDraft({
+                  scope: option.value,
+                  ids:
+                    option.value === "some" && draft.ids.length === 0
+                      ? collections
+                          .filter((item) => item.available)
+                          .map((item) => item.id)
+                      : draft.ids,
+                })
+              }
+            />
+            <span>
+              <strong>{option.label}</strong>
+              <small>{option.detail}</small>
+            </span>
+          </label>
+        ))}
+      </div>
+
+      {draft.scope === "some" &&
+        (corpora.isPending ? (
+          <p className="workspace-work-empty">Loading your collections…</p>
+        ) : corpora.isError ? (
+          <p className="workspace-agents-error" role="alert">
+            Couldn't load your collections.
+          </p>
+        ) : collections.length === 0 ? (
+          <p className="workspace-work-empty">
+            You have no collections yet. Make them in Library.
+          </p>
+        ) : (
+          <ul className="workspace-access-apps" aria-label="Collections">
+            {collections.map(({ id, name, detail, available }) => (
+              <li key={id} data-off={searches(id) ? undefined : "true"}>
+                <label className="workspace-access-read">
+                  <input
+                    type="checkbox"
+                    checked={searches(id)}
+                    aria-label={`${agent.name} may search ${name}`}
+                    onChange={(event) =>
+                      setDraft({
+                        ...draft,
+                        ids: event.target.checked
+                          ? [...draft.ids, id]
+                          : draft.ids.filter((item) => item !== id),
+                      })
+                    }
+                  />
+                  <span>
+                    <strong>{name}</strong>
+                    {available ? (
+                      <small className="workspace-access-detail">
+                        {detail}
+                      </small>
+                    ) : (
+                      <small>No longer available</small>
+                    )}
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        ))}
+
+      {draft.scope === "some" && draft.ids.length === 0 && (
+        <p className="workspace-agents-note">
+          With no collections chosen it searches none of them.
+        </p>
+      )}
+      {save.isError && (
+        <p className="workspace-agents-error" role="alert">
+          {agentsErrorMessage(save.error, "Couldn't save its collections.")}
+        </p>
+      )}
+      <div className="workspace-agents-actions" data-align="start">
+        <button
+          className="workspace-agents-button"
+          data-variant="primary"
+          type="button"
+          disabled={!dirty || save.isPending}
+          onClick={() => save.mutate(draft)}
+        >
+          {save.isPending ? "Saving…" : "Save collections"}
         </button>
         {dirty && (
           <button

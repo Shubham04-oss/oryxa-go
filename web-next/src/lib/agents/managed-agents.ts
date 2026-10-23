@@ -15,17 +15,22 @@ export type ModelTier = "lite" | "main"
 /** "Every app": a grant's `apps` may be just this. */
 export const ALL_APPS = "*"
 
+/** "Every collection": a grant's `corpora` may be just this. */
+export const ALL_CORPORA = "*"
+
 /**
  * What a specialist may reach in its owner's apps (`runprofile.Grant`).
  * `apps` are toolkit slugs, or `["*"]` for every app; it reads them. It may
  * change things only in `write_apps`. The default is `{apps: ["*"]}`: reads
- * everything, writes nothing.
+ * everything, writes nothing. `corpora` are the rag corpora (collections) it
+ * may search: ids, `["*"]` for all, `[]` for none; left out, all.
  */
 export type AgentGrant = {
   apps: string[]
   tools?: string[]
   write_apps?: string[]
   write_tools?: string[]
+  corpora?: string[]
 }
 
 /** The most entries one of a grant's lists may hold. */
