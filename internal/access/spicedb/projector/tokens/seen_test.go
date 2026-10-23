@@ -31,7 +31,8 @@ func TestSeenSkipsOlderEventsAndPurges(t *testing.T) {
 	apply := func(context.Context) error { ran++; return nil }
 	guard := func(at time.Time) bool {
 		t.Helper()
-		applied, err := seen.Guard(ctx, []string{pair}, []string{pair}, at, apply)
+		// the pair twice, as a file's owner and created_by name it
+		applied, err := seen.Guard(ctx, []string{pair}, []string{pair, pair}, at, apply)
 		if err != nil {
 			t.Fatal(err)
 		}
