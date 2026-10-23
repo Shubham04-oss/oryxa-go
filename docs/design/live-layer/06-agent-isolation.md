@@ -129,7 +129,7 @@ I0–I9 are merged; I9's single primary thread namespace is deferred until A7 la
 
 Still open:
 - the browser and sandbox are not covered by specialist grants;
-- rag does not enforce grants;
+- files and knowledge do not enforce grants (rag does: a specialist's `corpora` grant, default all, limits what it can list, read, search and write);
 - guard policy is per member, not per agent;
 - `test/live/agents` attacks across real agents have not been written.
 

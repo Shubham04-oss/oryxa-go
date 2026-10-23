@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
@@ -26,7 +28,7 @@ func TestMembershipForwardsCredentials(t *testing.T) {
 		t.Fatalf("Membership() error = %v", err)
 	}
 	want := domain.OrgMembership{OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-1", Email: "asha@example.com", DisplayName: "Asha", Role: domain.OrgRoleOwner}
-	if membership != want {
+	if !reflect.DeepEqual(membership, want) {
 		t.Fatalf("membership = %+v, want %+v", membership, want)
 	}
 }
@@ -134,5 +136,36 @@ func TestMembershipRejectsAMismatchedOrEmptyAnswer(t *testing.T) {
 				t.Fatal("Membership() error = nil, want a refusal")
 			}
 		})
+	}
+}
+
+// TestMembershipReadsASpecialistsCorpora: the grant's corpora ride on the
+// token's claims; absent means all (nil), an explicit empty list means none.
+func TestMembershipReadsASpecialistsCorpora(t *testing.T) {
+	prefix := `{"organization":{"id":"org_1","name":"Acme"},"membership":{"organization_id":"org_1","user_id":"user-1","role":"admin"},"agent":true,"agent_claims":{"agent":"agt_a","role":"specialist"`
+	for name, tc := range map[string]struct {
+		body string
+		want []string
+		nil_ bool
+	}{
+		"named":         {prefix + `,"grant":{"apps":["*"],"corpora":["cor_a","cor_b"]}}}`, []string{"cor_a", "cor_b"}, false},
+		"all":           {prefix + `,"grant":{"corpora":["*"]}}}`, []string{"*"}, false},
+		"none":          {prefix + `,"grant":{"corpora":[]}}}`, []string{}, false},
+		"field missing": {prefix + `,"grant":{"apps":["*"]}}}`, nil, true},
+		"null":          {prefix + `,"grant":{"corpora":null}}}`, nil, true},
+		"no grant":      {prefix + `}}`, nil, true},
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			_, _ = writer.Write([]byte(tc.body))
+		}))
+		membership, err := New(server.URL).Membership(context.Background(), "org_1", Credentials{Authorization: "Bearer token-1"})
+		server.Close()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		got := membership.AgentCorpora
+		if (got == nil) != tc.nil_ || !slices.Equal(got, tc.want) {
+			t.Errorf("%s: corpora = %#v, want %#v", name, got, tc.want)
+		}
 	}
 }

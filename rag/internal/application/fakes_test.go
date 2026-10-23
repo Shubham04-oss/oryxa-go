@@ -36,10 +36,17 @@ func agentCreds(userID string) authclient.Credentials {
 
 const agentTokenPrefix = "agent:"
 
+// grantedCreds is a specialist's token whose grant names exactly these
+// corpora; none at all is a grant of nothing.
+func grantedCreds(userID string, corpora ...string) authclient.Credentials {
+	return authclient.Credentials{Authorization: "Bearer " + agentTokenPrefix + userID + ";corpora=" + strings.Join(corpora, ",")}
+}
+
 type fakeDirectory struct{}
 
 func (fakeDirectory) Membership(_ context.Context, organizationID string, credentials authclient.Credentials) (domain.OrgMembership, error) {
 	token, agent := strings.CutPrefix(strings.TrimPrefix(credentials.Authorization, "Bearer "), agentTokenPrefix)
+	token, granted, limited := strings.Cut(token, ";corpora=")
 	people := map[string]domain.OrgMembership{
 		"user-owner":    {OrganizationID: testOrganization, OrganizationName: "Acme", UserID: "user-owner", Email: "owner@example.com", Role: domain.OrgRoleOwner},
 		"user-admin":    {OrganizationID: testOrganization, OrganizationName: "Acme", UserID: "user-admin", Email: "admin@example.com", Role: domain.OrgRoleAdmin},
@@ -56,6 +63,12 @@ func (fakeDirectory) Membership(_ context.Context, organizationID string, creden
 	membership.Agent = agent
 	if agent {
 		membership.AgentID, membership.AgentRole = "agt_"+token, "specialist"
+		if limited {
+			membership.AgentCorpora = []string{}
+			if granted != "" {
+				membership.AgentCorpora = strings.Split(granted, ",")
+			}
+		}
 	}
 	return membership, nil
 }

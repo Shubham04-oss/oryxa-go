@@ -503,6 +503,8 @@ const maxGrantEntries = 200
 var (
 	toolkitSlug = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 	toolSlug    = regexp.MustCompile(`^[A-Z0-9][A-Z0-9_]{0,127}$`)
+	// A corpus id as rag mints it (rag/internal/domain.NewID).
+	corpusID = regexp.MustCompile(`^cor_[A-Za-z0-9_-]{1,64}$`)
 )
 
 // cleanGrant normalizes a grant as apps compares it, toolkits lowercase and
@@ -544,6 +546,28 @@ func cleanGrant(grant runprofile.Grant) (runprofile.Grant, error) {
 	}
 	if cleaned.WriteTools, err = clean("write_tools", grant.WriteTools, true, false); err != nil {
 		return runprofile.Grant{}, err
+	}
+	// A grant sent without corpora (nil) keeps the default, all; an empty
+	// list is a real choice, none.
+	if grant.Corpora == nil {
+		cleaned.Corpora = []string{runprofile.AllCorpora}
+		return cleaned, nil
+	}
+	if len(grant.Corpora) > maxGrantEntries {
+		return runprofile.Grant{}, fmt.Errorf("%w: a grant's corpora hold at most %d entries", ErrInvalid, maxGrantEntries)
+	}
+	cleaned.Corpora = []string{}
+	for _, value := range grant.Corpora {
+		value = strings.TrimSpace(value)
+		if value == runprofile.AllCorpora && len(grant.Corpora) > 1 {
+			return runprofile.Grant{}, fmt.Errorf("%w: %q must be the only entry in a grant's corpora", ErrInvalid, value)
+		}
+		if value != runprofile.AllCorpora && !corpusID.MatchString(value) {
+			return runprofile.Grant{}, fmt.Errorf("%w: %q is not a corpus id", ErrInvalid, value)
+		}
+		if !slices.Contains(cleaned.Corpora, value) {
+			cleaned.Corpora = append(cleaned.Corpora, value)
+		}
 	}
 	return cleaned, nil
 }
