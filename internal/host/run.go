@@ -21,6 +21,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/internal/access"
 	"github.com/Shubham04-oss/oryxa-go/internal/access/shadow"
 	"github.com/Shubham04-oss/oryxa-go/internal/access/spicedb"
+	"github.com/Shubham04-oss/oryxa-go/internal/access/spicedb/projector/tokens"
 	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/gcpauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
@@ -174,7 +175,7 @@ func openPlatform(ctx context.Context, config Config, selected []Definition, sel
 	var comparer access.Comparer
 	var compared *shadow.Shadow
 	if database != nil {
-		compared, err = shadow.Open(spicedb.FromEnv(), access.NewLog(database.Pool, logger), logger.With("component", "access-shadow"))
+		compared, err = shadow.Open(spicedb.FromEnv(), tokens.New(database.Pool), access.NewLog(database.Pool, logger), logger.With("component", "access-shadow"))
 		if err != nil {
 			logger.Warn("spicedb shadow is off", "error", err)
 		} else if compared != nil {

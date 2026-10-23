@@ -148,9 +148,18 @@ type applier interface {
 	Apply(context.Context, Change) (*v1.ZedToken, error)
 }
 
+// orderer is tokens.Seen: it runs apply unless a newer event already touched
+// one of check.
+type orderer interface {
+	Guard(ctx context.Context, check, record []string, at time.Time, apply func(context.Context) error) (bool, error)
+}
+
 type Consumer struct {
-	writer  applier
-	grants  grantSyncer
+	writer applier
+	grants grantSyncer
+	// seen skips an event older than one already applied to the same
+	// relationship; nil applies every event as it comes.
+	seen    orderer
 	logger  *slog.Logger
 	metrics observability.ConsumerMetrics
 	// verifier proves who published each event; nil is refused at build.
@@ -218,7 +227,7 @@ func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt ti
 
 	ctx, span := observability.StartConsumerSpan(ctx, detail.TraceCarrier, consumer.queueName, event.DetailType, detail.EventID)
 	started := time.Now()
-	err = consumer.project(ctx, event.DetailType, mapping, detail.Data)
+	err = consumer.project(ctx, event.DetailType, mapping, detail.Data, occurredAt)
 	observability.EndSpan(span, err)
 	consumer.metrics.Record(ctx, component, event.DetailType, occurredAt, receivedAt, started, err)
 	if err != nil {
@@ -227,12 +236,26 @@ func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt ti
 	return nil
 }
 
-func (consumer *Consumer) project(ctx context.Context, detailType string, mapping mapper, data json.RawMessage) error {
+func (consumer *Consumer) project(ctx context.Context, detailType string, mapping mapper, data json.RawMessage, occurredAt time.Time) error {
 	change, err := mapping(data)
 	if err != nil {
 		return err
 	}
-	if _, err := consumer.writer.Apply(ctx, change); err != nil {
+	apply := func(ctx context.Context) error {
+		_, err := consumer.writer.Apply(ctx, change)
+		return err
+	}
+	if consumer.seen == nil {
+		err = apply(ctx)
+	} else {
+		check, record := orderingKeys(change)
+		var applied bool
+		applied, err = consumer.seen.Guard(ctx, check, record, occurredAt, apply)
+		if err == nil && !applied {
+			consumer.logger.InfoContext(ctx, "spicedb projector: skipped an event older than one already applied", "detail_type", detailType, "occurred_at", occurredAt)
+		}
+	}
+	if err != nil {
 		return err
 	}
 	if slices.Contains(grantsFollow, detailType) {

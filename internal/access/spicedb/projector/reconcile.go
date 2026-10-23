@@ -9,6 +9,8 @@ import (
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/access/spicedb/projector/tokens"
 )
 
 // Reconciler compares SpiceDB with the sources of truth and repairs it.
@@ -56,9 +58,16 @@ func (reconciler *Reconciler) Run(ctx context.Context) (Result, error) {
 			return result, err
 		}
 	}
+	// SQS keeps a message at most 14 days, so no event older than that can
+	// still arrive to be ordered against what is forgotten here.
+	if _, err := tokens.NewSeen(reconciler.pool).Purge(ctx, started.Add(-seenRetention)); err != nil {
+		reconciler.logger.WarnContext(ctx, "spicedb reconcile: purge seen events", "error", err)
+	}
 	reconciler.logger.InfoContext(ctx, "spicedb reconcile finished", "deleted", result.Deleted, "written", result.Written, "skipped", result.Skipped)
 	return result, nil
 }
+
+const seenRetention = 15 * 24 * time.Hour
 
 // SyncGrants brings one agent's grants in line with agents, so a grant
 // change shows in SpiceDB without waiting for the night.
