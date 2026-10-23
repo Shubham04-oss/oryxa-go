@@ -73,7 +73,8 @@ const maintenanceEvery = 15 * time.Minute
 
 // RunMaintenance sweeps until ctx is cancelled: it fails connections whose
 // member never came back from Composio or Pipedream, forgets deliveries old
-// enough never to be retried, and once a day checks Pipedream's accounts.
+// enough never to be retried, once a day checks Pipedream's accounts, and
+// once an hour reconciles native connections with the integrations service.
 func (s *Service) RunMaintenance(ctx context.Context) {
 	for {
 		s.maintain(ctx)
@@ -119,4 +120,5 @@ func (s *Service) maintain(ctx context.Context) {
 		s.logger.InfoContext(ctx, "handled deliveries forgotten", "count", forgotten)
 	}
 	s.checkPipedreamHealth(ctx)
+	s.reconcileNativeOrganizations(ctx)
 }

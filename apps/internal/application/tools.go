@@ -71,6 +71,9 @@ func (s *Service) SearchTools(ctx context.Context, credentials authclient.Creden
 	if limit <= 0 || limit > maxToolSearch {
 		limit = maxToolSearch
 	}
+	if views, ok, err := s.nativeToolViews(ctx, organizationID, caller.UserID, toolkit, query, limit); ok || err != nil {
+		return views, err
+	}
 	if views, ok, err := s.pipedreamToolViews(ctx, organizationID, caller.UserID, toolkit, query, limit); ok || err != nil {
 		return views, err
 	}

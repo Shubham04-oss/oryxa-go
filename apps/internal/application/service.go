@@ -139,6 +139,9 @@ type Service struct {
 	// pipedreamCheckedAt is when the maintenance sweep last checked every
 	// Pipedream account's health; it does so once a day.
 	pipedreamCheckedAt time.Time
+	// nativeReconciledAt is when the maintenance sweep last reconciled native
+	// connections with the integrations service; it does so once an hour.
+	nativeReconciledAt time.Time
 }
 
 func New(dependencies Dependencies, config Config) (*Service, error) {
