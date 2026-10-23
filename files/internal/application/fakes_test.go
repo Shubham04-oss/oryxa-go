@@ -29,6 +29,14 @@ func grantedCreds(userID string, files ...string) authclient.Credentials {
 
 const grantMark = ";files="
 
+// roleCreds is a token auth minted for an agent of the named role (primary,
+// organization or specialist) acting for userID, with no files grant.
+func roleCreds(userID, role string) authclient.Credentials {
+	return authclient.Credentials{Authorization: "Bearer " + agentTokenPrefix + userID + roleMark + role}
+}
+
+const roleMark = ";role="
+
 type fakeDirectory struct{}
 
 func (fakeDirectory) Membership(_ context.Context, organizationID string, credentials authclient.Credentials) (domain.OrgMembership, error) {
@@ -41,6 +49,7 @@ func (fakeDirectory) Membership(_ context.Context, organizationID string, creden
 	}
 	token, agent := strings.CutPrefix(token, agentTokenPrefix)
 	token, granted, limited := strings.Cut(token, grantMark)
+	token, role, _ := strings.Cut(token, roleMark)
 	people := map[string]domain.OrgMembership{
 		"user-owner":    {OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-owner", Email: "owner@example.com", Role: domain.OrgRoleOwner},
 		"user-admin":    {OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-admin", Email: "admin@example.com", Role: domain.OrgRoleAdmin},
@@ -54,6 +63,9 @@ func (fakeDirectory) Membership(_ context.Context, organizationID string, creden
 	membership.Agent = agent
 	if agent {
 		membership.AgentRole = "specialist"
+		if role != "" {
+			membership.AgentRole = role
+		}
 		if limited {
 			membership.AgentFiles = []string{}
 			if granted != "" {
@@ -65,7 +77,9 @@ func (fakeDirectory) Membership(_ context.Context, organizationID string, creden
 }
 
 type fakeTeams struct {
+	mu     sync.Mutex
 	access map[string]domain.TeamAccess
+	calls  int
 }
 
 func newFakeTeams() *fakeTeams {
@@ -76,6 +90,10 @@ func newFakeTeams() *fakeTeams {
 		"user-owner/team_design":  {TeamID: "team_design", CanManage: true, Member: false},
 		"user-admin/team_design":  {TeamID: "team_design", CanManage: true, Member: true},
 		"user-member/team_design": {},
+		// Only org admins see team_ops, through teams' admin view; nobody is on it.
+		"user-owner/team_ops":       {TeamID: "team_ops", CanManage: true, Member: false},
+		"user-admin/team_ops":       {TeamID: "team_ops", CanManage: true, Member: false},
+		"user-outsider/team_design": {TeamID: "team_design", CanManage: false, Member: true},
 	}}
 }
 
@@ -91,7 +109,10 @@ func (fake *fakeTeams) Team(_ context.Context, organizationID, teamID string, cr
 	// real teams service resolves an agent's token to its member's own
 	// identity just as auth does, and decides nothing from the agent flag.
 	token = strings.TrimPrefix(token, agentTokenPrefix)
-	token, _, _ = strings.Cut(token, grantMark)
+	token, _, _ = strings.Cut(token, ";")
+	fake.mu.Lock()
+	fake.calls++
+	fake.mu.Unlock()
 	access, ok := fake.access[token+"/"+teamID]
 	if !ok || access.TeamID == "" {
 		return domain.TeamAccess{}, domain.ErrNotFound
