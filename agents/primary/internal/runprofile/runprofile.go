@@ -239,10 +239,25 @@ const AllApps = "*"
 // AllCorpora in Grant.Corpora is every knowledge corpus its member can read.
 const AllCorpora = "*"
 
+// AllFiles in Grant.Files is every file its member can read; AllKnowledge in
+// Grant.Knowledge is every knowledge source.
+const (
+	AllFiles     = "*"
+	AllKnowledge = "*"
+)
+
+// The file scopes a grant's Files may name besides team ids: the member's own
+// files and the organization's.
+const (
+	FilesMember       = "member"
+	FilesOrganization = "org"
+)
+
 // Grant is what a member lets one of their specialists reach in their apps
 // (I3): which apps (toolkits) and tools it may use, read-only unless a write
-// is granted here, and which knowledge corpora it may search. Assembly builds the specialist's toolboxes from it, and
-// apps enforces it on every call the specialist's agent token makes, which
+// is granted here, and which knowledge corpora, files and knowledge sources
+// it may read. Assembly builds the specialist's toolboxes from it, and apps
+// (and rag, files and knowledge, for their parts) enforces it on every call the specialist's agent token makes, which
 // is what holds when a prompt steers the specialist. The primary has none:
 // it reaches all its member does.
 type Grant struct {
@@ -260,12 +275,22 @@ type Grant struct {
 	// A grant stored before this field existed has none, which means all;
 	// an explicit empty list means none. Rag enforces it.
 	Corpora []string `json:"corpora"`
+	// Files are the file scopes it may reach: FilesMember (its member's own
+	// files), FilesOrganization (the organization's), team ids (team_…) for
+	// those teams' files, or AllFiles. Missing means all, empty means none,
+	// as for Corpora. Files enforces it.
+	Files []string `json:"files"`
+	// Knowledge are the knowledge sources (src_…) it may read, or
+	// AllKnowledge. Missing means all, empty means none. Knowledge enforces
+	// it.
+	Knowledge []string `json:"knowledge"`
 }
 
 // DefaultGrant is a specialist's until its member changes it: every app it
 // reached before grants existed, read-only.
 func DefaultGrant() Grant {
-	return Grant{Apps: []string{AllApps}, Tools: []string{}, WriteApps: []string{}, WriteTools: []string{}, Corpora: []string{AllCorpora}}
+	return Grant{Apps: []string{AllApps}, Tools: []string{}, WriteApps: []string{}, WriteTools: []string{},
+		Corpora: []string{AllCorpora}, Files: []string{AllFiles}, Knowledge: []string{AllKnowledge}}
 }
 
 // ReachesApps is whether the grant names any app at all.

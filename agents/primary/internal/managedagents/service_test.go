@@ -215,7 +215,7 @@ func TestASpecialistsGrantIsNormalizedAndOnlyASpecialistHasOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := runprofile.Grant{Apps: []string{"gmail", "*"}, Tools: []string{"GMAIL_FETCH_EMAILS"}, WriteApps: []string{"gmail"}, WriteTools: []string{}, Corpora: []string{"*"}}
+	want := runprofile.Grant{Apps: []string{"gmail", "*"}, Tools: []string{"GMAIL_FETCH_EMAILS"}, WriteApps: []string{"gmail"}, WriteTools: []string{}, Corpora: []string{"*"}, Files: []string{"*"}, Knowledge: []string{"*"}}
 	if !reflect.DeepEqual(*updated.Grant, want) {
 		t.Fatalf("stored grant = %+v, want %+v", *updated.Grant, want)
 	}
@@ -226,6 +226,10 @@ func TestASpecialistsGrantIsNormalizedAndOnlyASpecialistHasOne(t *testing.T) {
 		"an app apps cannot name": {Apps: []string{"g mail"}},
 		"a bad corpus id":         {Apps: []string{"*"}, Corpora: []string{"nope"}},
 		"all mixed with an id":    {Apps: []string{"*"}, Corpora: []string{"*", "cor_abc"}},
+		"a bad file scope":        {Apps: []string{"*"}, Files: []string{"teams"}},
+		"all files mixed":         {Apps: []string{"*"}, Files: []string{"member", "*"}},
+		"a bad source id":         {Apps: []string{"*"}, Knowledge: []string{"cor_abc"}},
+		"all sources mixed":       {Apps: []string{"*"}, Knowledge: []string{"*", "src_abc"}},
 	} {
 		if _, err := service.Update(context.Background(), scope, specialist.ID, UpdateInput{Grant: &grant}); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: error = %v, want invalid", name, err)
@@ -242,8 +246,8 @@ func TestASpecialistsGrantIsNormalizedAndOnlyASpecialistHasOne(t *testing.T) {
 func TestASpecialistsRunCarriesItsGrant(t *testing.T) {
 	grant := runprofile.Grant{Apps: []string{"gmail"}, WriteTools: []string{"GMAIL_SEND_EMAIL"}}
 	for definition, want := range map[*Definition]string{
-		{ID: "agt_sales", Kind: KindSpecialist, Grant: &grant}: `{"apps":["gmail"],"tools":null,"write_apps":null,"write_tools":["GMAIL_SEND_EMAIL"],"corpora":null}`,
-		{ID: "agt_old", Kind: KindSpecialist}:                  `{"apps":["*"],"tools":[],"write_apps":[],"write_tools":[],"corpora":["*"]}`,
+		{ID: "agt_sales", Kind: KindSpecialist, Grant: &grant}: `{"apps":["gmail"],"tools":null,"write_apps":null,"write_tools":["GMAIL_SEND_EMAIL"],"corpora":null,"files":null,"knowledge":null}`,
+		{ID: "agt_old", Kind: KindSpecialist}:                  `{"apps":["*"],"tools":[],"write_apps":[],"write_tools":[],"corpora":["*"],"files":["*"],"knowledge":["*"]}`,
 		{ID: "agt_primary", Kind: KindPrimary}:                 "",
 	} {
 		state, err := runState(*definition)
@@ -451,6 +455,61 @@ func TestAGrantsCorporaDefaultToAllAndEmptyMeansNone(t *testing.T) {
 		cleaned, err := cleanGrant(grant)
 		if err != nil || !slices.Equal(cleaned.Corpora, want) || cleaned.Corpora == nil {
 			t.Errorf("%s: corpora = %#v (%v), want %#v", in, cleaned.Corpora, err, want)
+		}
+	}
+}
+
+// TestAGrantsFilesAndKnowledgeDefaultToAllAndEmptyMeansNone: like corpora, a
+// grant sent without files or knowledge (or stored before they existed)
+// reaches all of them; an explicit empty list is none; scopes and ids are
+// kept, trimmed, once each; anything files or knowledge could not match is
+// refused.
+func TestAGrantsFilesAndKnowledgeDefaultToAllAndEmptyMeansNone(t *testing.T) {
+	defaults := runprofile.DefaultGrant()
+	if !slices.Equal(defaults.Files, []string{"*"}) || !slices.Equal(defaults.Knowledge, []string{"*"}) {
+		t.Fatalf("default files, knowledge = %v, %v, want all", defaults.Files, defaults.Knowledge)
+	}
+	stored := runprofile.DefaultGrant()
+	if err := json.Unmarshal([]byte(`{"apps":["gmail"],"corpora":["cor_a"]}`), &stored); err != nil ||
+		!slices.Equal(stored.Files, []string{"*"}) || !slices.Equal(stored.Knowledge, []string{"*"}) {
+		t.Fatalf("a stored grant without files or knowledge = %v, %v (%v), want all", stored.Files, stored.Knowledge, err)
+	}
+	for in, want := range map[string][2][]string{
+		`{"apps":["gmail"]}`:                                 {{"*"}, {"*"}},
+		`{"apps":["gmail"],"files":null}`:                    {{"*"}, {"*"}},
+		`{"apps":["gmail"],"files":[],"knowledge":[]}`:       {{}, {}},
+		`{"apps":["gmail"],"files":["*"],"knowledge":["*"]}`: {{"*"}, {"*"}},
+		`{"apps":["gmail"],"files":[" member ","org","team_abc","member"],"knowledge":["src_abc","src_abc","src_xyz2"]}`: {
+			{"member", "org", "team_abc"}, {"src_abc", "src_xyz2"}},
+	} {
+		var grant runprofile.Grant
+		if err := json.Unmarshal([]byte(in), &grant); err != nil {
+			t.Fatal(err)
+		}
+		cleaned, err := cleanGrant(grant)
+		if err != nil {
+			t.Errorf("%s: %v", in, err)
+			continue
+		}
+		if !slices.Equal(cleaned.Files, want[0]) || cleaned.Files == nil {
+			t.Errorf("%s: files = %#v, want %#v", in, cleaned.Files, want[0])
+		}
+		if !slices.Equal(cleaned.Knowledge, want[1]) || cleaned.Knowledge == nil {
+			t.Errorf("%s: knowledge = %#v, want %#v", in, cleaned.Knowledge, want[1])
+		}
+	}
+	for name, grant := range map[string]runprofile.Grant{
+		"a scope files has not":        {Files: []string{"organization"}},
+		"a team id of the wrong shape": {Files: []string{"team-abc"}},
+		"a blank file scope":           {Files: []string{" "}},
+		"all with a scope":             {Files: []string{"*", "org"}},
+		"a corpus id as a source":      {Knowledge: []string{"cor_abc"}},
+		"an uppercase source id":       {Knowledge: []string{"src_ABC"}},
+		"all with a source":            {Knowledge: []string{"src_abc", "*"}},
+		"too many sources":             {Knowledge: slices.Repeat([]string{"src_abc"}, maxGrantEntries+1)},
+	} {
+		if _, err := cleanGrant(grant); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: error = %v, want invalid", name, err)
 		}
 	}
 }
