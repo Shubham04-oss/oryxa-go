@@ -9,6 +9,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/email"
 	"github.com/Shubham04-oss/oryxa-go/files"
 	"github.com/Shubham04-oss/oryxa-go/integrations"
+	"github.com/Shubham04-oss/oryxa-go/internal/access/spicedb/projector"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace"
 	"github.com/Shubham04-oss/oryxa-go/knowledge"
@@ -34,4 +35,7 @@ var definitions = []host.Definition{
 	workspace.Definition,
 	realtime.Definition,
 	integrations.Definition,
+	// Last: it only reads what the others own, and it is off until
+	// SPICEDB_ENDPOINT is set.
+	projector.Definition,
 }

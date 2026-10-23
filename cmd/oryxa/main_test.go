@@ -126,7 +126,8 @@ func TestEveryEventConsumerDeclaresItsQueue(t *testing.T) {
 		"batching": "BATCHING_EVENTS_QUEUE_URL", "billing": "BILLING_EVENTS_QUEUE_URL", "email": "EMAIL_QUEUE_URL",
 		"files": "FILES_EVENTS_QUEUE_URL", "integrations": "INTEGRATIONS_EVENTS_QUEUE_URL",
 		"knowledge": "KNOWLEDGE_EVENTS_QUEUE_URL", "rag": "RAG_EVENTS_QUEUE_URL",
-		"realtime": "REALTIME_EVENTS_QUEUE_URL", "teams": "TEAMS_EVENTS_QUEUE_URL", "workspace": "WORKSPACE_EVENTS_QUEUE_URL",
+		"realtime": "REALTIME_EVENTS_QUEUE_URL", "spicedb": "SPICEDB_EVENTS_QUEUE_URL", "teams": "TEAMS_EVENTS_QUEUE_URL",
+		"workspace": "WORKSPACE_EVENTS_QUEUE_URL",
 	}
 	// consumesNothing names the services that read no events at all. A new
 	// service is in neither list until someone decides which it is: a
