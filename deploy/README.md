@@ -778,12 +778,18 @@ all of it, behind two switches:
   database URI (Secrets Manager), the container for `SPICEDB_PRESHARED_KEY`, a
   log group, a security group open on 50051 to the oryxa tasks only, a private
   DNS name (`spicedb.oryxa-production.internal`, Cloud Map), the service, two
-  one-off task definitions (`-spicedb-migrate`, `-spicedb-schema`), and
-  `track_commit_timestamp = on` in the database's parameter group, which waits
-  for a reboot.
+  one-off task definitions (`-spicedb-migrate`, `-spicedb-schema`), the
+  projector's queue (`oryxa-production-spicedb-events`, its `-dlq`, and the
+  EventBridge rule `spicedb-events`, built from `projector.Subscriptions()`),
+  and `track_commit_timestamp = on` in the database's parameter group, which
+  waits for a reboot. Events collect in the queue until the projector runs.
 - `spicedb_desired_count` above zero starts that many tasks (two), adds an
   alarm when fewer run, and gives the oryxa task `SPICEDB_ENDPOINT`,
-  `SPICEDB_INSECURE=true` and `SPICEDB_PRESHARED_KEY`.
+  `SPICEDB_INSECURE=true`, `SPICEDB_PRESHARED_KEY` and
+  `SPICEDB_EVENTS_QUEUE_URL`, the right to consume that queue, its backlog and
+  dead-letter alarms, and an alarm on the nightly reconcile's fixes. The
+  endpoint and the queue come together: production refuses to start with
+  `SPICEDB_ENDPOINT` set and no queue (`ORYXA_REQUIRE_EVENT_QUEUES`).
 
 With both off, as committed, the plan shows no change. gRPC is plain inside
 the VPC: only the oryxa tasks' security group reaches port 50051, and every
@@ -833,7 +839,8 @@ Their output is in the log group `/oryxa-production/spicedb`.
      -target=aws_db_parameter_group.main -target=aws_iam_role_policy.execution_secrets \
      -target=aws_vpc_security_group_ingress_rule.spicedb -target=aws_vpc_security_group_ingress_rule.database_spicedb \
      -target=aws_ecs_service.spicedb -target=aws_ecs_task_definition.spicedb_migrate \
-     -target=aws_ecs_task_definition.spicedb_schema)
+     -target=aws_ecs_task_definition.spicedb_schema \
+     -target=aws_cloudwatch_event_target.spicedb -target=aws_sqs_queue_policy.spicedb)
    ```
 
 4. **Reboot the database, in a quiet window.** `track_commit_timestamp` only
@@ -866,7 +873,20 @@ Their output is in the log group `/oryxa-production/spicedb`.
    (cd deploy/production && tofu apply -target=aws_ecs_service.spicedb -target=aws_cloudwatch_metric_alarm.spicedb_running)
    aws ecs wait services-stable --cluster "$cluster" --services spicedb
    run_once oryxa-production-spicedb-schema      # zed schema write: internal/access/spicedb/schema.zed
-   (cd deploy/production && tofu apply -target=aws_ecs_task_definition.oryxa -target=aws_ecs_service.oryxa)
+   (cd deploy/production && tofu apply \
+     -target=aws_iam_role_policy.task -target=aws_ecs_task_definition.oryxa -target=aws_ecs_service.oryxa \
+     -target='aws_cloudwatch_metric_alarm.queue_age["spicedb"]' -target='aws_cloudwatch_metric_alarm.dead_letters["spicedb"]' \
+     -target=aws_cloudwatch_metric_alarm.spicedb_reconcile_fixes)
+   ```
+
+   Then backfill once, rather than wait for 03:00 UTC: the projector only
+   follows changes from here on. Its output, every relationship it wrote, goes
+   to your terminal, not the log group, so it does not trip the fixes alarm:
+
+   ```sh
+   aws ecs execute-command --cluster "$cluster" --container oryxa --interactive \
+     --task "$(aws ecs list-tasks --cluster "$cluster" --service-name oryxa --query 'taskArns[0]' --output text)" \
+     --command "/oryxa spicedb-reconcile"
    ```
 
    The schema task carries `schema.zed` as the checkout had it at the apply;
@@ -886,7 +906,10 @@ Their output is in the log group `/oryxa-production/spicedb`.
    ```
 
    Two HEALTHY tasks, and the alarm `oryxa-production-spicedb-running` in OK.
-   The oryxa task's logs show the shadow's disagreements, if any.
+   The oryxa task's logs show the shadow's disagreements, if any. After the
+   first night, `oryxa-production-spicedb-reconcile-fixes` should stay OK: each
+   fix it counts is an event the projector missed, named in a WARN line
+   starting `spicedb reconcile:` in `/oryxa-production/app`.
 
 8. **Turn it off again.** To pause, set `spicedb_desired_count` back to 0 and
    apply the oryxa task's targets of step 6, then the SpiceDB service's, so

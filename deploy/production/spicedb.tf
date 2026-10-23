@@ -330,3 +330,114 @@ resource "aws_cloudwatch_metric_alarm" "spicedb_running" {
   alarm_actions       = local.alarm_actions
   ok_actions          = local.alarm_actions
 }
+
+# The projector's events (internal/access/spicedb/projector, the oryxa task's
+# "spicedb" service): a queue, its dead-letter queue and the rule feeding it,
+# as each service's provisioner makes its own (deploy/scripts/provision-app.sh),
+# with the same settings. They exist with spicedb_enabled, so events wait for
+# the projector; local.queue_names (main.tf) names the queue, which gives the
+# oryxa task SPICEDB_EVENTS_QUEUE_URL, the right to consume it and its backlog
+# and dead-letter alarms, only once SpiceDB runs. Production refuses to start
+# with SPICEDB_ENDPOINT set and no queue (ORYXA_REQUIRE_EVENT_QUEUES), so both
+# come together.
+locals {
+  spicedb_queue = "${local.name}-spicedb-events"
+
+  # projector.Subscriptions(), by source. Keep it in step with the Go: an event
+  # it maps but this leaves out is never projected, only reconciled at night.
+  spicedb_subscriptions = {
+    "oryxa.agents" = ["agents.agent.created.v1", "agents.agent.deleted.v1", "agents.agent.updated.v1", "agents.interaction.requested.v1"]
+    "oryxa.apps"   = ["apps.connection.connected.v1", "apps.connection.initiated.v1", "apps.connection.removed.v1"]
+    "oryxa.auth"   = ["auth.member.joined.v1", "auth.member.removed.v1", "auth.member.role-changed.v1", "auth.organization.deleted.v1"]
+    "oryxa.files"  = ["files.object.created.v1", "files.object.deleted.v1"]
+    "oryxa.rag"    = ["rag.corpus.created.v1", "rag.corpus.deleted.v1"]
+    "oryxa.teams"  = ["teams.member.added.v1", "teams.member.removed.v1", "teams.member.role-changed.v1", "teams.team.created.v1", "teams.team.deleted.v1"]
+  }
+}
+
+resource "aws_sqs_queue" "spicedb_dlq" {
+  count                     = local.spicedb
+  name                      = "${local.spicedb_queue}-dlq"
+  message_retention_seconds = 1209600
+  sqs_managed_sse_enabled   = true
+}
+
+resource "aws_sqs_queue" "spicedb" {
+  count                      = local.spicedb
+  name                       = local.spicedb_queue
+  visibility_timeout_seconds = 60
+  sqs_managed_sse_enabled    = true
+  redrive_policy             = jsonencode({ deadLetterTargetArn = aws_sqs_queue.spicedb_dlq[0].arn, maxReceiveCount = 5 })
+}
+
+resource "aws_cloudwatch_event_rule" "spicedb" {
+  count          = local.spicedb
+  name           = "spicedb-events"
+  description    = "Events that move a SpiceDB relationship, for the projector"
+  event_bus_name = aws_cloudwatch_event_bus.main.name
+  event_pattern = jsonencode({ "$or" = [for source in sort(keys(local.spicedb_subscriptions)) : {
+    source        = [source]
+    "detail-type" = sort(local.spicedb_subscriptions[source])
+  }] })
+}
+
+resource "aws_cloudwatch_event_target" "spicedb" {
+  count          = local.spicedb
+  rule           = aws_cloudwatch_event_rule.spicedb[0].name
+  event_bus_name = aws_cloudwatch_event_bus.main.name
+  target_id      = "spicedb-queue"
+  arn            = aws_sqs_queue.spicedb[0].arn
+}
+
+# The rule, and nothing else, may send to the queue.
+resource "aws_sqs_queue_policy" "spicedb" {
+  count     = local.spicedb
+  queue_url = aws_sqs_queue.spicedb[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "AllowSpiceDBRule"
+      Effect    = "Allow"
+      Principal = { Service = "events.amazonaws.com" }
+      Action    = "sqs:SendMessage"
+      Resource  = aws_sqs_queue.spicedb[0].arn
+      Condition = {
+        ArnEquals    = { "aws:SourceArn" = aws_cloudwatch_event_rule.spicedb[0].arn }
+        StringEquals = { "aws:SourceAccount" = local.account_id }
+      }
+    }]
+  })
+}
+
+# Every relationship the nightly reconcile has to fix is one the projector
+# missed: it logs each at WARN, and this counts them, as app_errors
+# (hardening.tf) counts errors. A failed reconcile logs at ERROR, which
+# app_errors already alarms on.
+resource "aws_cloudwatch_log_metric_filter" "spicedb_reconcile_fixes" {
+  count          = local.spicedb_on ? 1 : 0
+  name           = "${local.name}-spicedb-reconcile-fixes"
+  log_group_name = aws_cloudwatch_log_group.task["app"].name
+  pattern        = "{ $.level = \"WARN\" && $.msg = \"spicedb reconcile: *\" }"
+
+  metric_transformation {
+    name      = "SpiceDBReconcileFixes"
+    namespace = "Oryxa/Logs"
+    value     = "1"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "spicedb_reconcile_fixes" {
+  count               = local.spicedb_on ? 1 : 0
+  alarm_name          = "${local.name}-spicedb-reconcile-fixes"
+  alarm_description   = "The nightly SpiceDB reconcile fixed relationships the projector missed. Its WARN lines in the app log group name each one."
+  namespace           = aws_cloudwatch_log_metric_filter.spicedb_reconcile_fixes[0].metric_transformation[0].namespace
+  metric_name         = aws_cloudwatch_log_metric_filter.spicedb_reconcile_fixes[0].metric_transformation[0].name
+  statistic           = "Sum"
+  period              = 3600
+  evaluation_periods  = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = local.alarm_actions
+  ok_actions          = local.alarm_actions
+}
