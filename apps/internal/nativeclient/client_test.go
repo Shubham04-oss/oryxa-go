@@ -181,3 +181,117 @@ func TestCallToolMapsTheServicesRefusals(t *testing.T) {
 		})
 	}
 }
+
+func TestListConnectionsAsksForTheOrgsOrAMembersConnections(t *testing.T) {
+	t.Parallel()
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer service-token" {
+			t.Errorf("request = %s %q", r.Method, r.Header.Get("Authorization"))
+		}
+		paths = append(paths, r.URL.RequestURI())
+		_, _ = w.Write([]byte(`{"connections":[{"connection_id":"icn_1","organization_id":"org_1","member_id":"usr_1",` +
+			`"level":"personal","app":"github","mode":"oryxa","status":"ok","updated_at":"2026-10-01T10:00:00Z"}]}`))
+	}))
+	defer server.Close()
+	signer := &fixedSigner{}
+	client, err := New(Config{BaseURL: server.URL, Signer: signer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := client.ListConnections(context.Background(), "org_1", "")
+	if err != nil || len(listed) != 1 || listed[0].ID != "icn_1" || listed[0].MemberID != "usr_1" || listed[0].UpdatedAt.IsZero() {
+		t.Fatalf("ListConnections() = %+v, %v", listed, err)
+	}
+	if signer.audience != Audience || signer.purpose != ConnectionsPurpose {
+		t.Fatalf("signed as %q/%q", signer.audience, signer.purpose)
+	}
+	if _, err := client.ListConnections(context.Background(), "org_1", "usr 1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 2 || paths[0] != "/v1/connections?org=org_1" || paths[1] != "/v1/connections?member=usr+1&org=org_1" {
+		t.Fatalf("paths = %q", paths)
+	}
+}
+
+// An answer that does not say which connections there are must never read as
+// "none": reconciling would retire every row.
+func TestListConnectionsRefusesAnAnswerWithoutTheList(t *testing.T) {
+	t.Parallel()
+	for name, testCase := range map[string]struct {
+		status int
+		body   string
+	}{
+		"no field":      {http.StatusOK, `{}`},
+		"null":          {http.StatusOK, `{"connections":null}`},
+		"service fails": {http.StatusInternalServerError, `{"error":{"code":"internal"}}`},
+		"not JSON":      {http.StatusOK, `<html>`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(testCase.status)
+				_, _ = w.Write([]byte(testCase.body))
+			}))
+			defer server.Close()
+			client, err := New(Config{BaseURL: server.URL, Signer: &fixedSigner{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if listed, err := client.ListConnections(context.Background(), "org_1", ""); err == nil {
+				t.Fatalf("ListConnections() = %+v, want an error", listed)
+			}
+		})
+	}
+}
+
+func TestListToolsAsksForAMembersToolsAndAnswersThem(t *testing.T) {
+	t.Parallel()
+	var path string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer service-token" {
+			t.Errorf("request = %s %q", r.Method, r.Header.Get("Authorization"))
+		}
+		path = r.URL.RequestURI()
+		_, _ = w.Write([]byte(`{"tools":[{"app":"github","name":"github.list_issues","description":"Lists issues",` +
+			`"effect":"read","input_schema":{"type":"object"}}]}`))
+	}))
+	defer server.Close()
+	signer := &fixedSigner{}
+	client, err := New(Config{BaseURL: server.URL, Signer: signer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := client.ListTools(context.Background(), "org_1", "usr_1", "github")
+	if err != nil || len(tools) != 1 {
+		t.Fatalf("ListTools() = %+v, %v", tools, err)
+	}
+	want := Tool{App: "github", Name: "github.list_issues", Description: "Lists issues", Effect: "read"}
+	got := tools[0]
+	if got.App != want.App || got.Name != want.Name || got.Description != want.Description || got.Effect != want.Effect ||
+		string(got.InputSchema) != `{"type":"object"}` {
+		t.Fatalf("tool = %+v", got)
+	}
+	if path != "/v1/tools?app=github&member=usr_1&org=org_1" || signer.purpose != ToolsPurpose {
+		t.Fatalf("asked %q as %q", path, signer.purpose)
+	}
+	if _, err := client.ListTools(context.Background(), "org_1", "usr_1", ""); err != nil || path != "/v1/tools?member=usr_1&org=org_1" {
+		t.Fatalf("without an app: %q, %v", path, err)
+	}
+}
+
+func TestListToolsMapsTheServicesRefusals(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"code":"invalid_request"}}`))
+	}))
+	defer server.Close()
+	client, err := New(Config{BaseURL: server.URL, Signer: &fixedSigner{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ListTools(context.Background(), "org_1", "", ""); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("ListTools() error = %v, want invalid", err)
+	}
+}
