@@ -17,9 +17,31 @@
       "port": 8087
     },
     {
+      "name": "web-next-dev-stack",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd web-next && ORYXA_URL=http://localhost:18080 npx --yes pnpm@12.4.2 exec vite dev --port 3001 --strictPort"
+      ],
+      "port": 3001
+    },
+    {
+      "name": "web-next-dev-stack-a1",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "ssh -N -o ExitOnForwardFailure=yes -L 18080:localhost:18080 oryxa-a1 & trap 'kill $!' EXIT INT TERM; cd web-next && ORYXA_URL=http://localhost:18080 npx --yes pnpm@12.4.2 exec vite dev --port 3001 --strictPort"
+      ],
+      "port": 3001
+    },
+    {
       "name": "web",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--dir", "web", "dev"],
+      "runtimeArgs": [
+        "--dir",
+        "web",
+        "dev"
+      ],
       "port": 3000
     }
   ]
