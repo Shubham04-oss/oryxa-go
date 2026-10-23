@@ -16,6 +16,8 @@ type cliChallengeLimiter struct {
 	minute int64
 	total  int
 	peers  map[string]int
+	// perPeer and perMinute are the budgets; zero means 10 and 120.
+	perPeer, perMinute int
 }
 
 func (limiter *cliChallengeLimiter) allow(remote string, now time.Time) bool {
@@ -32,7 +34,14 @@ func (limiter *cliChallengeLimiter) allow(remote string, now time.Time) bool {
 		limiter.total = 0
 		limiter.peers = map[string]int{}
 	}
-	if limiter.total >= 120 || limiter.peers[key] >= 10 {
+	perPeer, perMinute := limiter.perPeer, limiter.perMinute
+	if perPeer == 0 {
+		perPeer = 10
+	}
+	if perMinute == 0 {
+		perMinute = 120
+	}
+	if limiter.total >= perMinute || limiter.peers[key] >= perPeer {
 		return false
 	}
 	limiter.total++

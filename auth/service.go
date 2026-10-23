@@ -200,6 +200,8 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		CLIVerifier:        verifier,
 		CLICompleteLogin:   service.CompleteLogin,
 		CLISessions:        store,
+		CLIDevices:         store,
+		CLIDeviceURL:       verificationURL.Scheme + "://" + verificationURL.Host + "/cli/device",
 		AgentClientID:      config.CognitoAgentClientID,
 		AgentGrants:        agentGrants,
 		Services:           services,

@@ -24,6 +24,9 @@ type Challenge struct {
 type Session struct {
 	OrganizationID string
 	ExpiresAt      time.Time
+	// Subject is the member a device sign-in admitted, and "" for a session
+	// keyed by a Cognito token, whose own claims name the member.
+	Subject string
 }
 
 type Store interface {
