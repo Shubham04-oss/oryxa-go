@@ -25,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3vectors"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
@@ -66,7 +67,12 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 	if platform.Database == nil {
 		return host.ErrDatabaseRequired
 	}
-	return postgres.New(platform.Database).Migrate(ctx)
+	if err := postgres.New(platform.Database).Migrate(ctx); err != nil {
+		return err
+	}
+	// The access decision log, which rag records into; whichever service
+	// migrates first installs it.
+	return access.Migrate(ctx, platform.Database)
 }
 
 // Mount assembles rag on what the host shares.
@@ -258,7 +264,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			Metric:             config.DefaultMetric,
 			Backend:            config.DefaultBackend,
 			AnswerInstructions: config.AnswerInstructions,
-		}, logger)
+		}, logger).WithDecisions(access.NewLog(platform.Database.Pool, logger))
 
 	signer, err := platform.EventAuth.Signer(Name)
 	if err != nil {

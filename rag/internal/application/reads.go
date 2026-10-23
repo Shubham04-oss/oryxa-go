@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
+
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
 )
@@ -34,29 +36,37 @@ func (service *Service) reads(credentials authclient.Credentials, member domain.
 // mayRead decides who can search a corpus. Placement mirrors files exactly.
 // An org admin's reach is a person's own: an agent acting for one reaches
 // what a plain member would (see domain.OrgMembership.ActsAsAdmin).
-func (reads *reads) mayRead(ctx context.Context, corpus domain.Corpus) error {
+//
+// It answers the rule that let the caller in (see granted), which a single
+// read records and a listing ignores.
+func (reads *reads) mayRead(ctx context.Context, corpus domain.Corpus) (string, error) {
 	member := reads.member
 	// Every read, and every write, reaches a corpus through here, so a
 	// specialist's grant is enforced once.
 	if err := member.MayReadCorpus(corpus.ID); err != nil {
-		return err
+		return "", err
 	}
 	switch corpus.Scope {
 	case domain.ScopeOrganization:
-		return nil
+		return granted(member, access.ReasonOrganization), nil
 	case domain.ScopeMember:
-		if corpus.MemberID == member.UserID || member.ActsAsAdmin() {
-			return nil
+		if corpus.MemberID == member.UserID {
+			return granted(member, access.ReasonOwner), nil
 		}
-		return domain.ErrNotFound
+		if member.ActsAsAdmin() {
+			return access.ReasonOrgAdmin, nil
+		}
+		return "", domain.ErrNotFound
 	case domain.ScopeTeam:
 		if member.ActsAsAdmin() {
-			return nil
+			return access.ReasonOrgAdmin, nil
 		}
-		_, err := reads.team(ctx, corpus.OrganizationID, corpus.TeamID)
-		return err
+		if _, err := reads.team(ctx, corpus.OrganizationID, corpus.TeamID); err != nil {
+			return "", err
+		}
+		return granted(member, access.ReasonTeamMember), nil
 	default:
-		return domain.ErrNotFound
+		return "", domain.ErrNotFound
 	}
 }
 
@@ -77,7 +87,7 @@ func (reads *reads) team(ctx context.Context, organizationID, teamID string) (do
 func (reads *reads) readable(ctx context.Context, corpora []domain.Corpus) ([]domain.Corpus, error) {
 	kept := corpora[:0]
 	for _, corpus := range corpora {
-		err := reads.mayRead(ctx, corpus)
+		_, err := reads.mayRead(ctx, corpus)
 		switch {
 		case err == nil:
 			kept = append(kept, corpus)

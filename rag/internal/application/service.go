@@ -19,6 +19,7 @@ import (
 	"time"
 
 	rageventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/rag/v1"
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/chunking"
@@ -125,8 +126,11 @@ type Service struct {
 	generator     generation.Generator
 	knowledgeBase KnowledgeBase
 	defaults      Defaults
-	logger        *slog.Logger
-	now           func() time.Time
+	// decisions keeps who was let into what, and by which rule; nil records
+	// nothing. See decisions.go.
+	decisions Recorder
+	logger    *slog.Logger
+	now       func() time.Time
 }
 
 // Defaults are what a corpus gets when its creator does not choose. They come
@@ -341,7 +345,7 @@ func (service *Service) Corpora(ctx context.Context, credentials authclient.Cred
 
 // Corpus reads one corpus, with its counts, if the caller may see it.
 func (service *Service) Corpus(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string) (domain.Corpus, error) {
-	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
+	corpus, member, rule, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
 		return domain.Corpus{}, err
 	}
@@ -349,16 +353,18 @@ func (service *Service) Corpus(ctx context.Context, credentials authclient.Crede
 	if err != nil {
 		return domain.Corpus{}, err
 	}
+	service.record(ctx, member, corpus, access.ActionRead, resourceCorpus, corpus.ID, rule)
 	corpus.DocumentCount, corpus.ChunkCount = documents, chunks
 	return corpus, nil
 }
 
 func (service *Service) DeleteCorpus(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string) error {
-	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
+	corpus, member, _, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
 		return err
 	}
-	if err := service.mayDelete(ctx, credentials, member, corpus); err != nil {
+	rule, err := service.mayDelete(ctx, credentials, member, corpus)
+	if err != nil {
 		return err
 	}
 	now := service.now().UTC()
@@ -375,7 +381,11 @@ func (service *Service) DeleteCorpus(ctx context.Context, credentials authclient
 	if err := service.dropVectors(ctx, corpus); err != nil {
 		return err
 	}
-	return service.store.DeleteCorpus(ctx, organizationID, corpusID, event)
+	if err := service.store.DeleteCorpus(ctx, organizationID, corpusID, event); err != nil {
+		return err
+	}
+	service.record(ctx, member, corpus, access.ActionDelete, resourceCorpus, corpus.ID, rule)
+	return nil
 }
 
 // AddDocumentInput is one document offered for indexing.
@@ -401,11 +411,12 @@ type DocumentReader func() (AddDocumentInput, error)
 // embedding provider. The same bytes offered again are recognised and cost
 // nothing, which is what lets an upstream pipeline re-deliver freely.
 func (service *Service) AddDocument(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string, read DocumentReader) (domain.Document, error) {
-	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
+	corpus, member, _, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
 		return domain.Document{}, err
 	}
-	if err := service.mayWrite(ctx, credentials, member, corpus); err != nil {
+	rule, err := service.mayWrite(ctx, credentials, member, corpus)
+	if err != nil {
 		return domain.Document{}, err
 	}
 	service.logAgent(ctx, member, "add_document", corpus.ID)
@@ -425,11 +436,11 @@ func (service *Service) AddDocument(ctx context.Context, credentials authclient.
 	// document it already holds has, and gives a new one members. A
 	// re-delivery that leaves access out must never open an admin-only
 	// document to every member.
-	access := input.Access
-	if access != "" && !access.Valid() {
+	documentAccess := input.Access
+	if documentAccess != "" && !documentAccess.Valid() {
 		return domain.Document{}, fmt.Errorf("document access is not allowed: %w", domain.ErrInvalid)
 	}
-	if access == domain.AccessAdmins && (corpus.Scope != domain.ScopeOrganization || !member.ActsAsAdmin()) {
+	if documentAccess == domain.AccessAdmins && (corpus.Scope != domain.ScopeOrganization || !member.ActsAsAdmin()) {
 		return domain.Document{}, domain.ErrForbidden
 	}
 	title, err := domain.Title(input.Title)
@@ -474,7 +485,7 @@ func (service *Service) AddDocument(ctx context.Context, credentials authclient.
 		if input.Access == domain.AccessAdmins && fileAccess == domain.AccessMembers {
 			return domain.Document{}, fmt.Errorf("set admin access on the file in Files first: %w", domain.ErrInvalid)
 		}
-		access = fileAccess
+		documentAccess = fileAccess
 		text = object.Body
 		if strings.TrimSpace(contentType) == "" {
 			contentType = object.ContentType
@@ -506,7 +517,7 @@ func (service *Service) AddDocument(ctx context.Context, credentials authclient.
 		ID: id, CorpusID: corpus.ID, OrganizationID: organizationID,
 		Source: input.Source, Title: title, ContentType: contentType,
 		ContentSHA256: domain.Hash(body), ByteSize: int64(len(body)),
-		Metadata: input.Metadata, Access: access, Status: domain.StatusPending,
+		Metadata: input.Metadata, Access: documentAccess, Status: domain.StatusPending,
 		CreatedBy: member.UserID, CreatedAt: now, UpdatedAt: now,
 	}
 	event, err := service.event(rageventsv1.DocumentReceivedDetailType, rageventsv1.DocumentReceived{
@@ -526,6 +537,7 @@ func (service *Service) AddDocument(ctx context.Context, credentials authclient.
 		service.logger.InfoContext(ctx, "document already indexed with the same content",
 			"document_id", stored.ID, "corpus_id", corpus.ID)
 	}
+	service.record(ctx, member, corpus, access.ActionWrite, resourceDocument, stored.ID, rule)
 	return stored, nil
 }
 
@@ -580,7 +592,9 @@ type DocumentPage struct {
 // first page, exactly as it does today; passing back the cursor a page
 // returned continues from where that page left off.
 func (service *Service) Documents(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int) (DocumentPage, error) {
-	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
+	// A listing is not a decision about any one document, so nothing is
+	// recorded here.
+	corpus, member, _, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
 		return DocumentPage{}, err
 	}
@@ -604,7 +618,7 @@ func (service *Service) Documents(ctx context.Context, credentials authclient.Cr
 }
 
 func (service *Service) Document(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID, documentID string) (domain.Document, error) {
-	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
+	corpus, member, rule, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
 		return domain.Document{}, err
 	}
@@ -618,15 +632,22 @@ func (service *Service) Document(ctx context.Context, credentials authclient.Cre
 	if !document.VisibleTo(member) {
 		return domain.Document{}, domain.ErrNotFound
 	}
+	// An admin-only document takes an org admin, whatever let them into
+	// its corpus.
+	if document.Access == domain.AccessAdmins {
+		rule = access.ReasonOrgAdmin
+	}
+	service.record(ctx, member, corpus, access.ActionRead, resourceDocument, document.ID, rule)
 	return document, nil
 }
 
 func (service *Service) DeleteDocument(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID, documentID string) error {
-	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
+	corpus, member, _, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
 		return err
 	}
-	if err := service.mayWrite(ctx, credentials, member, corpus); err != nil {
+	rule, err := service.mayWrite(ctx, credentials, member, corpus)
+	if err != nil {
 		return err
 	}
 	service.logAgent(ctx, member, "delete_document", corpus.ID)
@@ -652,17 +673,21 @@ func (service *Service) DeleteDocument(ctx context.Context, credentials authclie
 	if err := service.removeDocumentVectors(ctx, corpus, document); err != nil {
 		return err
 	}
-	_, err = service.store.DeleteDocument(ctx, organizationID, documentID, event)
-	return err
+	if _, err := service.store.DeleteDocument(ctx, organizationID, documentID, event); err != nil {
+		return err
+	}
+	service.record(ctx, member, corpus, access.ActionDelete, resourceDocument, documentID, rule)
+	return nil
 }
 
 // Search returns the passages a question matches, without writing an answer.
 func (service *Service) Search(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string, query domain.Query) (retrieval.Results, error) {
-	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
+	corpus, member, rule, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
 		return retrieval.Results{}, err
 	}
 	service.logAgent(ctx, member, "search", corpus.ID)
+	service.record(ctx, member, corpus, access.ActionSearch, resourceCorpus, corpus.ID, rule)
 	query.IncludeAdminOnly = member.SeesAdminOnlyDocuments()
 	return service.retriever.Search(ctx, corpus, query)
 }
@@ -679,11 +704,13 @@ func (service *Service) Answer(ctx context.Context, credentials authclient.Crede
 	if service.generator == nil {
 		return Answered{}, fmt.Errorf("this deployment has no answering model configured: %w", domain.ErrInvalid)
 	}
-	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
+	corpus, member, rule, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
 		return Answered{}, err
 	}
 	service.logAgent(ctx, member, "answer", corpus.ID)
+	// Answering searches the corpus once, so it is recorded as one search.
+	service.record(ctx, member, corpus, access.ActionSearch, resourceCorpus, corpus.ID, rule)
 	query.IncludeAdminOnly = member.SeesAdminOnlyDocuments()
 	results, err := service.retriever.Search(ctx, corpus, query)
 	if err != nil {
@@ -729,20 +756,22 @@ func (service *Service) caller(ctx context.Context, credentials authclient.Crede
 	return member, nil
 }
 
-// readable loads a corpus the caller may see, or reports it as missing.
-func (service *Service) readable(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string) (domain.Corpus, domain.OrgMembership, error) {
+// readable loads a corpus the caller may see, or reports it as missing, and
+// answers the rule that let them read it.
+func (service *Service) readable(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string) (domain.Corpus, domain.OrgMembership, string, error) {
 	member, err := service.caller(ctx, credentials, organizationID)
 	if err != nil {
-		return domain.Corpus{}, domain.OrgMembership{}, err
+		return domain.Corpus{}, domain.OrgMembership{}, "", err
 	}
 	corpus, err := service.lookup(ctx, organizationID, corpusID)
 	if err != nil {
-		return domain.Corpus{}, domain.OrgMembership{}, err
+		return domain.Corpus{}, domain.OrgMembership{}, "", err
 	}
-	if err := service.reads(credentials, member).mayRead(ctx, corpus); err != nil {
-		return domain.Corpus{}, domain.OrgMembership{}, err
+	rule, err := service.reads(credentials, member).mayRead(ctx, corpus)
+	if err != nil {
+		return domain.Corpus{}, domain.OrgMembership{}, "", err
 	}
-	return corpus, member, nil
+	return corpus, member, rule, nil
 }
 
 // lookup resolves a corpus by id or by the slug its creator chose.
@@ -757,54 +786,62 @@ func (service *Service) lookup(ctx context.Context, organizationID, reference st
 // corpus is enough for a team or member corpus; an organization corpus is
 // shared by everyone, so writing to it is an admin's job. An org admin writes
 // to a team corpus without asking teams, exactly as mayRead lets them read it.
-func (service *Service) mayWrite(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, corpus domain.Corpus) error {
+// It answers the rule that allowed the write (see granted).
+func (service *Service) mayWrite(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, corpus domain.Corpus) (string, error) {
 	switch corpus.Scope {
 	case domain.ScopeOrganization:
 		if member.ActsAsAdmin() {
-			return nil
+			return access.ReasonOrgAdmin, nil
 		}
-		return domain.ErrForbidden
+		return "", domain.ErrForbidden
 	case domain.ScopeMember:
-		if corpus.MemberID == member.UserID || member.ActsAsAdmin() {
-			return nil
+		if corpus.MemberID == member.UserID {
+			return granted(member, access.ReasonOwner), nil
 		}
-		return domain.ErrNotFound
+		if member.ActsAsAdmin() {
+			return access.ReasonOrgAdmin, nil
+		}
+		return "", domain.ErrNotFound
 	case domain.ScopeTeam:
 		if member.ActsAsAdmin() {
-			return nil
+			return access.ReasonOrgAdmin, nil
 		}
 		if _, err := service.teamAccess(ctx, credentials, member, corpus.OrganizationID, corpus.TeamID); err != nil {
-			return err
+			return "", err
 		}
-		return nil
+		return granted(member, access.ReasonTeamMember), nil
 	default:
-		return domain.ErrForbidden
+		return "", domain.ErrForbidden
 	}
 }
 
 // mayDelete decides who can remove a whole corpus, which is a larger act than
-// removing one document from it.
-func (service *Service) mayDelete(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, corpus domain.Corpus) error {
+// removing one document from it. It answers the rule that allowed it (see
+// granted).
+func (service *Service) mayDelete(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, corpus domain.Corpus) (string, error) {
+	if corpus.Scope == domain.ScopeMember && corpus.MemberID == member.UserID {
+		return granted(member, access.ReasonOwner), nil
+	}
 	if member.ActsAsAdmin() {
-		return nil
+		return access.ReasonOrgAdmin, nil
 	}
 	switch corpus.Scope {
 	case domain.ScopeMember:
-		if corpus.MemberID == member.UserID {
-			return nil
-		}
-		return domain.ErrNotFound
+		return "", domain.ErrNotFound
 	case domain.ScopeTeam:
-		access, err := service.teamAccess(ctx, credentials, member, corpus.OrganizationID, corpus.TeamID)
+		team, err := service.teamAccess(ctx, credentials, member, corpus.OrganizationID, corpus.TeamID)
 		if err != nil {
-			return err
+			return "", err
 		}
-		if access.CanManage || corpus.CreatedBy == member.UserID {
-			return nil
+		switch {
+		case corpus.CreatedBy == member.UserID:
+			return granted(member, access.ReasonOwner), nil
+		case team.CanManage:
+			return granted(member, access.ReasonTeamAdmin), nil
 		}
-		return domain.ErrForbidden
+		return "", domain.ErrForbidden
 	default:
-		return domain.ErrForbidden
+		return "", domain.ErrForbidden
 	}
 }
 
