@@ -57,6 +57,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 			closeClient()
 			return host.Service{}, err
 		}
+		consumer.seen = tokens.NewSeen(platform.Database.Pool)
 		queue := sqs.NewFromConfig(platform.AWS)
 		workers = append(workers, func(ctx context.Context) { consumer.Poll(ctx, queue, queueURL) })
 	} else {
