@@ -1,6 +1,7 @@
 -- The stub's organization and people (test/identities), in the auth tables
 -- agents reads directly. The tables are made only if real auth never ran
 -- here; the shape is test/cmd/stack's seedAuth.
+SET client_min_messages = warning;
 CREATE TABLE IF NOT EXISTS auth_users (
     id text PRIMARY KEY,
     email text NOT NULL,

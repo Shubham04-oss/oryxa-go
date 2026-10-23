@@ -10,10 +10,11 @@ echo "compose: postgres, LocalStack, Moto SES, Mailpit ($COMPOSE_PROJECT_NAME)"
 docker compose up -d --wait postgres eventbridge ses mailpit >/dev/null
 
 # LocalStack keeps nothing across a restart, so provision again once the
-# queues are gone. Cognito is the stub, Composio and S3 Vectors are not here.
-if ! aws sqs get-queue-url --queue-name agents-events >/dev/null 2>&1; then
+# queues are gone. Cognito is the stub and Composio is not here; with no
+# RAG_VECTOR_BUCKET_NAME, rag's makes only its queue.
+if ! aws sqs get-queue-url --queue-name teams-events >/dev/null 2>&1; then
   echo "LocalStack: provisioning buses, queues, tables and buckets"
-  for main in $(git ls-files '*/cmd/provision/main.go' | grep -vE 'cognito|composio|rag/infra/vectors'); do
+  for main in $(git ls-files '*/cmd/provision/main.go' | grep -vE 'cognito|composio'); do
     go run "./$(dirname "$main")" >"$RUN/provision.log" 2>&1 || { cat "$RUN/provision.log"; echo "provision failed: $main" >&2; exit 1; }
   done
 fi
