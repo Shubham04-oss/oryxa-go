@@ -96,7 +96,7 @@ func durationCountFor(t *testing.T, model string) uint64 {
 }
 
 func TestRecordModelCallRecordsDurationAndTokensByType(t *testing.T) {
-	recordModelCall(context.Background(), "test-record-basic", usageOf(100, 20), 0)
+	recordModelCall(context.Background(), "test-record-basic", usageOf(100, 20), 0, 0)
 
 	if got := durationCountFor(t, "test-record-basic"); got != 1 {
 		t.Fatalf("duration data points for this model = %d, want 1", got)
@@ -112,7 +112,7 @@ func TestRecordModelCallRecordsDurationAndTokensByType(t *testing.T) {
 func TestRecordModelCallReportsCachedTokensSeparately(t *testing.T) {
 	metadata := usageOf(100, 20)
 	metadata.CachedContentTokenCount = 40
-	recordModelCall(context.Background(), "test-record-cached", metadata, 0)
+	recordModelCall(context.Background(), "test-record-cached", metadata, 0, 0)
 
 	if by := tokensByType(t, "test-record-cached"); by["cached"] != 40 {
 		t.Fatalf("cached tokens = %+v, want 40", by)
@@ -120,7 +120,7 @@ func TestRecordModelCallReportsCachedTokensSeparately(t *testing.T) {
 }
 
 func TestRecordModelCallOfNoMetadataRecordsNothing(t *testing.T) {
-	recordModelCall(context.Background(), "test-record-no-metadata", nil, 0)
+	recordModelCall(context.Background(), "test-record-no-metadata", nil, 0, 0)
 
 	if got := durationCountFor(t, "test-record-no-metadata"); got != 0 {
 		t.Fatalf("duration data points = %d, want 0 for a call with no usage metadata", got)

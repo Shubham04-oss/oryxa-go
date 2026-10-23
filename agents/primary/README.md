@@ -2000,6 +2000,16 @@ Set `AGENTS_PRIMARY_MODEL` and `AGENTS_PRIMARY_MODEL_LITE` to change the two
 models; a policy missing a role is refused at startup, so a new role cannot
 silently get no model.
 
+**Where a run's time goes.** Every model call logs a `model call` line with
+its `duration_ms`, `first_response_ms` and token counts (input, cached,
+thought, output). The agents' own work before a call takes well under a
+second; the rest is the model. Measured on 2026-10-23 (#414) with Krude's
+request for a one-word answer: `gemini-3.5-flash-lite` answered in 0.7–1.6 s
+every time, while `gemini-3.8-flash`, which Vertex serves only on `global`,
+usually took 1.5–3 s but held about one call in ten or twenty for 10–95 s
+before its first byte, often several calls at once. `gemini-3.8-flash-lite`
+answers 404.
+
 **Thinking on a delivery.** `AGENTS_PRIMARY_DELIVERY_THINKING` asks the model
 for a thinking level on every call of a run that delivers an agent request
 (see [Agent interactions toolbox](#agent-interactions-toolbox)): `minimal`,
