@@ -505,7 +505,17 @@ var (
 	toolSlug    = regexp.MustCompile(`^[A-Z0-9][A-Z0-9_]{0,127}$`)
 	// A corpus id as rag mints it (rag/internal/domain.NewID).
 	corpusID = regexp.MustCompile(`^cor_[A-Za-z0-9_-]{1,64}$`)
+	// A team id as teams mints it, for a grant's files.
+	teamID = regexp.MustCompile(`^team_[A-Za-z0-9_-]{1,64}$`)
+	// A knowledge source id as knowledge mints it (src_ and lowercase base32).
+	sourceID = regexp.MustCompile(`^src_[a-z0-9]{1,64}$`)
 )
+
+// fileScope is one entry of a grant's files besides all: the member's own
+// files, the organization's, or a team's.
+func fileScope(value string) bool {
+	return value == runprofile.FilesMember || value == runprofile.FilesOrganization || teamID.MatchString(value)
+}
 
 // cleanGrant normalizes a grant as apps compares it, toolkits lowercase and
 // tools uppercase, without duplicates, and refuses what apps could never
@@ -547,26 +557,42 @@ func cleanGrant(grant runprofile.Grant) (runprofile.Grant, error) {
 	if cleaned.WriteTools, err = clean("write_tools", grant.WriteTools, true, false); err != nil {
 		return runprofile.Grant{}, err
 	}
-	// A grant sent without corpora (nil) keeps the default, all; an empty
-	// list is a real choice, none.
-	if grant.Corpora == nil {
-		cleaned.Corpora = []string{runprofile.AllCorpora}
-		return cleaned, nil
+	if cleaned.Corpora, err = cleanReach("corpora", "a corpus id", grant.Corpora, corpusID.MatchString); err != nil {
+		return runprofile.Grant{}, err
 	}
-	if len(grant.Corpora) > maxGrantEntries {
-		return runprofile.Grant{}, fmt.Errorf("%w: a grant's corpora hold at most %d entries", ErrInvalid, maxGrantEntries)
+	if cleaned.Files, err = cleanReach("files", "a file scope (member, org or a team id)", grant.Files, fileScope); err != nil {
+		return runprofile.Grant{}, err
 	}
-	cleaned.Corpora = []string{}
-	for _, value := range grant.Corpora {
+	if cleaned.Knowledge, err = cleanReach("knowledge", "a knowledge source id", grant.Knowledge, sourceID.MatchString); err != nil {
+		return runprofile.Grant{}, err
+	}
+	return cleaned, nil
+}
+
+// cleanReach normalizes one of the grant's lists of what a specialist may
+// read in another service (corpora, files, knowledge), which all share a
+// shape: a list sent without the field (nil) keeps the default, all ("*");
+// an empty list is a real choice, none; "*" is all and must stand alone;
+// anything else must be what valid accepts, kept once each.
+func cleanReach(field, what string, values []string, valid func(string) bool) ([]string, error) {
+	const all = "*"
+	if values == nil {
+		return []string{all}, nil
+	}
+	if len(values) > maxGrantEntries {
+		return nil, fmt.Errorf("%w: a grant's %s hold at most %d entries", ErrInvalid, field, maxGrantEntries)
+	}
+	cleaned := []string{}
+	for _, value := range values {
 		value = strings.TrimSpace(value)
-		if value == runprofile.AllCorpora && len(grant.Corpora) > 1 {
-			return runprofile.Grant{}, fmt.Errorf("%w: %q must be the only entry in a grant's corpora", ErrInvalid, value)
+		if value == all && len(values) > 1 {
+			return nil, fmt.Errorf("%w: %q must be the only entry in a grant's %s", ErrInvalid, value, field)
 		}
-		if value != runprofile.AllCorpora && !corpusID.MatchString(value) {
-			return runprofile.Grant{}, fmt.Errorf("%w: %q is not a corpus id", ErrInvalid, value)
+		if value != all && !valid(value) {
+			return nil, fmt.Errorf("%w: %q is not %s", ErrInvalid, value, what)
 		}
-		if !slices.Contains(cleaned.Corpora, value) {
-			cleaned.Corpora = append(cleaned.Corpora, value)
+		if !slices.Contains(cleaned, value) {
+			cleaned = append(cleaned, value)
 		}
 	}
 	return cleaned, nil

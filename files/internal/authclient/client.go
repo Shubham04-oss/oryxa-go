@@ -55,7 +55,15 @@ type organizationResponse struct {
 	} `json:"membership"`
 	// Agent is set on a token auth minted for an agent, and absent on a
 	// member's own session.
-	Agent bool `json:"agent"`
+	Agent       bool `json:"agent"`
+	AgentClaims struct {
+		Role string `json:"role"`
+		// Grant is a specialist's grant; only its files matter here. Absent
+		// or without files means all of them.
+		Grant *struct {
+			Files []string `json:"files"`
+		} `json:"grant"`
+	} `json:"agent_claims"`
 }
 
 // Membership answers what the caller is in an organization, and whether they
@@ -71,6 +79,10 @@ func (client *Client) Membership(ctx context.Context, organizationID string, cre
 	if decoded.Organization.ID != organizationID || decoded.Membership.OrganizationID != organizationID || decoded.Membership.UserID == "" {
 		return domain.OrgMembership{}, fmt.Errorf("auth answered for a different organization or no member")
 	}
+	var files []string
+	if decoded.AgentClaims.Grant != nil {
+		files = decoded.AgentClaims.Grant.Files
+	}
 	return domain.OrgMembership{
 		OrganizationID:   organizationID,
 		OrganizationName: decoded.Organization.Name,
@@ -79,7 +91,18 @@ func (client *Client) Membership(ctx context.Context, organizationID string, cre
 		DisplayName:      decoded.Membership.DisplayName,
 		Role:             domain.OrgRole(decoded.Membership.Role),
 		Agent:            decoded.Agent,
+		AgentRole:        agentRole(decoded.Agent, decoded.AgentClaims.Role),
+		AgentFiles:       files,
 	}, nil
+}
+
+// agentRole is the role an agent's claims name; an agent token without one
+// is a primary's, as auth answers it.
+func agentRole(agent bool, role string) string {
+	if agent && role == "" {
+		return "primary"
+	}
+	return role
 }
 
 func (client *Client) get(ctx context.Context, path string, credentials Credentials, target any) error {

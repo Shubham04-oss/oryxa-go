@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -215,13 +216,18 @@ func (s *Service) List(ctx context.Context, credentials authclient.Credentials, 
 		return nil, err
 	}
 	if filter.Scope == domain.ScopeTeam {
+		// A team outside a specialist's grant is as missing as one its
+		// member is not on.
+		if err := org.MayReachFiles(domain.ScopeTeam, filter.TeamID); err != nil {
+			return nil, err
+		}
 		if !org.ActsAsAdmin() {
 			if _, err := s.teamAccess(ctx, credentials, org, organizationID, filter.TeamID); err != nil {
 				return nil, err
 			}
 		}
 	}
-	return s.store.Objects(ctx, organizationID, s.now().UTC(), domain.ObjectQuery{
+	objects, err := s.store.Objects(ctx, organizationID, s.now().UTC(), domain.ObjectQuery{
 		Scope:       filter.Scope,
 		TeamID:      filter.TeamID,
 		MemberID:    org.UserID,
@@ -230,6 +236,13 @@ func (s *Service) List(ctx context.Context, credentials authclient.Credentials, 
 		CreatedFrom: from,
 		CreatedTo:   to,
 	})
+	if err != nil {
+		return nil, err
+	}
+	// A specialist lists only the files of the scopes its grant names.
+	return slices.DeleteFunc(objects, func(object domain.Object) bool {
+		return org.MayReachFiles(object.Scope, object.TeamID) != nil
+	}), nil
 }
 
 func (s *Service) Get(ctx context.Context, credentials authclient.Credentials, organizationID, fileID string) (domain.Object, error) {
@@ -363,6 +376,16 @@ func (s *Service) TeamDeleted(ctx context.Context, data teamseventsv1.TeamDelete
 }
 
 func (s *Service) mayCreate(ctx context.Context, credentials authclient.Credentials, org domain.OrgMembership, scope domain.Scope, teamID string) error {
+	// A specialist writes only where its grant lets it read, so it can read
+	// back what it stores. A team outside the grant is not found, as one its
+	// member is not on would be; its member's own or the organization's
+	// files, which it knows exist, are forbidden.
+	if err := org.MayReachFiles(scope, teamID); err != nil {
+		if scope == domain.ScopeTeam {
+			return err
+		}
+		return domain.ErrForbidden
+	}
 	switch scope {
 	case domain.ScopeMember:
 		return nil
@@ -379,7 +402,13 @@ func (s *Service) mayCreate(ctx context.Context, credentials authclient.Credenti
 	}
 }
 
+// canSee is the one place every read of a file, and its delete, decides
+// whether the caller may reach it, so a specialist's grant is enforced here
+// once.
 func (s *Service) canSee(ctx context.Context, credentials authclient.Credentials, org domain.OrgMembership, object domain.Object) error {
+	if err := org.MayReachFiles(object.Scope, object.TeamID); err != nil {
+		return err
+	}
 	switch object.Scope {
 	case domain.ScopeMember:
 		if object.MemberID == org.UserID || org.ActsAsAdmin() {

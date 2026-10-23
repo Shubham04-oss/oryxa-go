@@ -51,6 +51,17 @@ a team file only when its member is that team's own admin, not merely
 because teams would let an org admin manage any team, and it creates no
 organization file at all.
 
+A member's specialist agents are narrowed further by the `files` part of
+their grant, which auth carries on the token as `agent_claims.grant.files`: a
+list of file scopes, or `"*"` for all. A scope is `member` (its member's own
+files), `org` (the organization's) or a team id (that team's files). A grant
+without the field means all; an empty list means none. A file outside the
+grant is `404`, like a missing one, on every read and on delete, and the list
+leaves it out; listing a team outside it is `404`, like a team its member is
+not on. Creating in a team outside it is `404`, and in its member's own or
+the organization's files outside it is `403`. Primary and organization agents
+and members' own sessions are not limited by it.
+
 Keys follow placement, then the UTC calendar day of `created_at`, so a wipe
 is still a prefix and a day's objects sit together:
 

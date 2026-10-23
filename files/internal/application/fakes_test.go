@@ -21,6 +21,14 @@ func agentCreds(userID string) authclient.Credentials {
 	return authclient.Credentials{Authorization: "Bearer " + agentTokenPrefix + userID}
 }
 
+// grantedCreds is a specialist's token whose grant names exactly these file
+// scopes; none at all is a grant of nothing.
+func grantedCreds(userID string, files ...string) authclient.Credentials {
+	return authclient.Credentials{Authorization: "Bearer " + agentTokenPrefix + userID + grantMark + strings.Join(files, ",")}
+}
+
+const grantMark = ";files="
+
 type fakeDirectory struct{}
 
 func (fakeDirectory) Membership(_ context.Context, organizationID string, credentials authclient.Credentials) (domain.OrgMembership, error) {
@@ -32,6 +40,7 @@ func (fakeDirectory) Membership(_ context.Context, organizationID string, creden
 		token = credentials.AccessCookie
 	}
 	token, agent := strings.CutPrefix(token, agentTokenPrefix)
+	token, granted, limited := strings.Cut(token, grantMark)
 	people := map[string]domain.OrgMembership{
 		"user-owner":    {OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-owner", Email: "owner@example.com", Role: domain.OrgRoleOwner},
 		"user-admin":    {OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-admin", Email: "admin@example.com", Role: domain.OrgRoleAdmin},
@@ -43,6 +52,15 @@ func (fakeDirectory) Membership(_ context.Context, organizationID string, creden
 		return domain.OrgMembership{}, domain.ErrNotFound
 	}
 	membership.Agent = agent
+	if agent {
+		membership.AgentRole = "specialist"
+		if limited {
+			membership.AgentFiles = []string{}
+			if granted != "" {
+				membership.AgentFiles = strings.Split(granted, ",")
+			}
+		}
+	}
 	return membership, nil
 }
 
@@ -73,6 +91,7 @@ func (fake *fakeTeams) Team(_ context.Context, organizationID, teamID string, cr
 	// real teams service resolves an agent's token to its member's own
 	// identity just as auth does, and decides nothing from the agent flag.
 	token = strings.TrimPrefix(token, agentTokenPrefix)
+	token, _, _ = strings.Cut(token, grantMark)
 	access, ok := fake.access[token+"/"+teamID]
 	if !ok || access.TeamID == "" {
 		return domain.TeamAccess{}, domain.ErrNotFound

@@ -66,6 +66,30 @@ type OrgMembership struct {
 	// Agent says the caller is an agent acting for this member. An agent may
 	// read what a source holds, but never register or remove one.
 	Agent bool
+	// AgentRole is the agent's role in its claims (primary, specialist or
+	// organization), when Agent is set.
+	AgentRole string
+	// AgentKnowledge is the source ids a specialist's grant names, or "*"
+	// for all. Nil, which a grant without the field gives, is all.
+	AgentKnowledge []string
+}
+
+// MayReadSource refuses a specialist a source its grant does not name, and
+// so every document it holds, as not found, so a source outside the grant
+// looks the same as one that does not exist. Every other caller is limited
+// only by what its member can see.
+func (membership OrgMembership) MayReadSource(sourceID string) error {
+	if membership.KnowledgeLimited() && !slices.Contains(membership.AgentKnowledge, sourceID) {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// KnowledgeLimited is whether the caller is a specialist whose grant names
+// some knowledge sources rather than all.
+func (membership OrgMembership) KnowledgeLimited() bool {
+	return membership.Agent && membership.AgentRole == "specialist" &&
+		membership.AgentKnowledge != nil && !slices.Contains(membership.AgentKnowledge, "*")
 }
 
 // Scope is where the connection behind a source hangs, and so who may read

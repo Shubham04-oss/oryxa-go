@@ -77,7 +77,8 @@ func TestStoreLifecycle(t *testing.T) {
 	if primary.Grant != nil || !reflect.DeepEqual(updated.SpecialistGrant(), runprofile.DefaultGrant()) || updated.Grant == nil {
 		t.Fatalf("primary grant=%+v specialist grant=%+v", primary.Grant, updated.Grant)
 	}
-	grant := runprofile.Grant{Apps: []string{"gmail"}, Tools: []string{}, WriteApps: []string{"gmail"}, WriteTools: []string{}}
+	grant := runprofile.Grant{Apps: []string{"gmail"}, Tools: []string{}, WriteApps: []string{"gmail"}, WriteTools: []string{},
+		Corpora: []string{"cor_a"}, Files: []string{"member", "team_a"}, Knowledge: []string{}}
 	if _, err := store.Update(ctx, scope, specialist.ID, UpdateInput{Grant: &grant}); err != nil {
 		t.Fatal(err)
 	}

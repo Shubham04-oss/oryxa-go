@@ -404,6 +404,16 @@ Members authenticate with a bearer token or the `oryxa_access` cookie; a
 cookie-authenticated change must come from an origin in `ALLOWED_ORIGINS`. A
 source never shows its lease, version or attempt count.
 
+A member's specialist agents are narrowed further by the `knowledge` part of
+their grant, which auth carries on the token as
+`agent_claims.grant.knowledge`: a list of source ids, or `"*"` for all. A
+grant without the field means all; an empty list means none. A source outside
+the grant is `404`, like a missing one, when it, its runs or any of its
+documents are read or it is asked to sync, and the list leaves it out. No
+agent registers, removes or changes a source, and a specialist limited to
+some sources is refused registration even on a member's behalf. Primary and
+organization agents and members' own sessions are not limited by it.
+
 | Method | Path | Who | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/healthz` | Anyone | Liveness |
