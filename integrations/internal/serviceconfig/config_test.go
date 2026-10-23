@@ -95,3 +95,13 @@ func TestOnReadsConnectorsEgressKeysAndTheBrokerAddress(t *testing.T) {
 		}
 	}
 }
+
+func TestOnReadsTheEventsQueue(t *testing.T) {
+	config, err := FromEnv(env(map[string]string{
+		"INTEGRATIONS_ENABLED":          "true",
+		"INTEGRATIONS_EVENTS_QUEUE_URL": " https://sqs.test/queue/integrations-events ",
+	}))
+	if err != nil || config.EventsQueueURL != "https://sqs.test/queue/integrations-events" {
+		t.Fatalf("config = %+v, err = %v", config, err)
+	}
+}

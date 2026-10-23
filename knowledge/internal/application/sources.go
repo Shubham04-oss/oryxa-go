@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -81,6 +82,11 @@ func (s *Service) registerFor(ctx context.Context, credentials authclient.Creden
 
 // register records a source for a caller whose right to it has been decided.
 func (s *Service) register(ctx context.Context, credentials authclient.Credentials, caller domain.OrgMembership, organizationID string, input RegisterInput) (domain.Source, error) {
+	// A new source cannot be in a grant that names sources, so a specialist
+	// limited to some could not read what it registered.
+	if caller.KnowledgeLimited() {
+		return domain.Source{}, fmt.Errorf("a specialist limited to some sources cannot register one: %w", domain.ErrForbidden)
+	}
 	provider := strings.TrimSpace(input.Provider)
 	if err := s.allowProvider(ctx, organizationID, provider); err != nil {
 		return domain.Source{}, err
@@ -240,7 +246,28 @@ func (s *Service) Sources(ctx context.Context, credentials authclient.Credential
 	}
 	query.Admin = query.Admin && caller.Role.IsOrgAdmin()
 	query.CreatedBy = caller.UserID
-	return s.store.Sources(ctx, organizationID, query)
+	listed, err := s.store.Sources(ctx, organizationID, query)
+	if err != nil {
+		return nil, err
+	}
+	// A specialist lists only the sources its grant names.
+	return slices.DeleteFunc(listed, func(source domain.Source) bool { return caller.MayReadSource(source.ID) != nil }), nil
+}
+
+// mayRead is the one place every read of a source, of its runs and of its
+// documents, and every change to it, decides whether the caller may reach
+// it: its creator or an org admin may, and a specialist only when its grant
+// names it, so the grant is enforced here once. Answering not-found tells
+// the caller nothing they did not know, and a source outside a specialist's
+// grant looks the same as one that does not exist.
+func mayRead(caller domain.OrgMembership, source domain.Source) error {
+	if err := caller.MayReadSource(source.ID); err != nil {
+		return err
+	}
+	if source.CreatedBy != caller.UserID && !caller.Role.IsOrgAdmin() {
+		return domain.ErrNotFound
+	}
+	return nil
 }
 
 // Source reads one, for its creator or an org admin.
@@ -253,9 +280,8 @@ func (s *Service) Source(ctx context.Context, credentials authclient.Credentials
 	if err != nil {
 		return domain.Source{}, err
 	}
-	if source.CreatedBy != caller.UserID && !caller.Role.IsOrgAdmin() {
-		// Answering not-found tells the caller nothing they did not know.
-		return domain.Source{}, domain.ErrNotFound
+	if err := mayRead(caller, source); err != nil {
+		return domain.Source{}, err
 	}
 	return source, nil
 }
@@ -288,9 +314,8 @@ func (s *Service) RemoveSource(ctx context.Context, credentials authclient.Crede
 	if err != nil {
 		return err
 	}
-	if source.CreatedBy != caller.UserID && !caller.Role.IsOrgAdmin() {
-		// Answering not-found tells the caller nothing they did not know.
-		return domain.ErrNotFound
+	if err := mayRead(caller, source); err != nil {
+		return err
 	}
 	pending := &pendingOriginals{}
 	if err := s.store.RemoveSource(ctx, organizationID, sourceID, knowledgev1.RemovedReasonSourceRemoved, s.now(),
@@ -321,9 +346,8 @@ func (s *Service) SyncSource(ctx context.Context, credentials authclient.Credent
 	if err != nil {
 		return domain.Source{}, err
 	}
-	if source.CreatedBy != caller.UserID && !caller.Role.IsOrgAdmin() {
-		// Answering not-found tells the caller nothing they did not know.
-		return domain.Source{}, domain.ErrNotFound
+	if err := mayRead(caller, source); err != nil {
+		return domain.Source{}, err
 	}
 	if err := s.allowProvider(ctx, organizationID, source.Provider); err != nil {
 		return domain.Source{}, err
@@ -365,8 +389,8 @@ func (s *Service) Document(ctx context.Context, credentials authclient.Credentia
 	if err != nil {
 		return domain.Document{}, err
 	}
-	if source.CreatedBy != caller.UserID && !caller.Role.IsOrgAdmin() {
-		return domain.Document{}, domain.ErrNotFound
+	if err := mayRead(caller, source); err != nil {
+		return domain.Document{}, err
 	}
 	if documentAccess(source, document) == accessAdmins && (!caller.Role.IsOrgAdmin() || caller.Agent) {
 		return domain.Document{}, domain.ErrNotFound
@@ -424,9 +448,8 @@ func (s *Service) SetSourceKinds(ctx context.Context, credentials authclient.Cre
 	if err != nil {
 		return domain.Source{}, err
 	}
-	if source.CreatedBy != caller.UserID && !caller.Role.IsOrgAdmin() {
-		// Answering not-found tells the caller nothing they did not know.
-		return domain.Source{}, domain.ErrNotFound
+	if err := mayRead(caller, source); err != nil {
+		return domain.Source{}, err
 	}
 	if s.judge == nil || !gated(source) {
 		return domain.Source{}, fmt.Errorf("this source's documents are not judged, so there are no kinds to choose: %w", domain.ErrConflict)

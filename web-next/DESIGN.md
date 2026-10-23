@@ -800,7 +800,7 @@ not permission to copy every incidental value into a new component.
   - **In a side conversation:** the same, under its bar in the panel; the
     strip wraps there and leaves out the faces. The call is the side
     conversation's own room (the teamspace, then the two members).
-- **A specialist's access** (I3, I9). Its page has an Access tab with two
+- **A specialist's access** (I3, I9). Its page has an Access tab with three
   cards:
   - **Model:** Lite or Main, as two tiles, with the chosen one raised.
   - **Apps:** "Every app you connect" (the default, which reads everything
@@ -809,6 +809,13 @@ not permission to copy every incidental value into a new component.
     "May change things" switch, which is off unless it may use the app.
     Saving replaces the whole grant. An app the grant names that is no
     longer connected stays listed, marked so, until it is taken off.
+  - **Collections** (the grant's `corpora`, which rag enforces): "All
+    collections" (the default, including ones made later), "Only these" or
+    "None", as the same tiles. "Only these" lists the collections the owner
+    can see (`GET …/corpora`) with a checkbox each, starting from all of
+    them; a collection the grant names that the owner can no longer see
+    stays listed as "No longer available" until it is taken off. Each card
+    saves the whole grant with the other card's part as it was.
 - **What the organization agent made of a team's posts** (I7).
   - **Team summary:** a teamspace's room has this card in its side column
     (summary, decisions, risks, open questions) and the team's proposed
