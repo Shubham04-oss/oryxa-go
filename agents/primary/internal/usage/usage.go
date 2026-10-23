@@ -12,6 +12,7 @@ package usage
 import (
 	"context"
 	"iter"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -66,10 +67,14 @@ func newModelMetrics() (metric.Float64Histogram, metric.Int64Counter) {
 // thinking tokens count as input and output respectively, and cached tokens
 // are reported as their own type despite already being part of input, since
 // that split is the only way to see a cache hit rate from these metrics.
-func recordModelCall(ctx context.Context, model string, metadata *genai.GenerateContentResponseUsageMetadata, duration time.Duration) {
+func recordModelCall(ctx context.Context, model string, metadata *genai.GenerateContentResponseUsageMetadata, duration, firstResponse time.Duration) {
 	if modelCallDuration == nil || metadata == nil {
 		return
 	}
+	// One line per call, so a slow run's time can be read off its logs.
+	slog.InfoContext(ctx, "model call", "model", model, "duration_ms", duration.Milliseconds(), "first_response_ms", firstResponse.Milliseconds(),
+		"input_tokens", metadata.PromptTokenCount, "cached_tokens", metadata.CachedContentTokenCount,
+		"thought_tokens", metadata.ThoughtsTokenCount, "output_tokens", metadata.CandidatesTokenCount)
 	modelAttr := attribute.String("model", model)
 	modelCallDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(modelAttr))
 
@@ -239,13 +244,17 @@ func countedGenerateContent(ctx context.Context, llm model.LLM, request *model.L
 		var partial *genai.GenerateContentResponseUsageMetadata
 		counted := false
 		started := time.Now()
+		var firstResponse time.Duration
 		defer func() {
 			if !counted && partial != nil {
-				recordModelCall(ctx, llm.Name(), partial, time.Since(started))
+				recordModelCall(ctx, llm.Name(), partial, time.Since(started), firstResponse)
 				FromContext(ctx).Add(llm.Name(), partial)
 			}
 		}()
 		for response, err := range llm.GenerateContent(ctx, request, stream) {
+			if firstResponse == 0 {
+				firstResponse = time.Since(started)
+			}
 			// In streaming mode ADK's Gemini model yields every chunk with
 			// Partial = true (each chunk repeats the running usage), then one
 			// final aggregated response with Partial = false carrying the
@@ -256,7 +265,7 @@ func countedGenerateContent(ctx context.Context, llm model.LLM, request *model.L
 				if response.Partial {
 					partial = response.UsageMetadata
 				} else if !counted {
-					recordModelCall(ctx, llm.Name(), response.UsageMetadata, time.Since(started))
+					recordModelCall(ctx, llm.Name(), response.UsageMetadata, time.Since(started), firstResponse)
 					FromContext(ctx).Add(llm.Name(), response.UsageMetadata)
 					counted = true
 				}
