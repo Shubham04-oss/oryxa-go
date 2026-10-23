@@ -179,8 +179,8 @@ func TestMembershipReadsASpecialistsKnowledge(t *testing.T) {
 		if (got == nil) != tc.nil_ || !slices.Equal(got, tc.want) {
 			t.Errorf("%s: knowledge = %#v, want %#v", name, got, tc.want)
 		}
-		if !membership.Agent || membership.AgentRole != "specialist" {
-			t.Errorf("%s: agent %v, role %q, want a specialist", name, membership.Agent, membership.AgentRole)
+		if !membership.Agent || membership.AgentID != "agt_a" || membership.AgentRole != "specialist" {
+			t.Errorf("%s: agent %v %q, role %q, want specialist agt_a", name, membership.Agent, membership.AgentID, membership.AgentRole)
 		}
 	}
 	for body, want := range map[string]string{
