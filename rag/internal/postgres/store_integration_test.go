@@ -578,11 +578,11 @@ func TestDocumentACLFiltersPagesAndReferences(t *testing.T) {
 	if hits, err := store.LexicalSearch(ctx, corpus, "payroll", 10, domain.Filter{}, true); err != nil || len(hits) != 1 {
 		t.Fatalf("admin payroll hits = %+v, %v", hits, err)
 	}
-	memberPage, next, err := store.Documents(ctx, organizationID, corpus.ID, "", "", 1, false)
+	memberPage, next, err := store.Documents(ctx, organizationID, corpus.ID, "", "", 1, []domain.DocumentAccess{domain.AccessMembers})
 	if err != nil || len(memberPage) != 1 || memberPage[0].ID != general.ID || next != "" {
 		t.Fatalf("member page = %+v, %q, %v", memberPage, next, err)
 	}
-	adminPage, _, err := store.Documents(ctx, organizationID, corpus.ID, "", "", 2, true)
+	adminPage, _, err := store.Documents(ctx, organizationID, corpus.ID, "", "", 2, domain.DocumentAccessLevels)
 	if err != nil || len(adminPage) != 2 {
 		t.Fatalf("admin page = %+v, %v", adminPage, err)
 	}
@@ -607,7 +607,7 @@ func TestDocumentACLFiltersPagesAndReferences(t *testing.T) {
 	if err != nil || len(listed) != 1 || listed[0].DocumentCount != 1 {
 		t.Fatalf("member corpora = %+v, %v", listed, err)
 	}
-	listed, err = store.Corpora(ctx, organizationID, CorpusQuery{Scope: domain.ScopeOrganization, Admin: true})
+	listed, err = store.Corpora(ctx, organizationID, CorpusQuery{Scope: domain.ScopeOrganization, IncludeAdminOnly: true})
 	if err != nil || len(listed) != 1 || listed[0].DocumentCount != 2 {
 		t.Fatalf("admin corpora = %+v, %v", listed, err)
 	}
@@ -1138,7 +1138,7 @@ func TestDocumentsPaginatesWithACursor(t *testing.T) {
 
 	// No cursor must return exactly the first page an unpaged caller gets
 	// today: the newest three, with a cursor to continue.
-	firstPage, next, err := store.Documents(ctx, organizationID, corpus.ID, "", "", 3, true)
+	firstPage, next, err := store.Documents(ctx, organizationID, corpus.ID, "", "", 3, domain.DocumentAccessLevels)
 	if err != nil {
 		t.Fatalf("Documents: %v", err)
 	}
@@ -1159,7 +1159,7 @@ func TestDocumentsPaginatesWithACursor(t *testing.T) {
 		if pages > len(created) {
 			t.Fatal("Documents did not terminate: the cursor is not making progress")
 		}
-		page, next, err := store.Documents(ctx, organizationID, corpus.ID, "", cursor, 2, true)
+		page, next, err := store.Documents(ctx, organizationID, corpus.ID, "", cursor, 2, domain.DocumentAccessLevels)
 		if err != nil {
 			t.Fatalf("Documents: %v", err)
 		}
@@ -1184,7 +1184,7 @@ func TestDocumentsPaginatesWithACursor(t *testing.T) {
 
 	// A page that holds everything carries no cursor, so a caller knows to
 	// stop asking.
-	_, lastNext, err := store.Documents(ctx, organizationID, corpus.ID, "", "", len(created), true)
+	_, lastNext, err := store.Documents(ctx, organizationID, corpus.ID, "", "", len(created), domain.DocumentAccessLevels)
 	if err != nil {
 		t.Fatalf("Documents: %v", err)
 	}
@@ -1194,7 +1194,7 @@ func TestDocumentsPaginatesWithACursor(t *testing.T) {
 
 	// A cursor that was not handed back unmodified is refused rather than
 	// silently treated as the start.
-	if _, _, err := store.Documents(ctx, organizationID, corpus.ID, "", "not-a-real-cursor", 2, true); !errors.Is(err, domain.ErrInvalid) {
+	if _, _, err := store.Documents(ctx, organizationID, corpus.ID, "", "not-a-real-cursor", 2, domain.DocumentAccessLevels); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("a malformed cursor returned %v, want ErrInvalid", err)
 	}
 }

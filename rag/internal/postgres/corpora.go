@@ -131,13 +131,17 @@ func (store *Store) CorpusBySlug(ctx context.Context, organizationID, slug strin
 	return row.corpus()
 }
 
-// CorpusQuery narrows a listing to what the caller may see. It is built from
-// the caller's membership, never from request parameters alone.
+// CorpusQuery narrows a listing to the corpora a request selects. It is a
+// pre-filter only: which of them the caller may read is the application's
+// call, made by the same check a single read makes.
 type CorpusQuery struct {
-	Scope    domain.Scope
-	TeamID   string
+	Scope  domain.Scope
+	TeamID string
+	// MemberID is whose member corpora a listing with no scope, or with
+	// member scope, selects: the caller's own.
 	MemberID string
-	Admin    bool
+	// IncludeAdminOnly counts admin-only documents in each corpus's totals.
+	IncludeAdminOnly bool
 }
 
 // listedCorpusRow is a corpus as a listing reads it: with its counts, taken in
@@ -159,7 +163,7 @@ func (store *Store) Corpora(ctx context.Context, organizationID string, query Co
 		(SELECT count(*) FROM rag_chunks AS c JOIN rag_documents AS d ON d.id = c.document_id
 		 WHERE c.corpus_id = rag_corpora.id AND ($2 OR d.access = 'members')) AS chunk_count
 		FROM rag_corpora WHERE organization_id = $1`
-	arguments := []any{organizationID, query.Admin}
+	arguments := []any{organizationID, query.IncludeAdminOnly}
 	switch query.Scope {
 	case domain.ScopeTeam:
 		arguments = append(arguments, query.TeamID)
@@ -167,12 +171,8 @@ func (store *Store) Corpora(ctx context.Context, organizationID string, query Co
 	case domain.ScopeOrganization:
 		statement += ` AND scope = 'organization'`
 	case domain.ScopeMember:
-		if query.Admin && query.MemberID == "" {
-			statement += ` AND scope = 'member'`
-		} else {
-			arguments = append(arguments, query.MemberID)
-			statement += fmt.Sprintf(` AND scope = 'member' AND member_id = $%d`, len(arguments))
-		}
+		arguments = append(arguments, query.MemberID)
+		statement += fmt.Sprintf(` AND scope = 'member' AND member_id = $%d`, len(arguments))
 	default:
 		arguments = append(arguments, query.MemberID)
 		statement += fmt.Sprintf(` AND (scope = 'organization' OR (scope = 'member' AND member_id = $%d))`, len(arguments))

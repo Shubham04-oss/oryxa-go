@@ -1,0 +1,90 @@
+package application
+
+import (
+	"context"
+	"errors"
+
+	"github.com/Shubham04-oss/oryxa-go/rag/internal/authclient"
+	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
+)
+
+// reads decides, for one request, which corpora a caller may read. A single
+// read and a listing both ask it, so the two cannot disagree about any corpus
+// (docs/design/permissions, G3); a listing filters in SQL first only to read
+// fewer rows, and what it returns is whatever survives mayRead here.
+//
+// Teams is asked once per team for the whole request, so a listing of many
+// corpora on one team makes one call, not one per corpus.
+type reads struct {
+	service     *Service
+	credentials authclient.Credentials
+	member      domain.OrgMembership
+	teams       map[string]teamAnswer
+}
+
+type teamAnswer struct {
+	access domain.TeamAccess
+	err    error
+}
+
+func (service *Service) reads(credentials authclient.Credentials, member domain.OrgMembership) *reads {
+	return &reads{service: service, credentials: credentials, member: member, teams: map[string]teamAnswer{}}
+}
+
+// mayRead decides who can search a corpus. Placement mirrors files exactly.
+// An org admin's reach is a person's own: an agent acting for one reaches
+// what a plain member would (see domain.OrgMembership.ActsAsAdmin).
+func (reads *reads) mayRead(ctx context.Context, corpus domain.Corpus) error {
+	member := reads.member
+	// Every read, and every write, reaches a corpus through here, so a
+	// specialist's grant is enforced once.
+	if err := member.MayReadCorpus(corpus.ID); err != nil {
+		return err
+	}
+	switch corpus.Scope {
+	case domain.ScopeOrganization:
+		return nil
+	case domain.ScopeMember:
+		if corpus.MemberID == member.UserID || member.ActsAsAdmin() {
+			return nil
+		}
+		return domain.ErrNotFound
+	case domain.ScopeTeam:
+		if member.ActsAsAdmin() {
+			return nil
+		}
+		_, err := reads.team(ctx, corpus.OrganizationID, corpus.TeamID)
+		return err
+	default:
+		return domain.ErrNotFound
+	}
+}
+
+// team is teamAccess, asked at most once per team in this request.
+func (reads *reads) team(ctx context.Context, organizationID, teamID string) (domain.TeamAccess, error) {
+	if answer, ok := reads.teams[teamID]; ok {
+		return answer.access, answer.err
+	}
+	access, err := reads.service.teamAccess(ctx, reads.credentials, reads.member, organizationID, teamID)
+	reads.teams[teamID] = teamAnswer{access: access, err: err}
+	return access, err
+}
+
+// readable keeps the corpora mayRead lets the caller read, in order. A corpus
+// it refuses reads as missing and is left out; any other failure, such as
+// teams being unreachable, fails the listing rather than quietly shortening
+// it.
+func (reads *reads) readable(ctx context.Context, corpora []domain.Corpus) ([]domain.Corpus, error) {
+	kept := corpora[:0]
+	for _, corpus := range corpora {
+		err := reads.mayRead(ctx, corpus)
+		switch {
+		case err == nil:
+			kept = append(kept, corpus)
+		case errors.Is(err, domain.ErrNotFound):
+		default:
+			return nil, err
+		}
+	}
+	return kept, nil
+}

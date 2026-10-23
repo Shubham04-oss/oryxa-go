@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -189,11 +190,7 @@ func (store *fakeStore) CorpusBySlug(_ context.Context, organizationID, slug str
 	return domain.Corpus{}, domain.ErrNotFound
 }
 
-// matchesCorpusQuery mirrors postgres.Store.Corpora's own filter exactly,
-// including the admin-sees-every-member-corpus branch that today's
-// application never actually reaches (it always names its own caller as
-// MemberID), so a future caller that does leave it empty gets what the real
-// store would give it.
+// matchesCorpusQuery mirrors postgres.Store.Corpora's own filter exactly.
 func matchesCorpusQuery(corpus domain.Corpus, query postgres.CorpusQuery) bool {
 	switch query.Scope {
 	case domain.ScopeTeam:
@@ -201,13 +198,7 @@ func matchesCorpusQuery(corpus domain.Corpus, query postgres.CorpusQuery) bool {
 	case domain.ScopeOrganization:
 		return corpus.Scope == domain.ScopeOrganization
 	case domain.ScopeMember:
-		if corpus.Scope != domain.ScopeMember {
-			return false
-		}
-		if query.Admin && query.MemberID == "" {
-			return true
-		}
-		return corpus.MemberID == query.MemberID
+		return corpus.Scope == domain.ScopeMember && corpus.MemberID == query.MemberID
 	default:
 		switch corpus.Scope {
 		case domain.ScopeOrganization:
@@ -228,7 +219,7 @@ func (store *fakeStore) Corpora(_ context.Context, organizationID string, query 
 	var result []domain.Corpus
 	for _, corpus := range store.corpora {
 		if corpus.OrganizationID == organizationID && matchesCorpusQuery(corpus, query) {
-			corpus.DocumentCount = store.countDocuments(corpus.ID, query.Admin)
+			corpus.DocumentCount = store.countDocuments(corpus.ID, query.IncludeAdminOnly)
 			result = append(result, corpus)
 		}
 	}
@@ -336,7 +327,8 @@ func (store *fakeStore) Document(_ context.Context, organizationID, documentID s
 // store_integration_test.go; what this layer must prove instead is that the
 // service applies the access gate first and forwards status, cursor and a
 // clamped limit unchanged.
-func (store *fakeStore) Documents(_ context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int, includeAdminOnly bool) ([]domain.Document, string, error) {
+func (store *fakeStore) Documents(_ context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int, access []domain.DocumentAccess) ([]domain.Document, string, error) {
+	includeAdminOnly := slices.Contains(access, domain.AccessAdmins)
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	store.lastDocumentsCall = documentsCall{organizationID, corpusID, status, cursor, limit}
