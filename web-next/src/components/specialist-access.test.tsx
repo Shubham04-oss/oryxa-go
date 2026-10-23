@@ -10,7 +10,13 @@ import {
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { SpecialistAccess, choiceOf, grantFrom } from "./specialist-access"
+import {
+  SpecialistAccess,
+  choiceOf,
+  corporaChoiceOf,
+  grantFrom,
+  grantWithCorpora,
+} from "./specialist-access"
 import type { ManagedAgent } from "@/lib/agents/managed-agents"
 
 const agent: ManagedAgent = {
@@ -26,6 +32,18 @@ const agent: ManagedAgent = {
   created_at: "2026-10-01T00:00:00Z",
   updated_at: "2026-10-14T00:00:00Z",
   model_tier: "lite",
+}
+
+function corpus(id: string, name: string) {
+  return {
+    id,
+    organization_id: "org_1",
+    slug: id,
+    name,
+    scope: "organization",
+    document_count: 2,
+    chunk_count: 8,
+  }
 }
 
 function json(body: unknown, status = 200) {
@@ -48,6 +66,11 @@ function patches() {
 beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock)
   fetchMock.mockImplementation(async (url, init) => {
+    if (String(url).endsWith("/corpora")) {
+      return json({
+        corpora: [corpus("cor_plans", "Plans"), corpus("cor_hr", "HR")],
+      })
+    }
     if (String(url).endsWith("/apps/connections")) {
       return json({
         connections: [
@@ -105,6 +128,7 @@ describe("a specialist's grant", () => {
       tools: ["SLACK_SEND"],
       write_apps: ["github"],
       write_tools: [],
+      corpora: ["*"],
     })
     expect(
       grantFrom({ every: true, reads: [], writes: ["slack"] }, { apps: ["*"] })
@@ -113,7 +137,72 @@ describe("a specialist's grant", () => {
       tools: [],
       write_apps: ["slack"],
       write_tools: [],
+      corpora: ["*"],
     })
+    expect(
+      grantFrom(
+        { every: true, reads: [], writes: [] },
+        { apps: ["github"], corpora: ["cor_plans"] }
+      ).corpora
+    ).toEqual(["cor_plans"])
+  })
+
+  it("reads its corpora as all, some or none", () => {
+    expect(corporaChoiceOf({ apps: ["*"] })).toEqual({ scope: "all", ids: [] })
+    expect(corporaChoiceOf({ apps: ["*"], corpora: ["*"] })).toEqual({
+      scope: "all",
+      ids: [],
+    })
+    expect(corporaChoiceOf({ apps: ["*"], corpora: [] })).toEqual({
+      scope: "none",
+      ids: [],
+    })
+    expect(corporaChoiceOf({ apps: ["*"], corpora: ["cor_a"] })).toEqual({
+      scope: "some",
+      ids: ["cor_a"],
+    })
+  })
+
+  it("saves corpora and keeps the rest of the grant", () => {
+    const previous = {
+      apps: ["github"],
+      tools: ["GITHUB_GET_ISSUE"],
+      write_apps: ["github"],
+      write_tools: ["GITHUB_CREATE_ISSUE"],
+      corpora: ["*"],
+    }
+    expect(
+      grantWithCorpora({ scope: "some", ids: ["cor_b", "cor_a"] }, previous)
+    ).toEqual({ ...previous, corpora: ["cor_a", "cor_b"] })
+    expect(
+      grantWithCorpora({ scope: "none", ids: ["cor_a"] }, previous)
+    ).toEqual({ ...previous, corpora: [] })
+    expect(grantWithCorpora({ scope: "all", ids: [] }, previous)).toEqual(
+      previous
+    )
+  })
+})
+
+describe("saving a grant", () => {
+  it("keeps the grant fields neither card edits", () => {
+    const previous = {
+      apps: ["gmail"],
+      tools: [],
+      write_apps: [],
+      write_tools: [],
+      corpora: ["cor_a"],
+      files: ["team_eng"],
+      knowledge: [],
+    }
+    const apps = grantFrom(
+      { every: false, reads: ["gmail", "github"], writes: [] },
+      previous
+    )
+    expect(apps.files).toEqual(["team_eng"])
+    expect(apps.knowledge).toEqual([])
+    const corpora = grantWithCorpora({ scope: "all", ids: [] }, previous)
+    expect(corpora.files).toEqual(["team_eng"])
+    expect(corpora.knowledge).toEqual([])
   })
 })
 
@@ -155,6 +244,7 @@ describe("SpecialistAccess", () => {
             tools: [],
             write_apps: ["github"],
             write_tools: [],
+            corpora: ["*"],
           },
         },
       ])
@@ -186,6 +276,7 @@ describe("SpecialistAccess", () => {
             tools: [],
             write_apps: [],
             write_tools: [],
+            corpora: ["*"],
           },
         },
       ])
@@ -221,5 +312,140 @@ describe("SpecialistAccess", () => {
     )
     fireEvent.click(screen.getByRole("button", { name: "Save apps" }))
     expect((await screen.findByRole("alert")).textContent).toBeTruthy()
+  })
+
+  describe("its collections", () => {
+    const narrowed: ManagedAgent = {
+      ...agent,
+      grant: {
+        apps: ["github"],
+        tools: ["GITHUB_GET_ISSUE"],
+        write_apps: ["github"],
+        write_tools: [],
+        corpora: ["cor_plans", "cor_gone"],
+      },
+    }
+    const kept = {
+      apps: ["github"],
+      tools: ["GITHUB_GET_ISSUE"],
+      write_apps: ["github"],
+      write_tools: [],
+    }
+    const scopes = () =>
+      screen.getByRole("radiogroup", {
+        name: "Which collections it may search",
+      })
+
+    it("shows the current choice, with a collection it can't see any more", async () => {
+      renderAccess(narrowed)
+      const chosen = within(scopes()).getByRole("radio", { name: /Only these/ })
+      expect((chosen as HTMLInputElement).checked).toBe(true)
+      const list = await screen.findByRole("list", { name: "Collections" })
+      const checked = (name: string) => {
+        const box = within(list).getByRole("checkbox", {
+          name: `Researcher may search ${name}`,
+        })
+        return (box as HTMLInputElement).checked
+      }
+      expect(checked("Plans")).toBe(true)
+      expect(checked("HR")).toBe(false)
+      expect(checked("cor_gone")).toBe(true)
+      expect(within(list).getByText("No longer available")).toBeTruthy()
+    })
+
+    it("reads a grant without corpora as all collections", () => {
+      renderAccess()
+      const chosen = within(scopes()).getByRole("radio", {
+        name: /All collections/,
+      })
+      expect((chosen as HTMLInputElement).checked).toBe(true)
+      expect(screen.queryByRole("list", { name: "Collections" })).toBeNull()
+    })
+
+    it("saves all collections", async () => {
+      renderAccess(narrowed)
+      fireEvent.click(
+        within(scopes()).getByRole("radio", { name: /All collections/ })
+      )
+      fireEvent.click(screen.getByRole("button", { name: "Save collections" }))
+      await waitFor(() =>
+        expect(patches()).toEqual([{ grant: { ...kept, corpora: ["*"] } }])
+      )
+    })
+
+    it("saves the collections picked", async () => {
+      renderAccess(narrowed)
+      const list = await screen.findByRole("list", { name: "Collections" })
+      fireEvent.click(
+        within(list).getByRole("checkbox", { name: "Researcher may search HR" })
+      )
+      fireEvent.click(
+        within(list).getByRole("checkbox", {
+          name: "Researcher may search cor_gone",
+        })
+      )
+      fireEvent.click(screen.getByRole("button", { name: "Save collections" }))
+      await waitFor(() =>
+        expect(patches()).toEqual([
+          { grant: { ...kept, corpora: ["cor_hr", "cor_plans"] } },
+        ])
+      )
+    })
+
+    it("starts a pick from every collection it can see", async () => {
+      renderAccess()
+      const only = within(scopes()).getByRole("radio", { name: /Only these/ })
+      await waitFor(() =>
+        expect((only as HTMLInputElement).disabled).toBe(false)
+      )
+      fireEvent.click(only)
+      await screen.findByRole("list", { name: "Collections" })
+      fireEvent.click(
+        screen.getByRole("checkbox", { name: "Researcher may search Plans" })
+      )
+      fireEvent.click(screen.getByRole("button", { name: "Save collections" }))
+      await waitFor(() =>
+        expect(patches()).toEqual([
+          {
+            grant: {
+              apps: ["*"],
+              tools: [],
+              write_apps: [],
+              write_tools: [],
+              corpora: ["cor_hr"],
+            },
+          },
+        ])
+      )
+    })
+
+    it("saves none", async () => {
+      renderAccess(narrowed)
+      fireEvent.click(within(scopes()).getByRole("radio", { name: /None/ }))
+      fireEvent.click(screen.getByRole("button", { name: "Save collections" }))
+      await waitFor(() =>
+        expect(patches()).toEqual([{ grant: { ...kept, corpora: [] } }])
+      )
+    })
+
+    it("keeps its corpora when its apps are saved", async () => {
+      renderAccess(narrowed)
+      await screen.findByRole("list", { name: "Apps" })
+      fireEvent.click(
+        screen.getByRole("checkbox", { name: "Researcher may use Slack" })
+      )
+      fireEvent.click(screen.getByRole("button", { name: "Save apps" }))
+      await waitFor(() =>
+        expect(patches()).toEqual([
+          {
+            grant: {
+              ...kept,
+              apps: ["github", "slack"],
+              corpora: ["cor_plans", "cor_gone"],
+            },
+          },
+        ])
+      )
+    })
   })
 })

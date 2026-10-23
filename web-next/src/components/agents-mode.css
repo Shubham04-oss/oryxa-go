@@ -1151,6 +1151,9 @@
   color: var(--tone-e4aaa6);
   font-size: 11px;
 }
+.workspace-access-read small.workspace-access-detail {
+  color: var(--text-muted);
+}
 .workspace-access-apps li[data-off="true"] .workspace-access-read strong {
   color: var(--text-muted);
 }
