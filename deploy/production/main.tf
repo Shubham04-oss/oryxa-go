@@ -27,6 +27,8 @@ locals {
   queue_names = merge(
     { for service in local.queue_services : service => "${local.name}-${service}-events" },
     { email = "${local.name}-email-events" },
+    # SpiceDB's projector, only once it runs (spicedb.tf makes its queue).
+    local.spicedb_on ? { spicedb = local.spicedb_queue } : {},
   )
   queue_urls = { for service, queue in local.queue_names : service => "https://sqs.${var.aws_region}.amazonaws.com/${local.account_id}/${queue}" }
 
