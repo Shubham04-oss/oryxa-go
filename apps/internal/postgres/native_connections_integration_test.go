@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -112,5 +113,69 @@ func TestARemovedNativeConnectionIsNeverBroughtBack(t *testing.T) {
 	}
 	if err := store.ApplyNativeConnection(ctx, nativeRow("icn_3", domain.ConnectionActive), testClock.Add(2*time.Minute)); err != nil {
 		t.Fatalf("a new connection after a removed one: %v", err)
+	}
+}
+
+// A native connection turning active while the member's Composio connection
+// to the same app is current is refused as a conflict, which the application
+// settles; a retired native row is never refused, and once the other one is
+// gone the same upsert applies.
+func TestANativeConnectionConflictsWithTheMembersCurrentConnection(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	composio, _ := testConnection(t, store, "org_1", "mem_1") // pending, github
+	if err := store.ApplyNativeConnection(ctx, nativeRow("icn_1", domain.ConnectionActive), testClock); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("active beside a pending connection = %v, want conflict", err)
+	}
+	if _, count := nativeStatusOf(t, store, "icn_1"); count != 0 {
+		t.Fatalf("rows = %d, want none written", count)
+	}
+	// Expired, or retired as the loser, is history and takes no place.
+	if err := store.ApplyNativeConnection(ctx, nativeRow("icn_1", domain.ConnectionExpired), testClock); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ApplyNativeConnection(ctx, nativeRow("icn_2", domain.ConnectionRemoved), testClock); err != nil {
+		t.Fatal(err)
+	}
+	// The expired one recovering is refused the same way.
+	if err := store.ApplyNativeConnection(ctx, nativeRow("icn_1", domain.ConnectionActive), testClock.Add(time.Minute)); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("recovering beside a pending connection = %v, want conflict", err)
+	}
+	if status, _ := nativeStatusOf(t, store, "icn_1"); status != domain.ConnectionExpired {
+		t.Fatalf("status = %s, want still expired", status)
+	}
+	if _, err := store.RemoveConnection(ctx, composio.ID, "replaced_by_newer_connection", testClock, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ApplyNativeConnection(ctx, nativeRow("icn_1", domain.ConnectionActive), testClock.Add(time.Minute)); err != nil {
+		t.Fatalf("once the other is retired = %v", err)
+	}
+	if status, _ := nativeStatusOf(t, store, "icn_1"); status != domain.ConnectionActive {
+		t.Fatalf("status = %s, want active", status)
+	}
+}
+
+func TestNativeOrganizationsListsEveryOrganizationWithANativeRow(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	if organizations, err := store.NativeOrganizations(ctx); err != nil || len(organizations) != 0 {
+		t.Fatalf("none = %v, %v", organizations, err)
+	}
+	testConnection(t, store, "org_composio", "mem_1")
+	for _, row := range []struct {
+		organization, id string
+		status           domain.ConnectionStatus
+	}{{"org_b", "icn_b", domain.ConnectionActive}, {"org_a", "icn_a", domain.ConnectionRemoved}, {"org_b", "icn_b2", domain.ConnectionExpired}} {
+		connection := nativeRow(row.id, row.status)
+		connection.OrganizationID = row.organization
+		if err := store.ApplyNativeConnection(ctx, connection, testClock); err != nil {
+			t.Fatal(err)
+		}
+	}
+	organizations, err := store.NativeOrganizations(ctx)
+	if err != nil || len(organizations) != 2 || organizations[0] != "org_a" || organizations[1] != "org_b" {
+		t.Fatalf("organizations = %v, %v", organizations, err)
 	}
 }

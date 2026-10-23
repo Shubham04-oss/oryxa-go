@@ -483,6 +483,24 @@ func scanConnection(rows pgx.Rows) (domain.Connection, error) {
 	return connection, nil
 }
 
+// NativeOrganizations lists, in order, every organization that has a native
+// connection row, whatever its status, for the reconcile pass. It is the one
+// other read not scoped to an organization, as the pass visits them all.
+func (store *Store) NativeOrganizations(ctx context.Context) ([]string, error) {
+	rows, err := store.pool.Query(ctx, `
+		SELECT DISTINCT organization_id FROM apps_connections
+		WHERE broker = 'native'
+		ORDER BY organization_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list organizations with native connections: %w", err)
+	}
+	organizations, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("list organizations with native connections: %w", err)
+	}
+	return organizations, nil
+}
+
 // ApplyNativeConnection records what the integrations service reported of a
 // connection: a new row, or a change to the one it already named. The row's
 // status and at (the event's UpdatedAt) are what is applied, and only when

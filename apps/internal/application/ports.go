@@ -45,6 +45,9 @@ type Store interface {
 	// of a connection; see postgres.Store.ApplyNativeConnection for the order
 	// it applies reports in.
 	ApplyNativeConnection(ctx context.Context, connection domain.Connection, at time.Time) error
+	// NativeOrganizations lists, in order, the organizations with any native
+	// connection row, removed ones included: the ones reconciling looks at.
+	NativeOrganizations(ctx context.Context) ([]string, error)
 	// ConnectionByAccount reads the connection a Composio account backs.
 	ConnectionByAccount(ctx context.Context, composioAccountID string) (domain.Connection, error)
 	// Connections lists an organization's connections, newest first.
