@@ -37,6 +37,17 @@ resource "aws_db_parameter_group" "main" {
     value        = "pg_stat_statements"
     apply_method = "pending-reboot"
   }
+
+  # SpiceDB's Postgres datastore needs commit timestamps (spicedb.tf). It
+  # takes effect at the next reboot, which deploy/README.md, "SpiceDB", schedules.
+  dynamic "parameter" {
+    for_each = var.spicedb_enabled ? ["on"] : []
+    content {
+      name         = "track_commit_timestamp"
+      value        = parameter.value
+      apply_method = "pending-reboot"
+    }
+  }
 }
 
 resource "aws_iam_role" "rds_monitoring" {

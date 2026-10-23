@@ -215,6 +215,8 @@ locals {
     # side conversations, at the app's origin; with REALTIME_PURGE_SECRET
     # (secrets.tf), only once realtime_purge turns it on.
     var.realtime_purge ? { REALTIME_WORKER_URL = local.app_url } : {},
+    # Where SpiceDB answers, once it runs (spicedb.tf); nothing otherwise.
+    local.spicedb_environment,
   )
 
   app_secrets = merge(
@@ -257,6 +259,7 @@ resource "aws_iam_role_policy" "execution_secrets" {
         Resource = concat(
           [aws_secretsmanager_secret.database_url.arn, aws_secretsmanager_secret.api_tunnel_token.arn],
           [for secret in aws_secretsmanager_secret.external : secret.arn],
+          aws_secretsmanager_secret.spicedb_datastore[*].arn,
         )
       },
       {

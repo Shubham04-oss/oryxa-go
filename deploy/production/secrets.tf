@@ -48,6 +48,9 @@ locals {
     # Only when Jev judges: the tasks cannot start while a secret they name
     # holds no value, so it exists only once there is one to put in it.
     var.knowledge_judge == "jev" ? { TYPESAFE_API_KEY = "typesafe-api-key" } : {},
+    # SpiceDB's preshared key (spicedb.tf), which put-secrets.sh makes once.
+    # SpiceDB's tasks and the oryxa task both read it.
+    var.spicedb_enabled ? { SPICEDB_PRESHARED_KEY = "spicedb-preshared-key" } : {},
   )
 
   # Variables the task definition references only once their gate is true.
@@ -69,6 +72,8 @@ locals {
     PIPEDREAM_CLIENT_SECRET  = var.pipedream_ready
     PIPEDREAM_PROJECT_ID     = var.pipedream_ready
     INTEGRATIONS_EGRESS_KEYS = var.integrations_ready
+    # Named to the oryxa task with SPICEDB_ENDPOINT, once SpiceDB runs.
+    SPICEDB_PRESHARED_KEY = local.spicedb_on
   }
 
   task_secrets = { for variable, slug in local.external_secrets : variable => slug if lookup(local.secret_gates, variable, true) }
