@@ -471,14 +471,9 @@ func (s *Service) teamAccess(ctx context.Context, credentials authclient.Credent
 	if err != nil {
 		return domain.TeamAccess{}, conceal(err)
 	}
-	if !access.CanSee() {
+	access, visible := org.TeamReach(access)
+	if !visible {
 		return domain.TeamAccess{}, domain.ErrNotFound
-	}
-	if org.Agent {
-		if !access.Member {
-			return domain.TeamAccess{}, domain.ErrNotFound
-		}
-		access.CanManage = access.TeamAdmin
 	}
 	return access, nil
 }

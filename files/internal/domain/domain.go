@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -26,21 +26,14 @@ const (
 	DefaultRetentionDays = 30
 )
 
-type OrgRole string
+// OrgRole is access.Role: the rules for it live there.
+type OrgRole = access.Role
 
 const (
 	OrgRoleOwner  OrgRole = "owner"
 	OrgRoleAdmin  OrgRole = "admin"
 	OrgRoleMember OrgRole = "member"
 )
-
-func (role OrgRole) Valid() bool {
-	return role == OrgRoleOwner || role == OrgRoleAdmin || role == OrgRoleMember
-}
-
-func (role OrgRole) IsOrgAdmin() bool {
-	return role == OrgRoleOwner || role == OrgRoleAdmin
-}
 
 type OrgMembership struct {
 	OrganizationID   string
@@ -76,9 +69,6 @@ const (
 // does not exist. A team's files are named by the team's id. Every other
 // caller is limited only by what its member can see.
 func (membership OrgMembership) MayReachFiles(scope Scope, teamID string) error {
-	if !membership.FilesLimited() {
-		return nil
-	}
 	var name string
 	switch scope {
 	case ScopeMember:
@@ -88,7 +78,7 @@ func (membership OrgMembership) MayReachFiles(scope Scope, teamID string) error 
 	case ScopeTeam:
 		name = teamID
 	}
-	if name == "" || !slices.Contains(membership.AgentFiles, name) {
+	if !membership.actor().Reaches(membership.AgentFiles, name) {
 		return ErrNotFound
 	}
 	return nil
@@ -97,8 +87,7 @@ func (membership OrgMembership) MayReachFiles(scope Scope, teamID string) error 
 // FilesLimited is whether the caller is a specialist whose grant names some
 // file scopes rather than all.
 func (membership OrgMembership) FilesLimited() bool {
-	return membership.Agent && membership.AgentRole == "specialist" &&
-		membership.AgentFiles != nil && !slices.Contains(membership.AgentFiles, "*")
+	return membership.actor().Limited(membership.AgentFiles)
 }
 
 // ActsAsAdmin reports whether the caller acts with an org admin's reach:
@@ -107,8 +96,19 @@ func (membership OrgMembership) FilesLimited() bool {
 // and admins may read. Only a person's own session does. An agent acting for
 // an admin gets what a plain member would: its own member files, the teams
 // its member is actually on, and the organization's members-level files.
-func (membership OrgMembership) ActsAsAdmin() bool {
-	return membership.Role.IsOrgAdmin() && !membership.Agent
+func (membership OrgMembership) ActsAsAdmin() bool { return membership.actor().ActsAsAdmin() }
+
+// TeamReach narrows what teams answered about one team to what the caller may
+// use (access.Actor.TeamReach): for an agent, its member's own place on the
+// team. False means the caller can't see the team.
+func (membership OrgMembership) TeamReach(team TeamAccess) (TeamAccess, bool) {
+	visible, manage := membership.actor().TeamReach(team.CanSee(), team.Member, team.TeamAdmin, team.CanManage)
+	team.CanManage = manage
+	return team, visible
+}
+
+func (membership OrgMembership) actor() access.Actor {
+	return access.Actor{Role: membership.Role, Agent: membership.Agent, AgentRole: membership.AgentRole}
 }
 
 type TeamAccess struct {

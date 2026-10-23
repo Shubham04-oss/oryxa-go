@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 	"maps"
 	"regexp"
 	"slices"
@@ -48,15 +49,14 @@ var (
 	ErrUnreadable = errors.New("the member it reads as cannot read it")
 )
 
-type OrgRole string
+// OrgRole is access.Role: the rules for it live there.
+type OrgRole = access.Role
 
 const (
 	OrgRoleOwner  OrgRole = "owner"
 	OrgRoleAdmin  OrgRole = "admin"
 	OrgRoleMember OrgRole = "member"
 )
-
-func (role OrgRole) IsOrgAdmin() bool { return role == OrgRoleOwner || role == OrgRoleAdmin }
 
 // OrgMembership is what auth answered for the caller and one organization.
 type OrgMembership struct {
@@ -79,7 +79,7 @@ type OrgMembership struct {
 // looks the same as one that does not exist. Every other caller is limited
 // only by what its member can see.
 func (membership OrgMembership) MayReadSource(sourceID string) error {
-	if membership.KnowledgeLimited() && !slices.Contains(membership.AgentKnowledge, sourceID) {
+	if !membership.actor().Reaches(membership.AgentKnowledge, sourceID) {
 		return ErrNotFound
 	}
 	return nil
@@ -88,8 +88,17 @@ func (membership OrgMembership) MayReadSource(sourceID string) error {
 // KnowledgeLimited is whether the caller is a specialist whose grant names
 // some knowledge sources rather than all.
 func (membership OrgMembership) KnowledgeLimited() bool {
-	return membership.Agent && membership.AgentRole == "specialist" &&
-		membership.AgentKnowledge != nil && !slices.Contains(membership.AgentKnowledge, "*")
+	return membership.actor().Limited(membership.AgentKnowledge)
+}
+
+// ActsAsAdmin reports whether the caller acts with an org admin's reach:
+// every member's sources and the documents only owners and admins may read.
+// Only a person's own session does; an agent acting for an admin reads as a
+// plain member.
+func (membership OrgMembership) ActsAsAdmin() bool { return membership.actor().ActsAsAdmin() }
+
+func (membership OrgMembership) actor() access.Actor {
+	return access.Actor{Role: membership.Role, Agent: membership.Agent, AgentRole: membership.AgentRole}
 }
 
 // Scope is where the connection behind a source hangs, and so who may read

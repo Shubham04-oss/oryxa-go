@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 	"regexp"
 	"slices"
 	"strings"
@@ -73,15 +74,14 @@ func (e *InvalidCredentials) Error() string {
 func (e *InvalidCredentials) Unwrap() []error { return []error{ErrInvalidCredentials, ErrInvalid} }
 
 // OrgRole is the caller's role in an organization, as auth answers it.
-type OrgRole string
+// OrgRole is access.Role: the rules for it live there.
+type OrgRole = access.Role
 
 const (
 	OrgRoleOwner  OrgRole = "owner"
 	OrgRoleAdmin  OrgRole = "admin"
 	OrgRoleMember OrgRole = "member"
 )
-
-func (role OrgRole) IsOrgAdmin() bool { return role == OrgRoleOwner || role == OrgRoleAdmin }
 
 // OrgMembership is what auth answered for the caller and one organization.
 type OrgMembership struct {
@@ -144,7 +144,15 @@ func (m OrgMembership) MayRun(toolkit, tool string, readOnly bool) error {
 	return nil
 }
 
-func (m OrgMembership) specialist() bool { return m.Agent && m.AgentRole == "specialist" }
+// ActsAsAdmin reports whether the caller acts with an org admin's reach. Only
+// a person's own session does; an agent acting for an admin is a member.
+func (m OrgMembership) ActsAsAdmin() bool {
+	return access.Actor{Role: m.Role, Agent: m.Agent}.ActsAsAdmin()
+}
+
+func (m OrgMembership) specialist() bool {
+	return access.Actor{Role: m.Role, Agent: m.Agent, AgentRole: m.AgentRole}.Specialist()
+}
 
 func (m OrgMembership) grant() AgentGrant {
 	if m.AgentGrant == nil {

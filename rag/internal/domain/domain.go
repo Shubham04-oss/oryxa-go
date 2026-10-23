@@ -16,6 +16,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 	"maps"
 	"regexp"
 	"slices"
@@ -85,21 +86,14 @@ func ParseScope(raw string) (Scope, error) {
 
 // OrgRole and OrgMembership are what auth answers when this service asks who
 // the caller is. Rag never decides identity itself.
-type OrgRole string
+// OrgRole is access.Role: the rules for it live there.
+type OrgRole = access.Role
 
 const (
 	OrgRoleOwner  OrgRole = "owner"
 	OrgRoleAdmin  OrgRole = "admin"
 	OrgRoleMember OrgRole = "member"
 )
-
-func (role OrgRole) Valid() bool {
-	return role == OrgRoleOwner || role == OrgRoleAdmin || role == OrgRoleMember
-}
-
-func (role OrgRole) IsOrgAdmin() bool {
-	return role == OrgRoleOwner || role == OrgRoleAdmin
-}
 
 type OrgMembership struct {
 	OrganizationID   string
@@ -128,7 +122,7 @@ type OrgMembership struct {
 // not found, so a corpus outside the grant looks the same as one that does
 // not exist. Every other caller is limited only by what its member can see.
 func (membership OrgMembership) MayReadCorpus(corpusID string) error {
-	if membership.CorporaLimited() && !slices.Contains(membership.AgentCorpora, corpusID) {
+	if !membership.actor().Reaches(membership.AgentCorpora, corpusID) {
 		return ErrNotFound
 	}
 	return nil
@@ -137,8 +131,7 @@ func (membership OrgMembership) MayReadCorpus(corpusID string) error {
 // CorporaLimited is whether the caller is a specialist whose grant names
 // some corpora rather than all.
 func (membership OrgMembership) CorporaLimited() bool {
-	return membership.Agent && membership.AgentRole == "specialist" &&
-		membership.AgentCorpora != nil && !slices.Contains(membership.AgentCorpora, "*")
+	return membership.actor().Limited(membership.AgentCorpora)
 }
 
 // ActsAsAdmin reports whether the caller acts with an org admin's reach:
@@ -147,8 +140,19 @@ func (membership OrgMembership) CorporaLimited() bool {
 // admins may read. Only a person's own session does. An agent acting for an
 // admin gets what a plain member would: its member's own corpora, the teams
 // its member is actually on, and the organization's members-level documents.
-func (membership OrgMembership) ActsAsAdmin() bool {
-	return membership.Role.IsOrgAdmin() && !membership.Agent
+func (membership OrgMembership) ActsAsAdmin() bool { return membership.actor().ActsAsAdmin() }
+
+// TeamReach narrows what teams answered about one team to what the caller may
+// use (access.Actor.TeamReach): for an agent, its member's own place on the
+// team. False means the caller can't see the team.
+func (membership OrgMembership) TeamReach(team TeamAccess) (TeamAccess, bool) {
+	visible, manage := membership.actor().TeamReach(team.CanSee(), team.Member, team.TeamAdmin, team.CanManage)
+	team.CanManage = manage
+	return team, visible
+}
+
+func (membership OrgMembership) actor() access.Actor {
+	return access.Actor{Role: membership.Role, Agent: membership.Agent, AgentRole: membership.AgentRole}
 }
 
 // TeamAccess is what teams answers about one team. An empty TeamID means the
