@@ -224,6 +224,19 @@ func (store *fakeStore) ExpireConnection(_ context.Context, id, reason string, n
 func (store *fakeStore) ApplyNativeConnection(_ context.Context, connection domain.Connection, at time.Time) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	// The one-current-connection-per-member-and-app index, as Postgres keeps it.
+	current := func(id string) error {
+		if connection.Status != domain.ConnectionActive {
+			return nil
+		}
+		for otherID, other := range store.connections {
+			if otherID != id && other.OrganizationID == connection.OrganizationID && other.MemberID == connection.MemberID &&
+				other.Toolkit == connection.Toolkit && (other.Status == domain.ConnectionActive || other.Status == domain.ConnectionPending) {
+				return domain.ErrConflict
+			}
+		}
+		return nil
+	}
 	for id, existing := range store.connections {
 		if existing.NativeConnectionID != connection.NativeConnectionID {
 			continue
@@ -231,13 +244,35 @@ func (store *fakeStore) ApplyNativeConnection(_ context.Context, connection doma
 		if existing.Status == domain.ConnectionRemoved || (connection.Status != domain.ConnectionRemoved && !existing.UpdatedAt.Before(at)) {
 			return nil
 		}
+		if err := current(id); err != nil {
+			return err
+		}
 		existing.Status, existing.StatusReason, existing.UpdatedAt = connection.Status, connection.StatusReason, at
 		store.connections[id] = existing
 		return nil
 	}
+	if err := current(connection.ID); err != nil {
+		return err
+	}
 	connection.CreatedAt, connection.UpdatedAt = at, at
+	if connection.Status == domain.ConnectionActive {
+		connection.ConnectedAt = &at
+	}
 	store.connections[connection.ID] = connection
 	return nil
+}
+
+func (store *fakeStore) NativeOrganizations(context.Context) ([]string, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	var organizations []string
+	for _, connection := range store.connections {
+		if connection.Native() && !slices.Contains(organizations, connection.OrganizationID) {
+			organizations = append(organizations, connection.OrganizationID)
+		}
+	}
+	slices.Sort(organizations)
+	return organizations, nil
 }
 
 func (store *fakeStore) RemoveConnection(_ context.Context, id, reason string, now time.Time, events func(domain.Connection, []domain.Trigger) ([]domain.Event, error)) (bool, error) {

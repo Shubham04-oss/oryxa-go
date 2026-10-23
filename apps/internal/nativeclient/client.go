@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	integrationsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/integrations/v1"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
@@ -23,9 +24,11 @@ const (
 	Audience = "integrations"
 	// ConnectPurpose is the purpose of the token that starts a sign-in.
 	ConnectPurpose = "connect"
-	// ToolsPurpose is the purpose of the token that runs a tool.
+	// ToolsPurpose is the purpose of the token that runs a tool or lists a
+	// member's tools.
 	ToolsPurpose = "tools"
-	// ConnectionsPurpose is the purpose of the token that removes a connection.
+	// ConnectionsPurpose is the purpose of the token that lists or removes
+	// connections.
 	ConnectionsPurpose = "connections"
 
 	requestTimeout   = 30 * time.Second
@@ -182,6 +185,55 @@ func (client *Client) Remove(ctx context.Context, org, connection string) error 
 	}
 	path := "/v1/connections/" + url.PathEscape(connection) + "?" + url.Values{"org": {org}}.Encode()
 	return client.do(ctx, http.MethodDelete, path, ConnectionsPurpose, nil, &answer)
+}
+
+// ListConnections answers the org's live connections at the integrations
+// service, in the shape of its events: with a member, that member's own and
+// the org-level ones; without, every one of the org. A revoked connection is
+// not listed.
+func (client *Client) ListConnections(ctx context.Context, org, member string) ([]integrationsv1.Connection, error) {
+	var answer struct {
+		Connections []integrationsv1.Connection `json:"connections"`
+	}
+	query := url.Values{"org": {org}}
+	if member != "" {
+		query.Set("member", member)
+	}
+	if err := client.do(ctx, http.MethodGet, "/v1/connections?"+query.Encode(), ConnectionsPurpose, nil, &answer); err != nil {
+		return nil, err
+	}
+	if answer.Connections == nil {
+		return nil, errors.New("nativeclient: the connections list answered no connections field")
+	}
+	return answer.Connections, nil
+}
+
+// Tool is one tool a member's connection offers, as its connector's manifest
+// declares it. Name is the manifest's, the app's id and a dot before the
+// tool's own name, as github.list_issues.
+type Tool struct {
+	App         string `json:"app"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	// Effect is read, write, external or delete; only read runs unconfirmed.
+	Effect      string          `json:"effect"`
+	InputSchema json.RawMessage `json:"input_schema"`
+}
+
+// ListTools answers the tools of the apps a member's live connections use;
+// with app, that app's only.
+func (client *Client) ListTools(ctx context.Context, org, member, app string) ([]Tool, error) {
+	var answer struct {
+		Tools []Tool `json:"tools"`
+	}
+	query := url.Values{"org": {org}, "member": {member}}
+	if app != "" {
+		query.Set("app", app)
+	}
+	if err := client.do(ctx, http.MethodGet, "/v1/tools?"+query.Encode(), ToolsPurpose, nil, &answer); err != nil {
+		return nil, err
+	}
+	return answer.Tools, nil
 }
 
 func (client *Client) post(ctx context.Context, path, purpose string, body, into any) error {

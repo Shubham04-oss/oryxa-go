@@ -149,6 +149,14 @@ func (nativeStub) CallTool(context.Context, nativeclient.CallRequest) (nativecli
 
 func (nativeStub) Remove(context.Context, string, string) error { return nil }
 
+func (nativeStub) ListConnections(context.Context, string, string) ([]integrationsv1.Connection, error) {
+	return []integrationsv1.Connection{}, nil
+}
+
+func (nativeStub) ListTools(context.Context, string, string, string) ([]nativeclient.Tool, error) {
+	return nil, nil
+}
+
 func nativeEvent(status string, at time.Time) integrationsv1.Connection {
 	return integrationsv1.Connection{
 		ID: "icn_1", OrganizationID: "org_1", MemberID: "user-1", Level: integrationsv1.LevelPersonal,

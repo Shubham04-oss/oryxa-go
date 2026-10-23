@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	integrationsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/integrations/v1"
 
@@ -21,6 +22,8 @@ type Native interface {
 	Connect(ctx context.Context, request nativeclient.ConnectRequest) (string, error)
 	CallTool(ctx context.Context, request nativeclient.CallRequest) (nativeclient.CallResult, error)
 	Remove(ctx context.Context, org, connection string) error
+	ListConnections(ctx context.Context, org, member string) ([]integrationsv1.Connection, error)
+	ListTools(ctx context.Context, org, member, app string) ([]nativeclient.Tool, error)
 }
 
 // nativeLevel is the level of every connect made here: the org-level
@@ -128,10 +131,232 @@ func (s *Service) applyNative(ctx context.Context, event integrationsv1.Connecti
 	if err != nil {
 		return err
 	}
-	return s.store.ApplyNativeConnection(ctx, domain.Connection{
+	row := domain.Connection{
 		ID: id, OrganizationID: event.OrganizationID, MemberID: event.MemberID, Toolkit: toolkit,
 		Broker: domain.BrokerNative, NativeConnectionID: event.ID, Status: status, StatusReason: reason,
-	}, event.UpdatedAt.UTC())
+	}
+	at := event.UpdatedAt.UTC()
+	err = s.store.ApplyNativeConnection(ctx, row, at)
+	if errors.Is(err, domain.ErrConflict) && status == domain.ConnectionActive {
+		return s.settleNativeRace(ctx, row, at)
+	}
+	return err
+}
+
+// RemovedReplaced is why a connection was retired for a newer one to the
+// same app: apps keeps one current connection per member and app.
+const RemovedReplaced = "replaced_by_newer_connection"
+
+// settleNativeRace decides between a native connection turning active and
+// the member's other current connection to the same app, which the
+// one-current-connection index keeps from both being active. It happens when
+// a member signs in through Composio or Pipedream while a native sign-in is
+// under way, or reconnects one way while the other was expired.
+//
+// The rule: a finished connection beats one still pending, and between two
+// finished ones the newer sign-in wins: the native connection's UpdatedAt
+// against the other's ConnectedAt, a tie going to the native one. The loser
+// is revoked at its broker and its row retired as RemovedReplaced. The inputs
+// are the stored rows and the event, so a retry or a second delivery
+// decides the same way, and both steps are idempotent: a broker that no
+// longer knows the connection has already revoked it, and a retired row is
+// never changed again.
+func (s *Service) settleNativeRace(ctx context.Context, row domain.Connection, at time.Time) error {
+	current, err := s.store.Connections(ctx, row.OrganizationID, domain.ConnectionQuery{
+		MemberID: row.MemberID, Toolkit: row.Toolkit,
+		Statuses: []domain.ConnectionStatus{domain.ConnectionPending, domain.ConnectionActive},
+	})
+	if err != nil {
+		return err
+	}
+	var other *domain.Connection
+	for i := range current {
+		if !(current[i].Native() && current[i].NativeConnectionID == row.NativeConnectionID) {
+			other = &current[i]
+			break
+		}
+	}
+	if other == nil {
+		// The other one went in the meantime; trying again applies the event.
+		return s.store.ApplyNativeConnection(ctx, row, at)
+	}
+	if nativeWins(*other, at) {
+		s.logger.InfoContext(ctx, "a newer native connection replaces the member's other connection",
+			"organization_id", row.OrganizationID, "member_id", row.MemberID, "toolkit", row.Toolkit,
+			"native_connection_id", row.NativeConnectionID, "replaced_connection_id", other.ID, "replaced_broker", other.Broker)
+		if err := s.remove(ctx, *other, RemovedReplaced); err != nil {
+			return err
+		}
+		return s.store.ApplyNativeConnection(ctx, row, at)
+	}
+	s.logger.InfoContext(ctx, "a native connection loses to the member's newer connection",
+		"organization_id", row.OrganizationID, "member_id", row.MemberID, "toolkit", row.Toolkit,
+		"native_connection_id", row.NativeConnectionID, "kept_connection_id", other.ID, "kept_broker", other.Broker)
+	if s.native == nil {
+		return fmt.Errorf("revoke a replaced native connection: the integrations service is not configured: %w", domain.ErrUnavailable)
+	}
+	if err := s.native.Remove(ctx, row.OrganizationID, row.NativeConnectionID); err != nil && !errors.Is(err, nativeclient.ErrNotFound) {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return fmt.Errorf("revoke a replaced native connection: %w", domain.ErrUnavailable)
+	}
+	row.Status, row.StatusReason = domain.ConnectionRemoved, RemovedReplaced
+	return s.store.ApplyNativeConnection(ctx, row, at)
+}
+
+// nativeWins says a native connection that became active at at replaces
+// other; see settleNativeRace.
+func nativeWins(other domain.Connection, at time.Time) bool {
+	if other.Status != domain.ConnectionActive || other.ConnectedAt == nil {
+		return true
+	}
+	return !at.Before(*other.ConnectedAt)
+}
+
+// nativeReconcileEvery is how often the maintenance sweep reconciles.
+const nativeReconcileEvery = time.Hour
+
+// reconcileNativeOrganizations runs ReconcileNative, once an hour, for every
+// organization with a native row. It rides the maintenance sweep rather
+// than a worker of its own: it is the same kind of slow repair, every
+// replica may run it (each step is the idempotent upsert events use), and an
+// organization that fails is tried again next hour.
+func (s *Service) reconcileNativeOrganizations(ctx context.Context) {
+	if s.native == nil {
+		return
+	}
+	if started := s.now(); s.nativeReconciledAt.IsZero() || started.Sub(s.nativeReconciledAt) >= nativeReconcileEvery {
+		s.nativeReconciledAt = started
+	} else {
+		return
+	}
+	organizations, err := s.store.NativeOrganizations(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			s.logger.ErrorContext(ctx, "list organizations with native connections", "error", err)
+		}
+		return
+	}
+	for _, organizationID := range organizations {
+		if err := s.ReconcileNative(ctx, organizationID); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			s.logger.ErrorContext(ctx, "reconcile native connections", "organization_id", organizationID, "error", err)
+		}
+	}
+}
+
+// ReconcileNative repairs an organization's native rows from the integrations
+// service's own list, for events apps missed: each listed personal
+// connection is applied through the same upsert its events go through, so a
+// row is made, or its status brought up to date, unless a newer event was
+// applied already; and a row whose connection the list no longer has is
+// retired, as its removed event would have.
+//
+// The rows are read before the list is, so a connection made after the list
+// was read cannot be retired for being missing from it.
+func (s *Service) ReconcileNative(ctx context.Context, organizationID string) error {
+	if s.native == nil {
+		return nil
+	}
+	rows, err := s.store.Connections(ctx, organizationID, domain.ConnectionQuery{})
+	if err != nil {
+		return err
+	}
+	listed, err := s.native.ListConnections(ctx, organizationID, "")
+	if err != nil {
+		return fmt.Errorf("list the organization's native connections: %w", err)
+	}
+	live := make(map[string]bool, len(listed))
+	var failures []error
+	for _, connection := range listed {
+		live[connection.ID] = true
+		if connection.OrganizationID != organizationID || connection.Level != integrationsv1.LevelPersonal {
+			continue // org-level connections have no rows yet
+		}
+		status, reason := nativeStatus(connection.Status)
+		if err := s.applyNative(ctx, connection, status, reason); err != nil {
+			failures = append(failures, fmt.Errorf("apply native connection %s: %w", connection.ID, err))
+		}
+	}
+	at := s.now().UTC()
+	for _, row := range rows {
+		if !row.Native() || live[row.NativeConnectionID] {
+			continue
+		}
+		s.logger.InfoContext(ctx, "a native connection the integrations service no longer has is retired",
+			"connection_id", row.ID, "organization_id", organizationID, "native_connection_id", row.NativeConnectionID)
+		row.Status, row.StatusReason = domain.ConnectionRemoved, ""
+		if err := s.store.ApplyNativeConnection(ctx, row, at); err != nil {
+			failures = append(failures, fmt.Errorf("retire native connection %s: %w", row.NativeConnectionID, err))
+		}
+	}
+	return errors.Join(failures...)
+}
+
+// nativeToolViews answers the tools of a member's active native connection
+// to toolkit, as the integrations service's manifests declare them, under the
+// slugs nativeRoute runs them by. ok is false when the member has no such
+// connection, so the toolkit's tools are someone else's to answer.
+func (s *Service) nativeToolViews(ctx context.Context, organizationID, memberID, toolkit, query string, limit int) ([]ToolView, bool, error) {
+	if s.native == nil {
+		return nil, false, nil
+	}
+	connections, err := s.store.Connections(ctx, organizationID, domain.ConnectionQuery{
+		MemberID: memberID, Toolkit: toolkit, Statuses: []domain.ConnectionStatus{domain.ConnectionActive},
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if !slices.ContainsFunc(connections, domain.Connection.Native) {
+		return nil, false, nil
+	}
+	tools, err := s.native.ListTools(ctx, organizationID, memberID, toolkit)
+	switch {
+	case err == nil:
+	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+		return nil, true, err
+	default:
+		s.logger.ErrorContext(ctx, "list native tools", "toolkit", toolkit, "error", err)
+		return nil, true, fmt.Errorf("list the app's tools: the integrations service did not answer: %w", domain.ErrUnavailable)
+	}
+	search := strings.ToLower(strings.TrimSpace(query))
+	views := make([]ToolView, 0, min(len(tools), limit))
+	for _, tool := range tools {
+		if len(views) == limit {
+			break
+		}
+		slug, ok := nativeSlug(toolkit, tool)
+		if !ok {
+			continue
+		}
+		if search != "" && !strings.Contains(strings.ToLower(tool.Name), search) &&
+			!strings.Contains(strings.ToLower(tool.Description), search) {
+			continue
+		}
+		views = append(views, ToolView{
+			Tool: slug, Name: tool.Name, Description: tool.Description, Toolkit: toolkit,
+			ReadOnly: tool.Effect == "read", Destructive: tool.Effect == "delete", InputSchema: tool.InputSchema,
+		})
+	}
+	return views, true, nil
+}
+
+// nativeSlug is the slug a native tool runs under: github.list_issues is
+// GITHUB_LIST_ISSUES, the inverse of what runNativeTool sends. A tool of
+// another app, or whose name makes no slug, is not offered.
+func nativeSlug(toolkit string, tool nativeclient.Tool) (string, bool) {
+	name, ok := strings.CutPrefix(tool.Name, toolkit+".")
+	if !ok || tool.App != toolkit || name == "" {
+		return "", false
+	}
+	slug, err := domain.CheckTool(strings.ToUpper(toolkit) + "_" + strings.ToUpper(name))
+	if err != nil {
+		return "", false
+	}
+	return slug, true
 }
 
 // nativeRoute answers the route of a slug that names a tool of one of the
