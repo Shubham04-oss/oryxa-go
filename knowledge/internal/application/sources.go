@@ -239,6 +239,11 @@ func (s *Service) usableConnection(ctx context.Context, credentials authclient.C
 
 // Sources lists what an organization has asked to index. An org admin sees
 // all of it; anyone else sees what they registered.
+//
+// The query only narrows what is read; each source listed is decided by
+// mayRead, the check a single read makes, so a listing can never answer what
+// reading that source would refuse (docs/design/permissions, G3). There is
+// no paging to keep: the listing answers every match at once.
 func (s *Service) Sources(ctx context.Context, credentials authclient.Credentials, organizationID string, query domain.SourceQuery) ([]domain.Source, error) {
 	caller, err := s.caller(ctx, credentials, organizationID)
 	if err != nil {
@@ -250,8 +255,7 @@ func (s *Service) Sources(ctx context.Context, credentials authclient.Credential
 	if err != nil {
 		return nil, err
 	}
-	// A specialist lists only the sources its grant names.
-	return slices.DeleteFunc(listed, func(source domain.Source) bool { return caller.MayReadSource(source.ID) != nil }), nil
+	return slices.DeleteFunc(listed, func(source domain.Source) bool { return mayRead(caller, source) != nil }), nil
 }
 
 // mayRead is the one place every read of a source, of its runs and of its
