@@ -94,11 +94,10 @@ func deviceLogin(ctx context.Context, api string, asJSON bool, stdout io.Writer)
 	}
 	if asJSON {
 		_ = json.NewEncoder(stdout).Encode(map[string]any{"step": "login", "status": "needs_human", "next": map[string]string{
-			"action": "enter_code", "url": start.VerificationURI, "url_complete": start.VerificationURIComplete, "code": start.UserCode,
+			"action": "enter_code", "url": start.VerificationURI, "code": start.UserCode,
 		}})
 	} else {
 		fmt.Fprintf(stdout, "To sign in, open %s in any browser where you are signed in to Oryxa,\nand enter the code %s\n", start.VerificationURI, start.UserCode)
-		fmt.Fprintf(stdout, "Or open %s\n", start.VerificationURIComplete)
 		fmt.Fprintln(stdout, "Waiting for approval...")
 	}
 	flowCtx, cancel := context.WithTimeout(ctx, time.Duration(start.ExpiresIn)*time.Second)

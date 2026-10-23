@@ -29,11 +29,12 @@ function formatTime(value: string): string {
 
 /**
  * Where a member approves a CLI's device sign-in (oryxa-cli login --device).
- * It shows which device asks and what it gets before anything is granted,
- * so a code someone else sent stands out.
+ * The member types the code their own terminal shows; it is never taken from
+ * a link. It shows which device asks and what it gets before anything is
+ * granted, so a code someone else sent stands out.
  */
-export function CliDevicePage({ code: initialCode }: { code?: string }) {
-  const [code, setCode] = useState(initialCode?.trim() || "")
+export function CliDevicePage() {
+  const [code, setCode] = useState("")
   const [decided, setDecided] = useState<"approved" | "denied">()
   const session = useQuery({
     queryKey: ["auth", "session"],
@@ -186,7 +187,7 @@ function DeviceRequest({
           <dd>{device.user_code}</dd>
         </div>
         <div>
-          <dt>Device</dt>
+          <dt>Device (as it names itself, not checked)</dt>
           <dd>{device.client_name}</dd>
         </div>
         <div>

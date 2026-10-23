@@ -1,11 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router"
 import { CliDevicePage } from "@/components/auth/cli-device-page"
-import { searchToken } from "@/lib/auth/schemas"
 
 export const Route = createFileRoute("/cli/device")({
-  validateSearch: (search: Record<string, unknown>) => ({
-    code: searchToken(search.code),
-  }),
   component: CliDeviceRoute,
   head: () => ({
     meta: [
@@ -15,7 +11,8 @@ export const Route = createFileRoute("/cli/device")({
   }),
 })
 
+// The code is never taken from the link: a link with the code filled in is
+// what an attacker sends an admin, and typing it is what makes one notice.
 function CliDeviceRoute() {
-  const { code } = Route.useSearch()
-  return <CliDevicePage code={code} />
+  return <CliDevicePage />
 }

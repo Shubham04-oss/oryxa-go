@@ -80,7 +80,11 @@ function stubAuth(decide: (path: string, body: unknown) => Response) {
 describe("CliDevicePage", () => {
   it("shows which CLI asks and what it gets, then approves", async () => {
     const fetchMock = stubAuth(() => jsonResponse({ status: "approved" }))
-    renderWithRouter(() => <CliDevicePage code="HJKM-PQRT" />)
+    renderWithRouter(() => <CliDevicePage />)
+    fireEvent.change(await screen.findByLabelText("Code"), {
+      target: { value: "HJKM-PQRT" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }))
 
     expect(
       await screen.findByText("oryxa-cli on build-box (linux)")
@@ -107,7 +111,11 @@ describe("CliDevicePage", () => {
 
   it("denies", async () => {
     const fetchMock = stubAuth(() => jsonResponse({ status: "denied" }))
-    renderWithRouter(() => <CliDevicePage code="HJKM-PQRT" />)
+    renderWithRouter(() => <CliDevicePage />)
+    fireEvent.change(await screen.findByLabelText("Code"), {
+      target: { value: "HJKM-PQRT" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }))
     fireEvent.click(await screen.findByRole("button", { name: "Deny" }))
     expect(await screen.findByText(/That CLI gets nothing/)).toBeTruthy()
     expect(fetchMock).toHaveBeenCalledWith(

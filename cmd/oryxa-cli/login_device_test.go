@@ -130,10 +130,15 @@ func TestDeviceLoginPollsAtIntervalAndBacksOffOnSlowDown(t *testing.T) {
 		}
 	}
 	text := output.String()
-	for _, part := range []string{"https://app.example.com/cli/device", "HJKM-PQRT", "?code=HJKM-PQRT", "Signed in."} {
+	for _, part := range []string{"https://app.example.com/cli/device", "HJKM-PQRT", "Signed in."} {
 		if !strings.Contains(text, part) {
 			t.Errorf("output lacks %q:\n%s", part, text)
 		}
+	}
+	// The code is typed on the page, never carried in a link: a link with it
+	// filled in is what a phisher sends.
+	if strings.Contains(text, "?code=") {
+		t.Errorf("output offers a link with the code filled in:\n%s", text)
 	}
 	if !strings.HasPrefix(fake.started, "oryxa-cli") {
 		t.Errorf("client name = %q", fake.started)
