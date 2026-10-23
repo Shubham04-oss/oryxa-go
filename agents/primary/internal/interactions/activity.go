@@ -2,6 +2,7 @@ package interactions
 
 import (
 	"context"
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 	"slices"
 	"time"
 
@@ -27,7 +28,17 @@ const (
 	ActivityLeaseGiven = "lease_given"
 	// ActivityLeaseRevoked is an owner revoking one.
 	ActivityLeaseRevoked = "lease_revoked"
+	// ActivityAccessed is someone else, or one of the member's own agents,
+	// reaching a file, a collection or a source, with the rule that let it
+	// (internal/access's decision log).
+	ActivityAccessed = "accessed"
 )
+
+// Decisions reads a member's part of the access decision log;
+// *access.Log is it.
+type Decisions interface {
+	ForMember(ctx context.Context, organizationID, userID string, limit int) ([]access.Decision, error)
+}
 
 // The member's side of an activity entry.
 const (
@@ -62,6 +73,8 @@ type ActivityEntry struct {
 	// themself (result.written_by_owner): their reply, instead of their agent's
 	// answer, whether the request was pending or its agent's answer was held.
 	WrittenByOwner bool `json:"written_by_owner,omitempty"`
+	// Access is set on an accessed entry: who reached what, and why.
+	Access *access.Decision `json:"access,omitempty"`
 	// Lease is set on the two lease entries.
 	Lease *Lease `json:"lease,omitempty"`
 }
@@ -92,6 +105,15 @@ func (service *Service) Activity(ctx context.Context, actor agents.InteractionAc
 		}
 		for _, lease := range leases {
 			entries = append(entries, leaseEntries(actor, lease)...)
+		}
+	}
+	if service.decisions != nil {
+		decisions, err := service.decisions.ForMember(ctx, actor.OrganizationID, actor.UserID, query.Limit)
+		if err != nil {
+			return nil, err
+		}
+		for _, decision := range decisions {
+			entries = append(entries, accessEntry(actor, decision))
 		}
 	}
 	slices.SortStableFunc(entries, func(a, b ActivityEntry) int { return b.At.Compare(a.At) })
@@ -141,4 +163,18 @@ func leaseEntries(actor agents.InteractionActor, lease Lease) []ActivityEntry {
 		entries = append(entries, ActivityEntry{Kind: ActivityLeaseRevoked, At: *lease.RevokedAt, Role: role, WithUserID: with, RequestID: lease.RequestID, Lease: &shown})
 	}
 	return entries
+}
+
+// accessEntry is one allow from the decision log, from the member's side: the
+// owner of what was reached, or the member whose agent reached it.
+func accessEntry(actor agents.InteractionActor, decision access.Decision) ActivityEntry {
+	role, with := ActivityOwner, decision.ActorUserID
+	if decision.OwnerID != actor.UserID {
+		role, with = ActivityAsker, decision.OwnerID
+	}
+	if with == actor.UserID {
+		with = ""
+	}
+	shown := decision
+	return ActivityEntry{Kind: ActivityAccessed, At: decision.At, Role: role, WithUserID: with, Access: &shown}
 }

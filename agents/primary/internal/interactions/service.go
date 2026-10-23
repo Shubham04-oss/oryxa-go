@@ -216,6 +216,10 @@ type Config struct {
 	// one and this is nil. Without either, the ask, consent and lease methods
 	// answer ErrConsentUnavailable.
 	Consents Consents
+	// Decisions is the access decision log (internal/access): what reached a
+	// member's things and what their own agents reached. Without it the
+	// activity feed has no access entries.
+	Decisions Decisions
 	// Agents finds a member's primary agent, which CreateAsk files its
 	// requests between: managedagents.Service, which needs no member's token.
 	// Without it CreateAsk answers ErrConsentUnavailable.
@@ -245,6 +249,7 @@ type Service struct {
 	guardPolicy  GuardPolicy
 	consentGuard ConsentGuard
 	consents     Consents
+	decisions    Decisions
 	primaries    PrimaryAgents
 	tickets      *Tickets
 }
@@ -288,7 +293,7 @@ func New(config Config) (*Service, error) {
 	return &Service{
 		repository: config.Repository, directory: config.Directory, teamspaces: config.Teamspaces, tokens: config.Tokens, policy: config.Policy,
 		jev: config.Jev, jevTimeout: jevTimeout, guard: config.Guard, logger: logger, now: now,
-		guardPolicy: config.GuardPolicy, consentGuard: consentGuard, consents: consents, primaries: config.Agents, tickets: tickets,
+		guardPolicy: config.GuardPolicy, consentGuard: consentGuard, consents: consents, decisions: config.Decisions, primaries: config.Agents, tickets: tickets,
 	}, nil
 }
 
