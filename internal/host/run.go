@@ -18,6 +18,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
+	"github.com/Shubham04-oss/oryxa-go/internal/access/shadow"
+	"github.com/Shubham04-oss/oryxa-go/internal/access/spicedb"
 	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/gcpauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
@@ -166,6 +169,19 @@ func openPlatform(ctx context.Context, config Config, selected []Definition, sel
 		}
 		logger.Info("postgres connected", "extensions", database.ExtensionVersions(), "max_conns", database.Pool.Config().MaxConns)
 	}
+	// The shadow records disagreements in the access log, so it needs the
+	// database; failing to dial SpiceDB leaves it off rather than the process.
+	var comparer access.Comparer
+	var compared *shadow.Shadow
+	if database != nil {
+		compared, err = shadow.Open(spicedb.FromEnv(), access.NewLog(database.Pool, logger), logger.With("component", "access-shadow"))
+		if err != nil {
+			logger.Warn("spicedb shadow is off", "error", err)
+		} else if compared != nil {
+			comparer = compared
+			logger.Info("spicedb shadow is on", "timeout_ms", shadow.Timeout.Milliseconds())
+		}
+	}
 	platform := Platform{
 		Logger:       logger,
 		Database:     database,
@@ -175,8 +191,9 @@ func openPlatform(ctx context.Context, config Config, selected []Definition, sel
 		EventBusName: config.EventBusName,
 		EventAuth:    eventRegistry(awsConfig, config.EnforceEventSignatures, eventSigningKeys(os.Getenv, selected), logger),
 		Getenv:       Environment(os.Getenv, selected, self),
+		Shadow:       comparer,
 	}
-	return platform, func() { database.Close() }, nil
+	return platform, func() { compared.Close(); database.Close() }, nil
 }
 
 // eventRegistry builds the process's event signing identities. An event whose

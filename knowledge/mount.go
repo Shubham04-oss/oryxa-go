@@ -204,6 +204,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		// Who reached a member's sources and documents, and why, is kept in
 		// the access log every service shares (docs/design/permissions).
 		Recorder: access.NewLog(platform.Database.Pool, logger),
+		Shadow:   platform.Shadow,
 		Logger:   logger,
 	}
 	dependencies.Policy = platform.WorkspaceSettings()

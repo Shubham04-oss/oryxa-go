@@ -58,7 +58,8 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	} else {
 		logger.Warn("TEAMS_URL is not set: team-scoped files cannot be created")
 	}
-	service := application.New(store, blobs, authclient.New(config.AuthURL), teams, access.NewLog(platform.Database.Pool, logger), logger)
+	service := application.New(store, blobs, authclient.New(config.AuthURL), teams, access.NewLog(platform.Database.Pool, logger), logger).
+		WithShadow(platform.Shadow)
 
 	signer, err := platform.EventAuth.Signer(Name)
 	if err != nil {

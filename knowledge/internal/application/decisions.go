@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/access"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
@@ -43,6 +44,26 @@ func (s *Service) record(ctx context.Context, caller domain.OrgMembership, actio
 		decision.ActorAgentID, decision.ActorAgentRole = caller.AgentID, caller.AgentRole
 	}
 	s.recorder.Record(ctx, decision)
+}
+
+// compare asks SpiceDB in shadow what mayRead just decided about a source.
+func (s *Service) compare(ctx context.Context, caller domain.OrgMembership, source domain.Source, action string, err error) {
+	if s.shadow == nil {
+		return
+	}
+	if err != nil && !errors.Is(err, domain.ErrNotFound) && !errors.Is(err, domain.ErrForbidden) {
+		return
+	}
+	ask := access.Ask{
+		OrganizationID: source.OrganizationID, Service: s.config.ServiceName, Action: action,
+		ResourceKind: resourceSource, ResourceID: source.ID, UserID: caller.UserID,
+		Actor:   access.Actor{Role: caller.Role, Agent: caller.Agent, AgentRole: caller.AgentRole},
+		Limited: caller.KnowledgeLimited(),
+	}
+	if caller.Agent {
+		ask.AgentID = caller.AgentID
+	}
+	s.shadow.Compare(ctx, ask, err == nil)
 }
 
 // reason is the rule that let caller reach source, the most specific one

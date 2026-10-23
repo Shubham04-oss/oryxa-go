@@ -11,6 +11,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/integration"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/signin"
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 )
 
 // Knowledge indexes what a member's app holds by asking the app through the
@@ -70,6 +71,7 @@ func (s *Service) ownConnection(ctx context.Context, credentials authclient.Cred
 	// acting through it rather than merely seeing that it exists: the same
 	// line targets.go draws for a target. So only the connection's own member
 	// may read it, asking by hand or through an agent acting for them.
+	s.compare(ctx, caller, connection, access.ActionUse, connection.MemberID == caller.UserID)
 	if connection.MemberID != caller.UserID {
 		return domain.OrgMembership{}, domain.Connection{}, domain.ErrNotFound
 	}

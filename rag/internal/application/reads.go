@@ -40,6 +40,12 @@ func (service *Service) reads(credentials authclient.Credentials, member domain.
 // It answers the rule that let the caller in (see granted), which a single
 // read records and a listing ignores.
 func (reads *reads) mayRead(ctx context.Context, corpus domain.Corpus) (string, error) {
+	rule, err := reads.decide(ctx, corpus)
+	reads.service.compare(ctx, reads.member, corpus, access.ActionRead, err)
+	return rule, err
+}
+
+func (reads *reads) decide(ctx context.Context, corpus domain.Corpus) (string, error) {
 	member := reads.member
 	// Every read, and every write, reaches a corpus through here, so a
 	// specialist's grant is enforced once.

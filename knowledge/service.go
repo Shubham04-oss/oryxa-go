@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 	workspacepolicy "github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
@@ -100,7 +101,9 @@ type Dependencies struct {
 	// for their Activity page. A host passes access.NewLog on the shared
 	// database; nil records nothing.
 	Recorder application.Recorder
-	Logger   *slog.Logger
+	// Shadow compares access decisions with SpiceDB; nil compares nothing.
+	Shadow access.Comparer
+	Logger *slog.Logger
 }
 
 // Config is what a host tells knowledge about itself.
@@ -154,6 +157,7 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		Originals:  dependencies.Originals,
 		Judge:      dependencies.Judge,
 		Recorder:   dependencies.Recorder,
+		Shadow:     dependencies.Shadow,
 		Logger:     logger,
 	}, application.Config{
 		ServiceName: Name, FullSweepInterval: config.FullSweepInterval, OriginalsBucket: config.OriginalsBucket,

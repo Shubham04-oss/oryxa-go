@@ -129,6 +129,7 @@ type Service struct {
 	// decisions keeps who was let into what, and by which rule; nil records
 	// nothing. See decisions.go.
 	decisions Recorder
+	shadow    access.Comparer
 	logger    *slog.Logger
 	now       func() time.Time
 }
@@ -788,6 +789,12 @@ func (service *Service) lookup(ctx context.Context, organizationID, reference st
 // to a team corpus without asking teams, exactly as mayRead lets them read it.
 // It answers the rule that allowed the write (see granted).
 func (service *Service) mayWrite(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, corpus domain.Corpus) (string, error) {
+	rule, err := service.decideWrite(ctx, credentials, member, corpus)
+	service.compare(ctx, member, corpus, access.ActionWrite, err)
+	return rule, err
+}
+
+func (service *Service) decideWrite(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, corpus domain.Corpus) (string, error) {
 	switch corpus.Scope {
 	case domain.ScopeOrganization:
 		if member.ActsAsAdmin() {
@@ -819,6 +826,12 @@ func (service *Service) mayWrite(ctx context.Context, credentials authclient.Cre
 // removing one document from it. It answers the rule that allowed it (see
 // granted).
 func (service *Service) mayDelete(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, corpus domain.Corpus) (string, error) {
+	rule, err := service.decideDelete(ctx, credentials, member, corpus)
+	service.compare(ctx, member, corpus, access.ActionDelete, err)
+	return rule, err
+}
+
+func (service *Service) decideDelete(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, corpus domain.Corpus) (string, error) {
 	if corpus.Scope == domain.ScopeMember && corpus.MemberID == member.UserID {
 		return granted(member, access.ReasonOwner), nil
 	}
