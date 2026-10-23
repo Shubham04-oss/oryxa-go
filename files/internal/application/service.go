@@ -20,6 +20,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/files/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/files/internal/blob"
 	"github.com/Shubham04-oss/oryxa-go/files/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 )
 
 const downloadURLTTL = time.Minute
@@ -41,6 +42,12 @@ type Directory interface {
 
 type Teams interface {
 	Team(ctx context.Context, organizationID, teamID string, credentials authclient.Credentials) (domain.TeamAccess, error)
+}
+
+// Recorder keeps the access decisions files makes, for the member's Activity
+// page; *access.Log is one. It never fails the caller, so it returns nothing.
+type Recorder interface {
+	Record(ctx context.Context, decision access.Decision)
 }
 
 type CreateInput struct {
@@ -71,15 +78,17 @@ type Service struct {
 	blobs     blob.Store
 	directory Directory
 	teams     Teams
+	decisions Recorder
 	logger    *slog.Logger
 	now       func() time.Time
 }
 
-func New(store Store, blobs blob.Store, directory Directory, teams Teams, logger *slog.Logger) *Service {
+// New builds the service. A nil decisions records nothing.
+func New(store Store, blobs blob.Store, directory Directory, teams Teams, decisions Recorder, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Service{store: store, blobs: blobs, directory: directory, teams: teams, logger: logger, now: time.Now}
+	return &Service{store: store, blobs: blobs, directory: directory, teams: teams, decisions: decisions, logger: logger, now: time.Now}
 }
 
 // InputReader supplies a create's input once the caller is known. Reading an
@@ -121,24 +130,25 @@ func (s *Service) Create(ctx context.Context, credentials authclient.Credentials
 	if err := purpose.Fits(scope); err != nil {
 		return domain.Object{}, err
 	}
-	access := input.Access
-	if access == "" {
-		access = domain.AccessMembers
+	level := input.Access
+	if level == "" {
+		level = domain.AccessMembers
 	}
-	if !access.Valid() {
+	if !level.Valid() {
 		return domain.Object{}, fmt.Errorf("access is not allowed: %w", domain.ErrInvalid)
 	}
 	if purpose == domain.PurposeBillingAttachment {
-		access = domain.AccessAdmins
+		level = domain.AccessAdmins
 	}
-	if access == domain.AccessAdmins && (scope != domain.ScopeOrganization || !org.ActsAsAdmin()) {
+	if level == domain.AccessAdmins && (scope != domain.ScopeOrganization || !org.ActsAsAdmin()) {
 		return domain.Object{}, domain.ErrForbidden
 	}
 	teamID, memberID, err := domain.Place(scope, input.TeamID, org.UserID)
 	if err != nil {
 		return domain.Object{}, err
 	}
-	if err := s.mayCreate(ctx, credentials, org, scope, teamID); err != nil {
+	teams := s.teamLookup(ctx, credentials, org, organizationID)
+	if err := s.mayCreate(org, teams, scope, teamID); err != nil {
 		return domain.Object{}, err
 	}
 	if err := domain.Size(len(input.Content)); err != nil {
@@ -163,7 +173,7 @@ func (s *Service) Create(ctx context.Context, credentials authclient.Credentials
 		Filename:       filename,
 		ContentType:    contentType,
 		Purpose:        purpose,
-		Access:         access,
+		Access:         level,
 		SizeBytes:      int64(len(input.Content)),
 		SHA256:         hex.EncodeToString(sum[:]),
 		CreatedBy:      org.UserID,
@@ -198,6 +208,7 @@ func (s *Service) Create(ctx context.Context, credentials authclient.Credentials
 		_ = s.blobs.Delete(ctx, key)
 		return domain.Object{}, err
 	}
+	s.record(ctx, org, teams, object, access.ActionWrite)
 	return object, nil
 }
 
@@ -224,7 +235,8 @@ func (s *Service) List(ctx context.Context, credentials authclient.Credentials, 
 		}
 	}
 	// The query only narrows by placement; whether each file it returns is
-	// listed is canSee's to say, exactly as for Get.
+	// listed is canSee's to say, exactly as for Get. A list records no
+	// decisions: opening a file does, at Get.
 	objects, err := s.store.Objects(ctx, organizationID, s.now().UTC(), domain.ObjectQuery{
 		Scope:       filter.Scope,
 		TeamID:      filter.TeamID,
@@ -260,9 +272,12 @@ func (s *Service) Get(ctx context.Context, credentials authclient.Credentials, o
 	if err != nil {
 		return domain.Object{}, conceal(err)
 	}
-	if err := s.canSee(org, s.teamLookup(ctx, credentials, org, organizationID), object); err != nil {
+	teams := s.teamLookup(ctx, credentials, org, organizationID)
+	if err := s.canSee(org, teams, object); err != nil {
 		return domain.Object{}, err
 	}
+	// Content and DownloadURL read through here, so each records this once.
+	s.record(ctx, org, teams, object, access.ActionRead)
 	return object, nil
 }
 
@@ -314,7 +329,11 @@ func (s *Service) Delete(ctx context.Context, credentials authclient.Credentials
 	if err := s.blobs.Delete(ctx, object.Key()); err != nil && !errors.Is(err, domain.ErrNotFound) {
 		return err
 	}
-	return s.store.DeleteObject(ctx, organizationID, object.ID, deleted)
+	if err := s.store.DeleteObject(ctx, organizationID, object.ID, deleted); err != nil {
+		return err
+	}
+	s.record(ctx, org, teams, object, access.ActionDelete)
+	return nil
 }
 
 func (s *Service) OrganizationCreated(ctx context.Context, data autheventsv1.OrganizationCreated) error {
@@ -382,7 +401,7 @@ func (s *Service) TeamDeleted(ctx context.Context, data teamseventsv1.TeamDelete
 	})
 }
 
-func (s *Service) mayCreate(ctx context.Context, credentials authclient.Credentials, org domain.OrgMembership, scope domain.Scope, teamID string) error {
+func (s *Service) mayCreate(org domain.OrgMembership, teams teamLookup, scope domain.Scope, teamID string) error {
 	// A specialist writes only where its grant lets it read, so it can read
 	// back what it stores. A team outside the grant is not found, as one its
 	// member is not on would be; its member's own or the organization's
@@ -402,11 +421,90 @@ func (s *Service) mayCreate(ctx context.Context, credentials authclient.Credenti
 		}
 		return nil
 	case domain.ScopeTeam:
-		_, err := s.teamAccess(ctx, credentials, org, org.OrganizationID, teamID)
+		_, err := teams(teamID)
 		return err
 	default:
 		return fmt.Errorf("scope is not allowed: %w", domain.ErrInvalid)
 	}
+}
+
+// record keeps one allowed decision on a single file. Lists don't call it.
+func (s *Service) record(ctx context.Context, org domain.OrgMembership, teams teamLookup, object domain.Object, action string) {
+	if s.decisions == nil {
+		return
+	}
+	var ownerID string
+	if object.Scope == domain.ScopeMember {
+		ownerID = object.MemberID
+	}
+	var agentID, agentRole string
+	if org.Agent {
+		agentID, agentRole = org.AgentID, org.AgentRole
+	}
+	s.decisions.Record(ctx, access.Decision{
+		OrganizationID: object.OrganizationID,
+		Service:        "files",
+		Action:         action,
+		ResourceKind:   "file",
+		ResourceID:     object.ID,
+		OwnerID:        ownerID,
+		ActorUserID:    org.UserID,
+		ActorAgentID:   agentID,
+		ActorAgentRole: agentRole,
+		Reason:         reason(org, teams, object, action),
+	})
+}
+
+// reason names the rule that let the caller act on object, once canSee (and
+// canDelete or mayCreate) allowed it: the most specific rule that was
+// actually needed, taken in this order.
+//
+//  1. grant: a specialist whose grant names some file scopes rather than
+//     all. Its grant named this one, and that is the narrowest thing that let
+//     it in, whatever its member's own standing.
+//  2. owner: the caller's own member file, or, to delete, a member or team
+//     file they uploaded (canDelete allows a creator).
+//  3. organization: an organization file every member may read. Writing or
+//     deleting one, or reading one only admins may, is org_admin's.
+//  4. team_member / team_admin: the caller's own place on the file's team;
+//     team_admin when managing the team was needed (deleting a teammate's
+//     file) or when the caller sees the team as its admin without being on it.
+//  5. org_admin: an owner's or admin's own session reaching what none of the
+//     above gives: another member's file, an admin-only or organization
+//     write, and every team's files. canSee never asks teams about an admin's
+//     own session, so an admin's team file is org_admin even when they are on
+//     the team.
+//
+// An agent never acts as an admin, so 5 is only ever a person's own session.
+func reason(org domain.OrgMembership, teams teamLookup, object domain.Object, action string) string {
+	if org.FilesLimited() {
+		return access.ReasonGrant
+	}
+	creator := action == access.ActionDelete && object.CreatedBy == org.UserID
+	switch object.Scope {
+	case domain.ScopeMember:
+		if object.MemberID == org.UserID || creator {
+			return access.ReasonOwner
+		}
+	case domain.ScopeOrganization:
+		if action == access.ActionRead && object.EffectiveAccess() == domain.AccessMembers {
+			return access.ReasonOrganization
+		}
+	case domain.ScopeTeam:
+		if creator {
+			return access.ReasonOwner
+		}
+		if org.ActsAsAdmin() {
+			return access.ReasonOrgAdmin
+		}
+		// Answered already, for the check this follows, so it asks nobody.
+		team, _ := teams(object.TeamID)
+		if action == access.ActionDelete || (team.TeamAdmin && !team.Member) {
+			return access.ReasonTeamAdmin
+		}
+		return access.ReasonTeamMember
+	}
+	return access.ReasonOrgAdmin
 }
 
 // canSee is the one place every read of a file, its delete, and the list

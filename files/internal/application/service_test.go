@@ -17,7 +17,7 @@ import (
 )
 
 func testService(store Store, blobs blob.Store) *Service {
-	service := New(store, blobs, fakeDirectory{}, newFakeTeams(), nil)
+	service := New(store, blobs, fakeDirectory{}, newFakeTeams(), nil, nil)
 	service.now = func() time.Time { return time.Date(2026, time.September, 14, 12, 0, 0, 0, time.UTC) }
 	return service
 }
