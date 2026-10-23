@@ -338,12 +338,12 @@ func TestDeviceEndpointsAreRateLimitedPerPeer(t *testing.T) {
 		}
 	}
 	start := startDevice(t, server, "192.0.2.21:1")
-	for i := 0; i < 31; i++ {
+	for i := 0; i < 61; i++ {
 		w, _ := pollDevice(server, start.DeviceCode, "192.0.2.22:1")
-		if i < 30 && w.Code != http.StatusBadRequest {
+		if i < 60 && w.Code != http.StatusBadRequest {
 			t.Fatal(i, w.Code)
 		}
-		if i == 30 && w.Code != http.StatusTooManyRequests {
+		if i == 60 && w.Code != http.StatusTooManyRequests {
 			t.Fatal("unbounded polling", w.Code)
 		}
 	}
@@ -381,5 +381,38 @@ func TestDeviceClientNameIsBounded(t *testing.T) {
 	}
 	if got := deviceClientName(strings.Repeat("é", 100)); got != strings.Repeat("é", 80) {
 		t.Fatal(len(got))
+	}
+}
+
+func TestDevicePeerBelievesCloudflareOnlyThroughTheLocalTunnel(t *testing.T) {
+	for _, test := range []struct{ remote, header, want string }{
+		{"127.0.0.1:40000", "198.51.100.7", "198.51.100.7"},
+		{"[::1]:40000", "2001:db8::1", "2001:db8::1"},
+		{"127.0.0.1:40000", "not an address", "127.0.0.1"},
+		{"127.0.0.1:40000", "", "127.0.0.1"},
+		{"192.0.2.1:40000", "198.51.100.7", "192.0.2.1"},
+	} {
+		r := httptest.NewRequest(http.MethodPost, "/v1/auth/cli/device", nil)
+		r.RemoteAddr = test.remote
+		if test.header != "" {
+			r.Header.Set("CF-Connecting-IP", test.header)
+		}
+		if got := devicePeer(r); got != test.want {
+			t.Errorf("devicePeer(%s, %q) = %q, want %q", test.remote, test.header, got, test.want)
+		}
+	}
+	// Through the tunnel, two clients have two budgets and see their own address.
+	server, _, _ := deviceServer(t)
+	for _, client := range []string{"198.51.100.1", "198.51.100.2"} {
+		for i := 0; i < 10; i++ {
+			r := httptest.NewRequest(http.MethodPost, "/v1/auth/cli/device", nil)
+			r.RemoteAddr = "127.0.0.1:40000"
+			r.Header.Set("CF-Connecting-IP", client)
+			w := httptest.NewRecorder()
+			server.ServeHTTP(w, r)
+			if w.Code != http.StatusOK {
+				t.Fatal(client, i, w.Code)
+			}
+		}
 	}
 }

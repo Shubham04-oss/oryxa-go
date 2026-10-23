@@ -117,7 +117,8 @@ type Server struct {
 	patterns           []string
 	cliChallengeLimits cliChallengeLimiter
 	cliDeviceLimits    cliChallengeLimiter
-	// A polling CLI asks every five seconds or more, so twelve a minute.
+	// A polling CLI asks every five seconds or more, so twelve a minute;
+	// a few may share an office's address.
 	cliPollLimits cliChallengeLimiter
 	// Looking up, approving and denying a user code: a member needs two.
 	cliDecisionLimits cliChallengeLimiter
@@ -141,7 +142,7 @@ func New(verifier accessTokenVerifier, oauth authFlow, passwords passwordAuth, s
 		config:         config,
 		allowedOrigins: make(map[string]struct{}),
 		mux:            http.NewServeMux(),
-		cliPollLimits:  cliChallengeLimiter{perPeer: 30, perMinute: 3000},
+		cliPollLimits:  cliChallengeLimiter{perPeer: 60, perMinute: 6000},
 	}
 	for _, origin := range config.AllowedOrigins {
 		if parsed, err := url.Parse(origin); err == nil && parsed.Scheme != "" && parsed.Host != "" {

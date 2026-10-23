@@ -34,7 +34,7 @@ func (server *Server) cliDevice(writer http.ResponseWriter, request *http.Reques
 		writeError(writer, http.StatusForbidden, "origin is not allowed")
 		return
 	}
-	if !server.cliDeviceLimits.allow(request.RemoteAddr, time.Now()) {
+	if !server.cliDeviceLimits.allow(devicePeer(request), time.Now()) {
 		server.handleError(writer, domain.ErrRateLimited)
 		return
 	}
@@ -52,7 +52,7 @@ func (server *Server) cliDevice(writer http.ResponseWriter, request *http.Reques
 		DeviceCodeHash: clisession.Hash(deviceCode),
 		UserCodeHash:   clisession.Hash(userCode),
 		ClientName:     deviceClientName(input.ClientName),
-		ClientAddress:  peerHost(request.RemoteAddr),
+		ClientAddress:  devicePeer(request),
 		ExpiresAt:      time.Now().UTC().Add(clisession.DeviceTTL),
 		Interval:       clisession.DeviceInterval,
 	}
@@ -84,7 +84,7 @@ func (server *Server) cliDeviceToken(writer http.ResponseWriter, request *http.R
 		writeError(writer, http.StatusForbidden, "device tokens are for native clients")
 		return
 	}
-	if !server.cliPollLimits.allow(request.RemoteAddr, time.Now()) {
+	if !server.cliPollLimits.allow(devicePeer(request), time.Now()) {
 		server.handleError(writer, domain.ErrRateLimited)
 		return
 	}
@@ -131,7 +131,7 @@ func (server *Server) readUserCode(writer http.ResponseWriter, request *http.Req
 		writeError(writer, http.StatusNotFound, "CLI device sign-in is not configured")
 		return "", false
 	}
-	if !server.cliDecisionLimits.allow(request.RemoteAddr, time.Now()) {
+	if !server.cliDecisionLimits.allow(devicePeer(request), time.Now()) {
 		server.handleError(writer, domain.ErrRateLimited)
 		return "", false
 	}
@@ -232,10 +232,19 @@ func deviceClientName(name string) string {
 	return name
 }
 
-func peerHost(remote string) string {
-	host, _, err := net.SplitHostPort(remote)
+// devicePeer is the client address device routes limit and show. In
+// production both hosts reach auth through a cloudflared sidecar on
+// localhost, so every peer is loopback; only then is Cloudflare's own
+// CF-Connecting-IP believed. A caller anywhere else cannot choose its key.
+func devicePeer(request *http.Request) string {
+	host, _, err := net.SplitHostPort(request.RemoteAddr)
 	if err != nil {
-		return remote
+		host = request.RemoteAddr
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		if forwarded := net.ParseIP(strings.TrimSpace(request.Header.Get("CF-Connecting-IP"))); forwarded != nil {
+			return forwarded.String()
+		}
 	}
 	return host
 }
