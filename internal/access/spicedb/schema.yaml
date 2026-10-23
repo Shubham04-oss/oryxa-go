@@ -1,0 +1,124 @@
+# Pins schema.zed's answers. Run: zed validate internal/access/spicedb/schema.yaml
+#
+# Acme: Maya is an admin and an executive and manages Sam; Ann is an
+# executive Sam "manages" on paper; Eng has a Payments subteam; Sam has a
+# primary agent and a research specialist. Lee is a plain member, Olu the
+# owner, and Zed is in the org but not the org chart.
+schemaFile: "./schema.zed"
+relationships: |-
+  org:acme#owner@member:olu
+  org:acme#admin@member:maya
+  org:acme#member@member:sam
+  org:acme#member@member:lee
+  org:acme#member@member:ann
+  org:acme#member@member:zed
+  org:acme#executive@member:maya
+  org:acme#executive@member:ann
+
+  member:maya#chart@org:acme
+  member:maya#exec_of@org:acme
+  member:ann#chart@org:acme
+  member:ann#exec_of@org:acme
+  member:sam#chart@org:acme
+  member:lee#chart@org:acme
+  member:sam#manager@member:maya
+  member:lee#manager@member:sam
+  member:ann#manager@member:sam
+
+  team:eng#org@org:acme
+  team:eng#lead@member:maya
+  team:eng#member@member:sam
+  team:payments#org@org:acme
+  team:payments#parent@team:eng
+  team:payments#member@member:lee
+
+  corpus:cor_eng#org@org:acme
+  corpus:cor_eng#team@team:eng
+  corpus:cor_sam#org@org:acme
+  corpus:cor_sam#owner@member:sam
+  corpus:cor_handbook#org@org:acme
+  corpus:cor_handbook#everyone@org:acme
+  corpus:cor_handbook#created_by@member:lee
+  corpus:cor_sam#granted@agent:agt_sam_research
+
+  file:f_lee#org@org:acme
+  file:f_lee#owner@member:lee
+  file:f_board#org@org:acme
+  file:f_board#admins_only@org:acme
+
+  agent:agt_sam#acts_for@member:sam
+  agent:agt_sam_research#acts_for@member:sam
+  connection:con_sam_gmail#owner@member:sam
+  connection:con_sam_gmail#granted@agent:agt_sam_research
+
+  source:src_sam#org@org:acme
+  source:src_sam#created_by@member:sam
+
+  member:sam#lease@member:lee[in_thread:{"channel":"C1","thread":"171.2"}][expiration:2099-01-01T00:00:00Z]
+
+  request:int_1#requester@agent:agt_lee
+  request:int_1#target@member:sam
+  request:int_1#target_agent@agent:agt_sam
+assertions:
+  assertTrue:
+    # Owners read their own, members read team and org corpora
+    - corpus:cor_sam#read_member_reach@member:sam
+    - corpus:cor_eng#read_member_reach@member:sam
+    - corpus:cor_handbook#read_member_reach@member:lee
+    # An admin's own session reaches everything, through the admin arrow
+    - corpus:cor_sam#read@member:maya
+    - file:f_lee#read@member:olu
+    - file:f_board#read@member:maya
+    # The team lead manages the team and deletes its corpora
+    - team:eng#manage@member:maya
+    - corpus:cor_eng#delete_member_reach@member:maya
+    # The creator of an org corpus may delete it
+    - corpus:cor_handbook#delete_member_reach@member:lee
+    - source:src_sam#manage@member:sam
+    - source:src_sam#manage@member:maya
+    # Specialist grants
+    - corpus:cor_sam#granted@agent:agt_sam_research
+    - connection:con_sam_gmail#granted@agent:agt_sam_research
+    - connection:con_sam_gmail#use@member:sam
+    # Requests
+    - request:int_1#read@agent:agt_lee
+    - request:int_1#decide@member:sam
+    - request:int_1#decide@agent:agt_sam
+    # Above: the chain and executives
+    - member:sam#outranked_by@member:maya
+    - member:lee#outranked_by@member:sam
+    - member:lee#outranked_by@member:maya
+    - member:sam#outranked_by@member:ann
+  assertCaveated:
+    - member:sam#access_without_asking@member:lee
+  assertFalse:
+    # The agent rule: member-reach permissions carry no admin arrow, so an
+    # agent acting for an admin gets a member's reach
+    - corpus:cor_sam#read_member_reach@member:maya
+    - file:f_lee#read_member_reach@member:olu
+    - file:f_board#read_member_reach@member:maya
+    - source:src_sam#manage_member_reach@member:maya
+    # Only an admin reads an admins-only file
+    - file:f_board#read@member:lee
+    - corpus:cor_sam#read@member:lee
+    # Team reach is not inherited down the tree (G5 stays as today)
+    - corpus:cor_eng#read@member:lee
+    - team:payments#manage@member:sam
+    # A team member does not manage the team or delete its corpora
+    - team:eng#manage@member:sam
+    - corpus:cor_eng#delete@member:sam
+    # A grant names one agent, not its sibling
+    - corpus:cor_sam#granted@agent:agt_sam
+    - connection:con_sam_gmail#use@agent:agt_sam_research
+    # Requests: the requester reads but does not decide
+    - request:int_1#decide@agent:agt_lee
+    - request:int_1#read@member:lee
+    # Above: nobody outranks an executive, executives don't outrank each
+    # other, the chart's edge from Sam to Ann counts for nothing, and a person
+    # the chart leaves out is above and below nobody
+    - member:ann#outranked_by@member:sam
+    - member:ann#outranked_by@member:maya
+    - member:maya#outranked_by@member:ann
+    - member:zed#outranked_by@member:maya
+    - member:sam#outranked_by@member:zed
+    - member:maya#outranked_by@member:maya

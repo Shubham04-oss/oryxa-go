@@ -126,6 +126,12 @@ jobs:
         run: go build ./...
       - name: Vet
         run: go vet ./...
+      - name: SpiceDB schema
+        # schema.yaml pins what the permissions schema answers; a change that
+        # moves an answer must change the assertion with it.
+        run: |
+          docker run --rm -v "$PWD/internal/access/spicedb:/schema:ro" \
+            authzed/zed:v1.2.1 validate /schema/schema.yaml
       - name: Every event publisher has a signing key
         # A service that signs its events without a KMS key (keys.tf) signs
         # with one that dies at each restart, and once
