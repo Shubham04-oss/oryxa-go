@@ -11,7 +11,8 @@
 # none (deploy/README.md, "The Slack bot"). Values go from the file, or the
 # prompt, to AWS on stdin; nothing is printed. The Cognito agent client's
 # secret and Composio's webhook secret are stored by the scripts that create
-# them (provision-app.sh, composio-webhook.sh).
+# them (provision-app.sh, composio-webhook.sh). SPICEDB_PRESHARED_KEY and
+# INTEGRATIONS_EGRESS_KEYS are made here, once.
 
 source "$(dirname "$0")/lib.sh"
 load_environment
@@ -209,4 +210,17 @@ elif secret_has_value "$egress_secret"; then
 else
   printf '{"current":"k1","keys":{"k1":"%s"}}' "$(openssl rand -hex 32)" | put_secret "$egress_secret"
   step "made and stored INTEGRATIONS_EGRESS_KEYS"
+fi
+
+# SpiceDB's preshared key (deploy/production/spicedb.tf), made once and then
+# left: a new one stops every oryxa task's checks until it restarts. Its
+# container exists only while spicedb_enabled is on.
+spicedb_secret=$(secret_id spicedb-preshared-key)
+if ! secret_exists "$spicedb_secret"; then
+  step "SpiceDB skipped: its secret's container does not exist yet (spicedb_enabled, then tofu apply in deploy/production)"
+elif secret_has_value "$spicedb_secret"; then
+  step "SPICEDB_PRESHARED_KEY is stored already: left as it is"
+else
+  openssl rand -hex 32 | tr -d '\n' | put_secret "$spicedb_secret"
+  step "made and stored SPICEDB_PRESHARED_KEY"
 fi
