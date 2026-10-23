@@ -236,6 +236,27 @@ func (document Document) VisibleTo(member OrgMembership) bool {
 	}
 }
 
+// DocumentAccessLevels is every access label a stored document can carry.
+var DocumentAccessLevels = []DocumentAccess{AccessMembers, AccessAdmins}
+
+// ReadableAccess is the access labels VisibleTo lets member read, so a query
+// that pre-filters documents in SQL keeps exactly the rows VisibleTo would.
+func ReadableAccess(member OrgMembership) []DocumentAccess {
+	var readable []DocumentAccess
+	for _, access := range DocumentAccessLevels {
+		if (Document{Access: access}).VisibleTo(member) {
+			readable = append(readable, access)
+		}
+	}
+	return readable
+}
+
+// SeesAdminOnlyDocuments reports whether VisibleTo lets member read an
+// admin-only document, for the counts and searches that filter in SQL.
+func (membership OrgMembership) SeesAdminOnlyDocuments() bool {
+	return Document{Access: AccessAdmins}.VisibleTo(membership)
+}
+
 // HasOriginal reports whether a document was indexed with no extracted text
 // of its own — its bytes live in S3 instead, for a backend that parses them
 // itself to read.

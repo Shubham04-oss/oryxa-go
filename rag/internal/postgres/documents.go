@@ -322,10 +322,15 @@ func decodeDocumentCursor(cursor string) (documentCursor, error) {
 // returns the first page. Passing back the cursor a page returned continues
 // the listing from exactly where that page ended; the returned cursor is
 // empty once there is nothing more to read, which is what tells a caller to
-// stop asking.
-func (store *Store) Documents(ctx context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int, includeAdminOnly bool) ([]domain.Document, string, error) {
-	statement := `SELECT ` + documentColumns + ` FROM rag_documents WHERE organization_id = $1 AND corpus_id = $2 AND ($3 OR access = 'members')`
-	arguments := []any{organizationID, corpusID, includeAdminOnly}
+// stop asking. Only documents carrying one of the access labels named are
+// read; the application names those VisibleTo allows (domain.ReadableAccess).
+func (store *Store) Documents(ctx context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int, access []domain.DocumentAccess) ([]domain.Document, string, error) {
+	labels := make([]string, 0, len(access))
+	for _, label := range access {
+		labels = append(labels, string(label))
+	}
+	statement := `SELECT ` + documentColumns + ` FROM rag_documents WHERE organization_id = $1 AND corpus_id = $2 AND access = ANY($3)`
+	arguments := []any{organizationID, corpusID, labels}
 	if status != "" {
 		arguments = append(arguments, string(status))
 		statement += fmt.Sprintf(` AND status = $%d`, len(arguments))

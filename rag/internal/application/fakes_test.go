@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -42,27 +43,44 @@ func grantedCreds(userID string, corpora ...string) authclient.Credentials {
 	return authclient.Credentials{Authorization: "Bearer " + agentTokenPrefix + userID + ";corpora=" + strings.Join(corpora, ",")}
 }
 
-type fakeDirectory struct{}
+// roleCreds is an agent's token naming its role (primary, specialist or
+// organization). A nil grant is a token without the field, which is all.
+func roleCreds(userID, role string, grant []string) authclient.Credentials {
+	token := "Bearer " + agentTokenPrefix + userID + ";role=" + role
+	if grant != nil {
+		token += ";corpora=" + strings.Join(grant, ",")
+	}
+	return authclient.Credentials{Authorization: token}
+}
 
-func (fakeDirectory) Membership(_ context.Context, organizationID string, credentials authclient.Credentials) (domain.OrgMembership, error) {
+// fakeDirectory answers for testOrganization, or for organization when it is
+// set, so a test against a shared database can use an organization of its own.
+type fakeDirectory struct{ organization string }
+
+func (directory fakeDirectory) Membership(_ context.Context, organizationID string, credentials authclient.Credentials) (domain.OrgMembership, error) {
+	organization := cmp.Or(directory.organization, testOrganization)
 	token, agent := strings.CutPrefix(strings.TrimPrefix(credentials.Authorization, "Bearer "), agentTokenPrefix)
 	token, granted, limited := strings.Cut(token, ";corpora=")
+	token, role, named := strings.Cut(token, ";role=")
 	people := map[string]domain.OrgMembership{
-		"user-owner":    {OrganizationID: testOrganization, OrganizationName: "Acme", UserID: "user-owner", Email: "owner@example.com", Role: domain.OrgRoleOwner},
-		"user-admin":    {OrganizationID: testOrganization, OrganizationName: "Acme", UserID: "user-admin", Email: "admin@example.com", Role: domain.OrgRoleAdmin},
-		"user-creator":  {OrganizationID: testOrganization, OrganizationName: "Acme", UserID: "user-creator", Email: "creator@example.com", Role: domain.OrgRoleMember},
-		"user-teammate": {OrganizationID: testOrganization, OrganizationName: "Acme", UserID: "user-teammate", Email: "teammate@example.com", Role: domain.OrgRoleMember},
-		"user-teamlead": {OrganizationID: testOrganization, OrganizationName: "Acme", UserID: "user-teamlead", Email: "teamlead@example.com", Role: domain.OrgRoleMember},
-		"user-outsider": {OrganizationID: testOrganization, OrganizationName: "Acme", UserID: "user-outsider", Email: "outsider@example.com", Role: domain.OrgRoleMember},
-		"user-badrole":  {OrganizationID: testOrganization, OrganizationName: "Acme", UserID: "user-badrole", Email: "badrole@example.com", Role: domain.OrgRole("pending")},
+		"user-owner":    {OrganizationID: organization, OrganizationName: "Acme", UserID: "user-owner", Email: "owner@example.com", Role: domain.OrgRoleOwner},
+		"user-admin":    {OrganizationID: organization, OrganizationName: "Acme", UserID: "user-admin", Email: "admin@example.com", Role: domain.OrgRoleAdmin},
+		"user-creator":  {OrganizationID: organization, OrganizationName: "Acme", UserID: "user-creator", Email: "creator@example.com", Role: domain.OrgRoleMember},
+		"user-teammate": {OrganizationID: organization, OrganizationName: "Acme", UserID: "user-teammate", Email: "teammate@example.com", Role: domain.OrgRoleMember},
+		"user-teamlead": {OrganizationID: organization, OrganizationName: "Acme", UserID: "user-teamlead", Email: "teamlead@example.com", Role: domain.OrgRoleMember},
+		"user-outsider": {OrganizationID: organization, OrganizationName: "Acme", UserID: "user-outsider", Email: "outsider@example.com", Role: domain.OrgRoleMember},
+		"user-badrole":  {OrganizationID: organization, OrganizationName: "Acme", UserID: "user-badrole", Email: "badrole@example.com", Role: domain.OrgRole("pending")},
 	}
 	membership, ok := people[token]
-	if !ok || organizationID != testOrganization {
+	if !ok || organizationID != organization {
 		return domain.OrgMembership{}, domain.ErrNotFound
 	}
 	membership.Agent = agent
 	if agent {
 		membership.AgentID, membership.AgentRole = "agt_"+token, "specialist"
+		if named {
+			membership.AgentRole = role
+		}
 		if limited {
 			membership.AgentCorpora = []string{}
 			if granted != "" {
@@ -85,6 +103,11 @@ func (fakeDirectory) Membership(_ context.Context, organizationID string, creden
 type fakeTeams struct {
 	access map[string]domain.TeamAccess
 	err    error
+	// organization is the one teams answers for; testOrganization if unset.
+	organization string
+	// calls counts the questions asked about each team.
+	mu    sync.Mutex
+	calls map[string]int
 }
 
 func newFakeTeams() *fakeTeams {
@@ -99,13 +122,21 @@ func newFakeTeams() *fakeTeams {
 }
 
 func (fake *fakeTeams) Team(_ context.Context, organizationID, teamID string, credentials authclient.Credentials) (domain.TeamAccess, error) {
+	fake.mu.Lock()
+	if fake.calls == nil {
+		fake.calls = map[string]int{}
+	}
+	fake.calls[teamID]++
+	fake.mu.Unlock()
 	if fake.err != nil {
 		return domain.TeamAccess{}, fake.err
 	}
-	if organizationID != testOrganization {
+	if organizationID != cmp.Or(fake.organization, testOrganization) {
 		return domain.TeamAccess{}, domain.ErrNotFound
 	}
+	// Teams answers an agent's token as its member, whatever else it says.
 	token := strings.TrimPrefix(strings.TrimPrefix(credentials.Authorization, "Bearer "), agentTokenPrefix)
+	token, _, _ = strings.Cut(token, ";")
 	access, ok := fake.access[token+"/"+teamID]
 	if !ok || access.TeamID == "" {
 		return domain.TeamAccess{}, domain.ErrNotFound
@@ -124,8 +155,10 @@ type documentsCall struct {
 // keyed by id, which is enough to exercise every access rule without a real
 // database; Documents (the paginated listing) is a recording fake instead,
 // since keyset pagination itself is proven against a real PostgreSQL by
-// store_integration_test.go and all this layer needs to prove is that it asks
-// for the right page and passes back what the store answered.
+// store_integration_test.go and all most tests here need to prove is that it
+// asks for the right page and passes back what the store answered. With
+// pageDocuments set it pages the documents held instead, for the listing
+// equivalence tests.
 type fakeStore struct {
 	mu                sync.Mutex
 	corpora           map[string]domain.Corpus
@@ -141,6 +174,9 @@ type fakeStore struct {
 	documentsPage     []domain.Document
 	documentsNext     string
 	documentsErr      error
+	// pageDocuments makes Documents page through the documents held, as
+	// the real store does, instead of answering with documentsPage.
+	pageDocuments bool
 }
 
 func newFakeStore() *fakeStore {
@@ -189,11 +225,7 @@ func (store *fakeStore) CorpusBySlug(_ context.Context, organizationID, slug str
 	return domain.Corpus{}, domain.ErrNotFound
 }
 
-// matchesCorpusQuery mirrors postgres.Store.Corpora's own filter exactly,
-// including the admin-sees-every-member-corpus branch that today's
-// application never actually reaches (it always names its own caller as
-// MemberID), so a future caller that does leave it empty gets what the real
-// store would give it.
+// matchesCorpusQuery mirrors postgres.Store.Corpora's own filter exactly.
 func matchesCorpusQuery(corpus domain.Corpus, query postgres.CorpusQuery) bool {
 	switch query.Scope {
 	case domain.ScopeTeam:
@@ -201,13 +233,7 @@ func matchesCorpusQuery(corpus domain.Corpus, query postgres.CorpusQuery) bool {
 	case domain.ScopeOrganization:
 		return corpus.Scope == domain.ScopeOrganization
 	case domain.ScopeMember:
-		if corpus.Scope != domain.ScopeMember {
-			return false
-		}
-		if query.Admin && query.MemberID == "" {
-			return true
-		}
-		return corpus.MemberID == query.MemberID
+		return corpus.Scope == domain.ScopeMember && corpus.MemberID == query.MemberID
 	default:
 		switch corpus.Scope {
 		case domain.ScopeOrganization:
@@ -228,7 +254,7 @@ func (store *fakeStore) Corpora(_ context.Context, organizationID string, query 
 	var result []domain.Corpus
 	for _, corpus := range store.corpora {
 		if corpus.OrganizationID == organizationID && matchesCorpusQuery(corpus, query) {
-			corpus.DocumentCount = store.countDocuments(corpus.ID, query.Admin)
+			corpus.DocumentCount = store.countDocuments(corpus.ID, query.IncludeAdminOnly)
 			result = append(result, corpus)
 		}
 	}
@@ -336,12 +362,16 @@ func (store *fakeStore) Document(_ context.Context, organizationID, documentID s
 // store_integration_test.go; what this layer must prove instead is that the
 // service applies the access gate first and forwards status, cursor and a
 // clamped limit unchanged.
-func (store *fakeStore) Documents(_ context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int, includeAdminOnly bool) ([]domain.Document, string, error) {
+func (store *fakeStore) Documents(_ context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int, access []domain.DocumentAccess) ([]domain.Document, string, error) {
+	includeAdminOnly := slices.Contains(access, domain.AccessAdmins)
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	store.lastDocumentsCall = documentsCall{organizationID, corpusID, status, cursor, limit}
 	if store.documentsErr != nil {
 		return nil, "", store.documentsErr
+	}
+	if store.pageDocuments {
+		return store.pageOfDocuments(organizationID, corpusID, status, cursor, limit, access)
 	}
 	if includeAdminOnly {
 		return store.documentsPage, store.documentsNext, nil
@@ -353,6 +383,41 @@ func (store *fakeStore) Documents(_ context.Context, organizationID, corpusID st
 		}
 	}
 	return visible, store.documentsNext, nil
+}
+
+// pageOfDocuments is postgres.Store.Documents over the documents held:
+// newest first, then by id, with a cursor naming the last row read.
+func (store *fakeStore) pageOfDocuments(organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int, access []domain.DocumentAccess) ([]domain.Document, string, error) {
+	var after domain.Document
+	if cursor != "" {
+		at, id, ok := strings.Cut(cursor, "|")
+		createdAt, err := time.Parse(time.RFC3339Nano, at)
+		if !ok || err != nil {
+			return nil, "", domain.ErrInvalid
+		}
+		after = domain.Document{ID: id, CreatedAt: createdAt}
+	}
+	var rows []domain.Document
+	for _, document := range store.documents {
+		if document.OrganizationID != organizationID || document.CorpusID != corpusID ||
+			!slices.Contains(access, document.Access) || (status != "" && document.Status != status) {
+			continue
+		}
+		if cursor != "" && !(document.CreatedAt.Before(after.CreatedAt) ||
+			(document.CreatedAt.Equal(after.CreatedAt) && document.ID > after.ID)) {
+			continue
+		}
+		rows = append(rows, document)
+	}
+	slices.SortFunc(rows, func(a, b domain.Document) int {
+		return cmp.Or(b.CreatedAt.Compare(a.CreatedAt), strings.Compare(a.ID, b.ID))
+	})
+	if len(rows) <= limit {
+		return rows, "", nil
+	}
+	rows = rows[:limit]
+	last := rows[len(rows)-1]
+	return rows, last.CreatedAt.Format(time.RFC3339Nano) + "|" + last.ID, nil
 }
 
 func (store *fakeStore) DocumentsBySource(_ context.Context, organizationID string, kind domain.SourceKind, ref string) ([]domain.Document, error) {

@@ -42,7 +42,7 @@ type Store interface {
 
 	UpsertDocument(ctx context.Context, document domain.Document, body string, event domain.Event) (domain.Document, postgres.Upsert, error)
 	Document(ctx context.Context, organizationID, documentID string) (domain.Document, error)
-	Documents(ctx context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int, includeAdminOnly bool) ([]domain.Document, string, error)
+	Documents(ctx context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int, access []domain.DocumentAccess) ([]domain.Document, string, error)
 	DocumentsBySource(ctx context.Context, organizationID string, kind domain.SourceKind, ref string) ([]domain.Document, error)
 	ChunkIDs(ctx context.Context, organizationID, documentID string) ([]string, error)
 	// DocumentIDsForCorpus is used only to remove a bedrock-kb corpus's
@@ -302,17 +302,30 @@ type ListFilter struct {
 	TeamID string
 }
 
+// Corpora lists the corpora the filter selects that the caller may read. The
+// store narrows by the filter and by the caller's own member corpora; which
+// of those come back is decided by mayRead, the same check a single read
+// makes, so a listing never shows a corpus Corpus would refuse.
+//
+// What the filter selects: with no scope, the caller's own member corpora and
+// the organization's; with member scope, the caller's own; with team scope,
+// that team's; with organization scope, the organization's. An org admin can
+// read any member's corpus by id, but a listing of member corpora is still
+// their own.
 func (service *Service) Corpora(ctx context.Context, credentials authclient.Credentials, organizationID string, filter ListFilter) ([]domain.Corpus, error) {
 	member, err := service.caller(ctx, credentials, organizationID)
 	if err != nil {
 		return nil, err
 	}
-	query := postgres.CorpusQuery{Scope: filter.Scope, MemberID: member.UserID, Admin: member.ActsAsAdmin()}
+	reads := service.reads(credentials, member)
+	query := postgres.CorpusQuery{Scope: filter.Scope, MemberID: member.UserID, IncludeAdminOnly: member.SeesAdminOnlyDocuments()}
 	if filter.Scope == domain.ScopeTeam {
-		if member.ActsAsAdmin() {
-			query.TeamID = filter.TeamID
-		} else {
-			access, err := service.teamAccess(ctx, credentials, member, organizationID, filter.TeamID)
+		query.TeamID = filter.TeamID
+		// A team the caller cannot see is not found, as a single read of
+		// one of its corpora would be, rather than an empty list that says
+		// the team exists. The answer is kept for mayRead below.
+		if !member.ActsAsAdmin() {
+			access, err := reads.team(ctx, organizationID, filter.TeamID)
 			if err != nil {
 				return nil, err
 			}
@@ -323,8 +336,7 @@ func (service *Service) Corpora(ctx context.Context, credentials authclient.Cred
 	if err != nil {
 		return nil, err
 	}
-	// A specialist lists only the corpora its grant names.
-	return slices.DeleteFunc(corpora, func(corpus domain.Corpus) bool { return member.MayReadCorpus(corpus.ID) != nil }), nil
+	return reads.readable(ctx, corpora)
 }
 
 // Corpus reads one corpus, with its counts, if the caller may see it.
@@ -333,7 +345,7 @@ func (service *Service) Corpus(ctx context.Context, credentials authclient.Crede
 	if err != nil {
 		return domain.Corpus{}, err
 	}
-	documents, chunks, err := service.store.CorpusCounts(ctx, corpus.ID, member.ActsAsAdmin())
+	documents, chunks, err := service.store.CorpusCounts(ctx, corpus.ID, member.SeesAdminOnlyDocuments())
 	if err != nil {
 		return domain.Corpus{}, err
 	}
@@ -578,10 +590,16 @@ func (service *Service) Documents(ctx context.Context, credentials authclient.Cr
 	if limit <= 0 || limit > MaxDocumentsPerPage {
 		limit = MaxDocumentsPerPage
 	}
-	documents, nextCursor, err := service.store.Documents(ctx, organizationID, corpus.ID, status, cursor, limit, member.ActsAsAdmin())
+	// The store keeps only the access labels VisibleTo allows, so a page
+	// is never cut short by the filter below; that filter is the same check
+	// Document makes, and is what decides. The cursor is the store's, from
+	// the last row it read, so even a row dropped here hides nothing after
+	// it.
+	documents, nextCursor, err := service.store.Documents(ctx, organizationID, corpus.ID, status, cursor, limit, domain.ReadableAccess(member))
 	if err != nil {
 		return DocumentPage{}, err
 	}
+	documents = slices.DeleteFunc(documents, func(document domain.Document) bool { return !document.VisibleTo(member) })
 	return DocumentPage{Documents: documents, NextCursor: nextCursor}, nil
 }
 
@@ -645,7 +663,7 @@ func (service *Service) Search(ctx context.Context, credentials authclient.Crede
 		return retrieval.Results{}, err
 	}
 	service.logAgent(ctx, member, "search", corpus.ID)
-	query.IncludeAdminOnly = member.ActsAsAdmin()
+	query.IncludeAdminOnly = member.SeesAdminOnlyDocuments()
 	return service.retriever.Search(ctx, corpus, query)
 }
 
@@ -666,7 +684,7 @@ func (service *Service) Answer(ctx context.Context, credentials authclient.Crede
 		return Answered{}, err
 	}
 	service.logAgent(ctx, member, "answer", corpus.ID)
-	query.IncludeAdminOnly = member.ActsAsAdmin()
+	query.IncludeAdminOnly = member.SeesAdminOnlyDocuments()
 	results, err := service.retriever.Search(ctx, corpus, query)
 	if err != nil {
 		return Answered{}, err
@@ -721,7 +739,7 @@ func (service *Service) readable(ctx context.Context, credentials authclient.Cre
 	if err != nil {
 		return domain.Corpus{}, domain.OrgMembership{}, err
 	}
-	if err := service.mayRead(ctx, credentials, member, corpus); err != nil {
+	if err := service.reads(credentials, member).mayRead(ctx, corpus); err != nil {
 		return domain.Corpus{}, domain.OrgMembership{}, err
 	}
 	return corpus, member, nil
@@ -733,36 +751,6 @@ func (service *Service) lookup(ctx context.Context, organizationID, reference st
 		return service.store.Corpus(ctx, organizationID, reference)
 	}
 	return service.store.CorpusBySlug(ctx, organizationID, reference)
-}
-
-// mayRead decides who can search a corpus. Placement mirrors files exactly.
-// An org admin's reach is a person's own: an agent acting for one reaches
-// what a plain member would (see domain.OrgMembership.ActsAsAdmin).
-func (service *Service) mayRead(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, corpus domain.Corpus) error {
-	// Every read, and every write, reaches a corpus through here, so a
-	// specialist's grant is enforced once.
-	if err := member.MayReadCorpus(corpus.ID); err != nil {
-		return err
-	}
-	switch corpus.Scope {
-	case domain.ScopeOrganization:
-		return nil
-	case domain.ScopeMember:
-		if corpus.MemberID == member.UserID || member.ActsAsAdmin() {
-			return nil
-		}
-		return domain.ErrNotFound
-	case domain.ScopeTeam:
-		if member.ActsAsAdmin() {
-			return nil
-		}
-		if _, err := service.teamAccess(ctx, credentials, member, corpus.OrganizationID, corpus.TeamID); err != nil {
-			return err
-		}
-		return nil
-	default:
-		return domain.ErrNotFound
-	}
 }
 
 // mayWrite decides who can add or remove documents. Being able to see a
