@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 	"time"
 
@@ -215,18 +214,17 @@ func (s *Service) List(ctx context.Context, credentials authclient.Credentials, 
 	if err != nil {
 		return nil, err
 	}
+	teams := s.teamLookup(ctx, credentials, org, organizationID)
 	if filter.Scope == domain.ScopeTeam {
-		// A team outside a specialist's grant is as missing as one its
-		// member is not on.
-		if err := org.MayReachFiles(domain.ScopeTeam, filter.TeamID); err != nil {
+		// A team's files may be listed only by a caller who could read a
+		// file on it, so a team they can't reach, or one outside a
+		// specialist's grant, is as missing as one that doesn't exist.
+		if err := s.canSee(org, teams, domain.Object{OrganizationID: organizationID, Scope: domain.ScopeTeam, TeamID: filter.TeamID}); err != nil {
 			return nil, err
 		}
-		if !org.ActsAsAdmin() {
-			if _, err := s.teamAccess(ctx, credentials, org, organizationID, filter.TeamID); err != nil {
-				return nil, err
-			}
-		}
 	}
+	// The query only narrows by placement; whether each file it returns is
+	// listed is canSee's to say, exactly as for Get.
 	objects, err := s.store.Objects(ctx, organizationID, s.now().UTC(), domain.ObjectQuery{
 		Scope:       filter.Scope,
 		TeamID:      filter.TeamID,
@@ -239,10 +237,18 @@ func (s *Service) List(ctx context.Context, credentials authclient.Credentials, 
 	if err != nil {
 		return nil, err
 	}
-	// A specialist lists only the files of the scopes its grant names.
-	return slices.DeleteFunc(objects, func(object domain.Object) bool {
-		return org.MayReachFiles(object.Scope, object.TeamID) != nil
-	}), nil
+	visible := objects[:0]
+	for _, object := range objects {
+		err := s.canSee(org, teams, object)
+		if errors.Is(err, domain.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		visible = append(visible, object)
+	}
+	return visible, nil
 }
 
 func (s *Service) Get(ctx context.Context, credentials authclient.Credentials, organizationID, fileID string) (domain.Object, error) {
@@ -254,7 +260,7 @@ func (s *Service) Get(ctx context.Context, credentials authclient.Credentials, o
 	if err != nil {
 		return domain.Object{}, conceal(err)
 	}
-	if err := s.canSee(ctx, credentials, org, object); err != nil {
+	if err := s.canSee(org, s.teamLookup(ctx, credentials, org, organizationID), object); err != nil {
 		return domain.Object{}, err
 	}
 	return object, nil
@@ -293,10 +299,11 @@ func (s *Service) Delete(ctx context.Context, credentials authclient.Credentials
 	if err != nil {
 		return conceal(err)
 	}
-	if err := s.canSee(ctx, credentials, org, object); err != nil {
+	teams := s.teamLookup(ctx, credentials, org, organizationID)
+	if err := s.canSee(org, teams, object); err != nil {
 		return err
 	}
-	if err := s.canDelete(ctx, credentials, org, object); err != nil {
+	if err := s.canDelete(org, teams, object); err != nil {
 		return err
 	}
 	now := s.now().UTC()
@@ -402,10 +409,10 @@ func (s *Service) mayCreate(ctx context.Context, credentials authclient.Credenti
 	}
 }
 
-// canSee is the one place every read of a file, and its delete, decides
-// whether the caller may reach it, so a specialist's grant is enforced here
-// once.
-func (s *Service) canSee(ctx context.Context, credentials authclient.Credentials, org domain.OrgMembership, object domain.Object) error {
+// canSee is the one place every read of a file, its delete, and the list
+// decide whether the caller may reach it, so a specialist's grant is enforced
+// here once and a list can't show what Get would refuse.
+func (s *Service) canSee(org domain.OrgMembership, teams teamLookup, object domain.Object) error {
 	if err := org.MayReachFiles(object.Scope, object.TeamID); err != nil {
 		return err
 	}
@@ -424,14 +431,14 @@ func (s *Service) canSee(ctx context.Context, credentials authclient.Credentials
 		if org.ActsAsAdmin() {
 			return nil
 		}
-		_, err := s.teamAccess(ctx, credentials, org, object.OrganizationID, object.TeamID)
+		_, err := teams(object.TeamID)
 		return err
 	default:
 		return domain.ErrNotFound
 	}
 }
 
-func (s *Service) canDelete(ctx context.Context, credentials authclient.Credentials, org domain.OrgMembership, object domain.Object) error {
+func (s *Service) canDelete(org domain.OrgMembership, teams teamLookup, object domain.Object) error {
 	if org.ActsAsAdmin() {
 		return nil
 	}
@@ -444,7 +451,7 @@ func (s *Service) canDelete(ctx context.Context, credentials authclient.Credenti
 		if object.CreatedBy == org.UserID {
 			return nil
 		}
-		access, err := s.teamAccess(ctx, credentials, org, object.OrganizationID, object.TeamID)
+		access, err := teams(object.TeamID)
 		if err != nil {
 			return err
 		}
@@ -453,6 +460,27 @@ func (s *Service) canDelete(ctx context.Context, credentials authclient.Credenti
 		}
 	}
 	return domain.ErrNotFound
+}
+
+// teamLookup answers teamAccess for one team of the organization.
+type teamLookup func(teamID string) (domain.TeamAccess, error)
+
+// teamLookup is teamAccess for one request: it remembers each team's answer,
+// so a list of a team's files asks teams once, not once per file.
+func (s *Service) teamLookup(ctx context.Context, credentials authclient.Credentials, org domain.OrgMembership, organizationID string) teamLookup {
+	type answer struct {
+		access domain.TeamAccess
+		err    error
+	}
+	answers := map[string]answer{}
+	return func(teamID string) (domain.TeamAccess, error) {
+		if known, ok := answers[teamID]; ok {
+			return known.access, known.err
+		}
+		access, err := s.teamAccess(ctx, credentials, org, organizationID, teamID)
+		answers[teamID] = answer{access, err}
+		return access, err
+	}
 }
 
 // teamAccess asks teams. A team the caller cannot see reads as missing,
