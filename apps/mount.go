@@ -124,6 +124,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Pipedream: pipedreamClient,
 		Sink:      publisher,
 		Verifier:  platform.EventAuth.Verifier(),
+		Shadow:    platform.Shadow,
 		Logger:    logger,
 	}
 	nativeToolkits := config.NativeToolkits

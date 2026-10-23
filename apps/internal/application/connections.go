@@ -18,6 +18,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/nativeclient"
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
 )
 
@@ -412,7 +413,14 @@ func (s *Service) Connections(ctx context.Context, credentials authclient.Creden
 			return nil, err
 		}
 	}
-	return s.store.Connections(ctx, organizationID, query)
+	connections, err := s.store.Connections(ctx, organizationID, query)
+	if err != nil {
+		return nil, err
+	}
+	for _, connection := range connections {
+		s.compare(ctx, caller, connection, access.ActionRead, true)
+	}
+	return connections, nil
 }
 
 // Connection reads one connection, for the member it belongs to or an org
@@ -426,7 +434,9 @@ func (s *Service) Connection(ctx context.Context, credentials authclient.Credent
 	if err != nil {
 		return domain.Connection{}, err
 	}
-	if connection.MemberID != caller.UserID && !caller.ActsAsAdmin() {
+	allowed := connection.MemberID == caller.UserID || caller.ActsAsAdmin()
+	s.compare(ctx, caller, connection, access.ActionRead, allowed)
+	if !allowed {
 		return domain.Connection{}, domain.ErrNotFound
 	}
 	return connection, nil
@@ -447,6 +457,7 @@ func (s *Service) RemoveConnection(ctx context.Context, credentials authclient.C
 	if err != nil {
 		return err
 	}
+	s.compare(ctx, caller, connection, access.ActionDelete, connection.MemberID == caller.UserID || caller.Role.IsOrgAdmin())
 	reason := appsv1.RemovedByMember
 	if connection.MemberID != caller.UserID {
 		if !caller.Role.IsOrgAdmin() {

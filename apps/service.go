@@ -30,6 +30,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/signin"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/slackbot"
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 	"github.com/Shubham04-oss/oryxa-go/internal/pipedream"
@@ -59,6 +60,8 @@ type Dependencies struct {
 	Sealer application.Sealer
 	// Policy is the applied workspace file, when workspace is mounted.
 	Policy application.PolicySource
+	// Shadow compares access decisions with SpiceDB; nil compares nothing.
+	Shadow access.Comparer
 	// Sink is where published events go. Without one, apps still works and
 	// its outbox simply fills up, which a host should not choose to do.
 	Sink events.Sink
@@ -163,6 +166,7 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		Policy:    dependencies.Policy,
 		Oryxa:     oryxa,
 		Sealer:    dependencies.Sealer,
+		Shadow:    dependencies.Shadow,
 		Logger:    logger,
 	}
 	if dependencies.Native != nil {
