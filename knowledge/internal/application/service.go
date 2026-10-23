@@ -21,6 +21,7 @@ import (
 
 	knowledgev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 	workspacepolicy "github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
@@ -171,8 +172,11 @@ type Dependencies struct {
 	// Recorder keeps the access decisions single reads and changes make. Nil
 	// records nothing.
 	Recorder Recorder
-	Logger   *slog.Logger
-	Clock    func() time.Time
+	// Shadow compares mayRead's decisions with SpiceDB. Nil compares
+	// nothing.
+	Shadow access.Comparer
+	Logger *slog.Logger
+	Clock  func() time.Time
 }
 
 type Config struct {
@@ -200,6 +204,7 @@ type Service struct {
 	originalsBucket string
 	judge           Judge
 	recorder        Recorder
+	shadow          access.Comparer
 	logger          *slog.Logger
 	now             func() time.Time
 	config          Config
@@ -217,6 +222,7 @@ func New(dependencies Dependencies, config Config) *Service {
 		originalsBucket: config.OriginalsBucket,
 		judge:           dependencies.Judge,
 		recorder:        dependencies.Recorder,
+		shadow:          dependencies.Shadow,
 		logger:          dependencies.Logger,
 		now:             dependencies.Clock,
 		config:          config,

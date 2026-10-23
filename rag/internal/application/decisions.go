@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/access"
 
@@ -20,6 +21,35 @@ type Recorder interface {
 func (service *Service) WithDecisions(decisions Recorder) *Service {
 	service.decisions = decisions
 	return service
+}
+
+// WithShadow sets where the service's decisions are compared with SpiceDB.
+// Without one it compares nothing.
+func (service *Service) WithShadow(shadow access.Comparer) *Service {
+	service.shadow = shadow
+	return service
+}
+
+// compare asks SpiceDB in shadow what mayRead, mayWrite or mayDelete just
+// decided about a corpus; their answer stands. A failure that decided
+// nothing, such as teams being unreachable, isn't compared.
+func (service *Service) compare(ctx context.Context, member domain.OrgMembership, corpus domain.Corpus, action string, err error) {
+	if service.shadow == nil {
+		return
+	}
+	if err != nil && !errors.Is(err, domain.ErrNotFound) && !errors.Is(err, domain.ErrForbidden) {
+		return
+	}
+	ask := access.Ask{
+		OrganizationID: corpus.OrganizationID, Service: "rag", Action: action,
+		ResourceKind: resourceCorpus, ResourceID: corpus.ID, UserID: member.UserID,
+		Actor:   access.Actor{Role: member.Role, Agent: member.Agent, AgentRole: member.AgentRole},
+		Limited: member.CorporaLimited(),
+	}
+	if member.Agent {
+		ask.AgentID = member.AgentID
+	}
+	service.shadow.Compare(ctx, ask, err == nil)
 }
 
 // Resource kinds in the decision log.

@@ -135,7 +135,8 @@ func (log *Log) ForMember(ctx context.Context, organizationID, userID string, li
 	})
 }
 
-// Purge deletes decisions older than keep, and answers how many.
+// Purge deletes decisions and disagreements older than keep, and answers how
+// many.
 // ponytail: one retention for every organization; plans set their own once
 // entitlements carry features (design §6 step 7).
 func (log *Log) Purge(ctx context.Context, keep time.Duration) (int64, error) {
@@ -143,7 +144,11 @@ func (log *Log) Purge(ctx context.Context, keep time.Duration) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("purge access decisions: %w", err)
 	}
-	return tag.RowsAffected(), nil
+	disagreements, err := log.pool.Exec(ctx, `DELETE FROM access.disagreements WHERE at < $1`, log.now().Add(-keep))
+	if err != nil {
+		return 0, fmt.Errorf("purge access disagreements: %w", err)
+	}
+	return tag.RowsAffected() + disagreements.RowsAffected(), nil
 }
 
 // Retention is how long decisions are kept.

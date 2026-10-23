@@ -45,7 +45,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	}
 	logger := platform.Logger
 	store := postgres.New(platform.Database)
-	service := application.New(store, authclient.New(config.AuthURL), logger)
+	service := application.New(store, authclient.New(config.AuthURL), logger).WithShadow(platform.Shadow)
 
 	signer, err := platform.EventAuth.Signer(Name)
 	if err != nil {

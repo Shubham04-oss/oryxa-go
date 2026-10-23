@@ -25,6 +25,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 )
 
@@ -75,7 +76,10 @@ type Dependencies struct {
 	Native Native
 	// Oryxa is Oryxa's own sign-in, when this deployment has one: signin,
 	// hooks and the integrations. Without it every Oryxa request is refused.
-	Oryxa  *Oryxa
+	Oryxa *Oryxa
+	// Shadow compares who may reach a connection with SpiceDB. Nil
+	// compares nothing.
+	Shadow access.Comparer
 	Logger *slog.Logger
 	Clock  func() time.Time
 }
@@ -95,6 +99,7 @@ type Service struct {
 	// serves.
 	native         Native
 	nativeToolkits []string
+	shadow         access.Comparer
 	logger         *slog.Logger
 	now            func() time.Time
 	publicBaseURL  string
@@ -151,6 +156,7 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		composio:       dependencies.Composio,
 		pipedream:      dependencies.Pipedream,
 		policy:         dependencies.Policy,
+		shadow:         dependencies.Shadow,
 		toolkitBrokers: config.ToolkitBrokers,
 		logger:         dependencies.Logger,
 		now:            dependencies.Clock,

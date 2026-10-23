@@ -14,6 +14,7 @@ import (
 
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	teamseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 
 	"github.com/Shubham04-oss/oryxa-go/teams/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/teams/internal/domain"
@@ -111,6 +112,7 @@ type DirectoryOrganization struct {
 type Service struct {
 	store     Store
 	directory Directory
+	shadow    access.Comparer
 	logger    *slog.Logger
 	now       func() time.Time
 	// toolCalls bounds the ping-bearing tools per member per organization.
@@ -126,6 +128,13 @@ func New(store Store, directory Directory, logger *slog.Logger) *Service {
 	// capturing the function value, so a test that moves the clock moves it.
 	service.toolCalls = newToolRateLimiter(func() time.Time { return service.now() })
 	return service
+}
+
+// WithShadow sets where the service's decisions are compared with SpiceDB.
+// Without one it compares nothing.
+func (s *Service) WithShadow(shadow access.Comparer) *Service {
+	s.shadow = shadow
+	return s
 }
 
 func (s *Service) CreateTeam(ctx context.Context, credentials authclient.Credentials, organizationID string, input CreateTeamInput) (domain.Team, error) {
@@ -731,6 +740,8 @@ func (s *Service) summarizeTeams(ctx context.Context, org domain.OrgMembership, 
 			return nil, membershipErr
 		}
 		summary := TeamSummary{Team: team, CanManage: domain.CanManageTeam(org, membership.Role)}
+		s.compare(ctx, org, team, access.ActionRead, true)
+		s.compare(ctx, org, team, access.ActionWrite, summary.CanManage)
 		if onTeam {
 			summary.Role = membership.Role
 		}
@@ -782,13 +793,33 @@ func (s *Service) teamActor(ctx context.Context, credentials authclient.Credenti
 		return teamActor{}, conceal(err)
 	}
 	membership, err := s.store.Membership(ctx, teamID, org.UserID)
-	if errors.Is(err, domain.ErrNotFound) {
-		return teamActor{org: org, team: team}, nil
-	}
-	if err != nil {
+	actor := teamActor{org: org, team: team}
+	switch {
+	case err == nil:
+		actor.membership = &membership
+	case !errors.Is(err, domain.ErrNotFound):
 		return teamActor{}, err
 	}
-	return teamActor{org: org, team: team, membership: &membership}, nil
+	// Every route on one team decides from this actor, so asking SpiceDB
+	// here covers them all; the actor's answers stand.
+	s.compare(ctx, org, team, access.ActionRead, actor.canSee())
+	s.compare(ctx, org, team, access.ActionWrite, actor.canManage())
+	return actor, nil
+}
+
+// compare asks SpiceDB in shadow what the code decided about a team: read is
+// seeing it, write is managing it.
+func (s *Service) compare(ctx context.Context, org domain.OrgMembership, team domain.Team, action string, allowed bool) {
+	if s.shadow == nil {
+		return
+	}
+	// ponytail: teams' membership carries no agent id or role, so an agent
+	// is asked as a primary; specialists aren't narrowed on teams today.
+	s.shadow.Compare(ctx, access.Ask{
+		OrganizationID: team.OrganizationID, Service: "teams", Action: action,
+		ResourceKind: "team", ResourceID: team.ID, UserID: org.UserID,
+		Actor: access.Actor{Role: access.Role(org.Role), Agent: org.Agent},
+	}, allowed)
 }
 
 func (s *Service) organizationMember(ctx context.Context, credentials authclient.Credentials, organizationID, userID string) (domain.OrgMembership, error) {
