@@ -45,7 +45,11 @@ export function grantFrom(choice: AppChoice, previous: AgentGrant): AgentGrant {
   const writes = [...new Set(choice.writes)]
     .filter((app) => choice.every || choice.reads.includes(app))
     .sort()
+  // Spread first, so grant fields this card doesn't edit (files, knowledge,
+  // any added later) are kept: the server replaces the whole grant, and a
+  // field left out means "everything".
   return {
+    ...previous,
     apps: reads,
     tools: previous.tools ?? [],
     write_apps: writes,
@@ -82,6 +86,7 @@ export function grantWithCorpora(
         ? []
         : [...new Set(choice.ids)].sort()
   return {
+    ...previous,
     apps: previous.apps,
     tools: previous.tools ?? [],
     write_apps: previous.write_apps ?? [],

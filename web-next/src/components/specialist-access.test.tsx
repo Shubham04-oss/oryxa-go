@@ -183,6 +183,29 @@ describe("a specialist's grant", () => {
   })
 })
 
+describe("saving a grant", () => {
+  it("keeps the grant fields neither card edits", () => {
+    const previous = {
+      apps: ["gmail"],
+      tools: [],
+      write_apps: [],
+      write_tools: [],
+      corpora: ["cor_a"],
+      files: ["team_eng"],
+      knowledge: [],
+    }
+    const apps = grantFrom(
+      { every: false, reads: ["gmail", "github"], writes: [] },
+      previous
+    )
+    expect(apps.files).toEqual(["team_eng"])
+    expect(apps.knowledge).toEqual([])
+    const corpora = grantWithCorpora({ scope: "all", ids: [] }, previous)
+    expect(corpora.files).toEqual(["team_eng"])
+    expect(corpora.knowledge).toEqual([])
+  })
+})
+
 describe("SpecialistAccess", () => {
   it("moves the specialist to the main model", async () => {
     renderAccess()

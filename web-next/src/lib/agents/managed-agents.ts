@@ -31,6 +31,10 @@ export type AgentGrant = {
   write_apps?: string[]
   write_tools?: string[]
   corpora?: string[]
+  /** File scopes ("member", "org", team ids) or "*"; enforced by files. */
+  files?: string[]
+  /** Knowledge source ids or "*"; enforced by knowledge. */
+  knowledge?: string[]
 }
 
 /** The most entries one of a grant's lists may hold. */
