@@ -126,6 +126,23 @@ jobs:
         run: go build ./...
       - name: Vet
         run: go vet ./...
+      - name: Every event publisher has a signing key
+        # A service that signs its events without a KMS key (keys.tf) signs
+        # with one that dies at each restart, and once
+        # ORYXA_EVENT_SIGNATURES=enforce its events in flight across a deploy
+        # are refused. So every service calling EventAuth.Signer must be named
+        # in event_signing_keys.
+        run: |
+          keys=$(awk '/event_signing_services =/,/^  \)$/' deploy/production/keys.tf)
+          missing=0
+          for file in $(grep -rl --include='*.go' 'EventAuth.Signer(Name)' . | grep -v '_test\.go$'); do
+            name=$(grep -ho 'const Name = "[a-z-]*"' "$(dirname "$file")"/*.go | head -1 | cut -d'"' -f2)
+            if [ -z "$name" ] || ! printf '%s\n' "$keys" | grep -Eq "\"$name\"|^ +$name +="; then
+              echo "::error file=$file::${name:-this service} signs events but has no key in deploy/production/keys.tf event_signing_keys"
+              missing=1
+            fi
+          done
+          exit "$missing"
       - name: Database
         env:
           PGPORT: ${{ job.services.postgres.ports['5432'] }}

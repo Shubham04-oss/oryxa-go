@@ -49,6 +49,43 @@ resource "aws_kms_alias" "service" {
   target_key_id = aws_kms_key.service[each.key].key_id
 }
 
+# Every service that publishes events signs them (internal/eventauth). Without
+# a KMS key a service signs with a key its process makes at boot, which dies
+# with the process, so events in flight across a restart or a rolling deploy
+# can't be verified and ORYXA_EVENT_SIGNATURES must stay report. The three
+# services above reuse their identity key: an event signature is made over
+# bytes that start "oryxa.event.v1", so it can never pass as a service token.
+# The rest get a key each. ci.yml checks every publisher is listed here.
+locals {
+  event_signing_services = ["apps", "auth", "batching", "billing", "files", "integrations", "realtime", "teams"]
+  event_signing_keys = merge(
+    {
+      agents    = aws_kms_alias.service["agents-primary"].name
+      knowledge = aws_kms_alias.service["knowledge"].name
+      rag       = aws_kms_alias.service["rag"].name
+    },
+    { for service in local.event_signing_services : service => aws_kms_alias.event[service].name },
+  )
+}
+
+resource "aws_kms_key" "event" {
+  for_each                 = toset(local.event_signing_services)
+  description              = "${local.name} ${each.key}: event signatures"
+  key_usage                = "SIGN_VERIFY"
+  customer_master_key_spec = "ECC_NIST_P256"
+  deletion_window_in_days  = 30
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_kms_alias" "event" {
+  for_each      = toset(local.event_signing_services)
+  name          = "alias/${local.name}-${each.key}-events"
+  target_key_id = aws_kms_key.event[each.key].key_id
+}
+
 locals {
   # Which services auth and knowledge admit, and for what (see
   # AUTH_SERVICE_CALLERS and KNOWLEDGE_SERVICE_CALLERS in .env.example).

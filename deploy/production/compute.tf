@@ -201,6 +201,8 @@ locals {
       EMAIL_SUPPRESSIONS_TABLE = local.email_suppressions_table
     },
     { for service, url in local.queue_urls : (service == "email" ? "EMAIL_QUEUE_URL" : "${upper(service)}_EVENTS_QUEUE_URL") => url },
+    # Each publisher's event signing key (keys.tf), as internal/host reads it.
+    { for service, key in local.event_signing_keys : "${upper(service)}_EVENT_SIGNING_KEY_ID" => key },
     # The guardrail that grounds every answer to a question asked in Slack
     # (answer_guard.tf). Both variables come together or the service refuses to
     # start, and this is the one place that names either. They are set whatever
@@ -378,7 +380,7 @@ resource "aws_iam_role_policy" "task" {
         Sid      = "SignAsService"
         Effect   = "Allow"
         Action   = ["kms:Sign", "kms:GetPublicKey", "kms:DescribeKey"]
-        Resource = [for key in aws_kms_key.service : key.arn]
+        Resource = concat([for key in aws_kms_key.service : key.arn], [for key in aws_kms_key.event : key.arn])
       },
       {
         Sid      = "SealGrants"
