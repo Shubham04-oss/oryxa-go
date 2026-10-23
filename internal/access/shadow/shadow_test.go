@@ -114,7 +114,7 @@ func TestOffIsANoOp(t *testing.T) {
 	var shadow *Shadow
 	shadow.Compare(context.Background(), ask, true)
 	shadow.Close()
-	off, err := Open(spicedb.Config{}, nil, nil)
+	off, err := Open(spicedb.Config{}, nil, nil, nil)
 	if off != nil || err != nil {
 		t.Fatalf("Open without an endpoint = %v, %v", off, err)
 	}

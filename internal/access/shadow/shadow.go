@@ -85,7 +85,7 @@ func New(checker Checker, recorder Recorder, logger *slog.Logger) *Shadow {
 
 // Open starts a shadow on the SpiceDB config names, or answers nil (off) when
 // it names none.
-func Open(config spicedb.Config, recorder Recorder, logger *slog.Logger) (*Shadow, error) {
+func Open(config spicedb.Config, tokens Tokens, recorder Recorder, logger *slog.Logger) (*Shadow, error) {
 	if !config.Enabled() {
 		return nil, nil
 	}
@@ -93,7 +93,7 @@ func Open(config spicedb.Config, recorder Recorder, logger *slog.Logger) (*Shado
 	if err != nil {
 		return nil, err
 	}
-	return New(Client{SpiceDB: client}, recorder, logger), nil
+	return New(Client{SpiceDB: client, Tokens: tokens}, recorder, logger), nil
 }
 
 // Close stops the workers; comparisons still queued are dropped.
@@ -173,13 +173,32 @@ func (shadow *Shadow) count(ctx context.Context, ask access.Ask, outcome string)
 }
 
 // Client asks a real SpiceDB.
-type Client struct{ SpiceDB *authzed.Client }
+type Client struct {
+	SpiceDB *authzed.Client
+	// Tokens is where the projector keeps each org's latest ZedToken; nil, or
+	// an org with none, asks at minimize_latency.
+	Tokens Tokens
+}
+
+// Tokens reads an org's latest ZedToken (projector/tokens.Postgres).
+type Tokens interface {
+	Latest(ctx context.Context, org string) (*v1.ZedToken, error)
+}
+
+// consistency asks for an answer at least as fresh as the org's last
+// projected change, so a check that follows a change isn't read from an
+// older snapshot and logged as a disagreement (design, Risks: new-enemy).
+func (client Client) consistency(ctx context.Context, org string) *v1.Consistency {
+	if client.Tokens != nil && org != "" {
+		if token, err := client.Tokens.Latest(ctx, org); err == nil && token.GetToken() != "" {
+			return &v1.Consistency{Requirement: &v1.Consistency_AtLeastAsFresh{AtLeastAsFresh: token}}
+		}
+	}
+	return &v1.Consistency{Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true}}
+}
 
 // Check asks every check in one CheckBulkPermissions call.
-// ponytail: minimize_latency only, so a check right after a change may read
-// a stale snapshot and show as a disagreement. Pass at_least_as_fresh with
-// the org's latest ZedToken once the projector keeps one (design, Risks).
-func (client Client) Check(ctx context.Context, _ string, checks []spicedb.Check) (bool, error) {
+func (client Client) Check(ctx context.Context, org string, checks []spicedb.Check) (bool, error) {
 	items := make([]*v1.CheckBulkPermissionsRequestItem, len(checks))
 	for i, check := range checks {
 		items[i] = &v1.CheckBulkPermissionsRequestItem{
@@ -189,7 +208,7 @@ func (client Client) Check(ctx context.Context, _ string, checks []spicedb.Check
 		}
 	}
 	response, err := client.SpiceDB.CheckBulkPermissions(ctx, &v1.CheckBulkPermissionsRequest{
-		Consistency: &v1.Consistency{Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true}},
+		Consistency: client.consistency(ctx, org),
 		Items:       items,
 	})
 	if err != nil {
