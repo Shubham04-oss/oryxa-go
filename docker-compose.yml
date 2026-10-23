@@ -17,6 +17,9 @@ services:
     # after this switch; CREATE EXTENSION runs from service migrations.
     image: pgvector/pgvector:0.8.6-pg17
     restart: unless-stopped
+    # SpiceDB's Watch reads commit timestamps; production sets the same
+    # parameter on RDS.
+    command: ["postgres", "-c", "track_commit_timestamp=on"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-oryxa}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-oryxa-dev-password}
@@ -150,6 +153,70 @@ services:
       interval: 10s
       timeout: 5s
       retries: 30
+
+  # SpiceDB, the permissions engine (docs/design/permissions, step 4). It
+  # answers in shadow only: internal/access still decides. Opt in with
+  # `docker compose --profile spicedb up -d`; it keeps its data in its own
+  # database on the Postgres above and loads internal/access/spicedb/schema.zed
+  # on every start. gRPC is on 127.0.0.1:50052 (50051 is often taken), with
+  # the preshared key below; it is a dev key, not a secret.
+  spicedb-database:
+    profiles: ["spicedb"]
+    image: pgvector/pgvector:0.8.6-pg17
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-oryxa-dev-password}
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        psql -h postgres -U ${POSTGRES_USER:-oryxa} -d ${POSTGRES_DB:-oryxa} -tAc
+        "SELECT 1 FROM pg_database WHERE datname = 'spicedb'" | grep -q 1 ||
+        psql -h postgres -U ${POSTGRES_USER:-oryxa} -d ${POSTGRES_DB:-oryxa} -c 'CREATE DATABASE spicedb'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  spicedb-migrate:
+    profiles: ["spicedb"]
+    image: authzed/spicedb:v1.56.2
+    command: datastore migrate head
+    environment: &spicedb-datastore
+      SPICEDB_DATASTORE_ENGINE: postgres
+      SPICEDB_DATASTORE_CONN_URI: postgres://${POSTGRES_USER:-oryxa}:${POSTGRES_PASSWORD:-oryxa-dev-password}@postgres:5432/spicedb?sslmode=disable
+    depends_on:
+      spicedb-database:
+        condition: service_completed_successfully
+
+  spicedb:
+    profiles: ["spicedb"]
+    image: authzed/spicedb:v1.56.2
+    restart: unless-stopped
+    command: serve
+    environment:
+      <<: *spicedb-datastore
+      SPICEDB_GRPC_PRESHARED_KEY: ${SPICEDB_GRPC_PRESHARED_KEY:-oryxa-dev-spicedb}
+    ports:
+      - "127.0.0.1:${SPICEDB_PORT:-50052}:50051"
+    depends_on:
+      spicedb-migrate:
+        condition: service_completed_successfully
+
+  spicedb-schema:
+    profiles: ["spicedb"]
+    image: authzed/zed:v1.2.1
+    command:
+      - schema
+      - write
+      - /schema/schema.zed
+      - --endpoint=spicedb:50051
+      - --insecure
+      - --token=${SPICEDB_GRPC_PRESHARED_KEY:-oryxa-dev-spicedb}
+    volumes:
+      - ./internal/access/spicedb:/schema:ro
+    restart: on-failure
+    depends_on:
+      spicedb:
+        condition: service_started
 
 volumes:
   postgres-data:
