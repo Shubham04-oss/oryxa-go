@@ -56,7 +56,15 @@ type organizationResponse struct {
 		UserID         string `json:"user_id"`
 		Role           string `json:"role"`
 	} `json:"membership"`
-	Agent bool `json:"agent"`
+	Agent       bool `json:"agent"`
+	AgentClaims struct {
+		Role string `json:"role"`
+		// Grant is a specialist's grant; only its knowledge matters here.
+		// Absent or without knowledge means all of it.
+		Grant *struct {
+			Knowledge []string `json:"knowledge"`
+		} `json:"grant"`
+	} `json:"agent_claims"`
 }
 
 // Membership answers what the caller is in an organization, and whether they
@@ -104,12 +112,27 @@ func (client *Client) Membership(ctx context.Context, organizationID string, cre
 		// authorize this organization's sources or document bodies.
 		return domain.OrgMembership{}, domain.ErrForbidden
 	}
+	var knowledge []string
+	if decoded.AgentClaims.Grant != nil {
+		knowledge = decoded.AgentClaims.Grant.Knowledge
+	}
 	return domain.OrgMembership{
 		OrganizationID: organizationID,
 		UserID:         decoded.Membership.UserID,
 		Role:           domain.OrgRole(decoded.Membership.Role),
 		Agent:          decoded.Agent,
+		AgentRole:      agentRole(decoded.Agent, decoded.AgentClaims.Role),
+		AgentKnowledge: knowledge,
 	}, nil
+}
+
+// agentRole is the role an agent's claims name; an agent token without one
+// is a primary's, as auth answers it.
+func agentRole(agent bool, role string) string {
+	if agent && role == "" {
+		return "primary"
+	}
+	return role
 }
 
 func authError(status int) error {
