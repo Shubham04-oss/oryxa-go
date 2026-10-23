@@ -66,6 +66,9 @@ type OrgMembership struct {
 	// Agent says the caller is an agent acting for this member. An agent may
 	// read what a source holds, but never register or remove one.
 	Agent bool
+	// AgentID names the agent, as its claims do, so a decision log can say
+	// which one reached something. Empty for a member's own session.
+	AgentID string
 	// AgentRole is the agent's role in its claims (primary, specialist or
 	// organization), when Agent is set.
 	AgentRole string

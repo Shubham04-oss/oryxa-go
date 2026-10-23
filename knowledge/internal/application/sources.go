@@ -11,6 +11,7 @@ import (
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 	knowledgev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/sources"
@@ -276,26 +277,38 @@ func mayRead(caller domain.OrgMembership, source domain.Source) error {
 
 // Source reads one, for its creator or an org admin.
 func (s *Service) Source(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string) (domain.Source, error) {
-	caller, err := s.caller(ctx, credentials, organizationID)
+	caller, source, err := s.readable(ctx, credentials, organizationID, sourceID)
 	if err != nil {
 		return domain.Source{}, err
+	}
+	s.record(ctx, caller, access.ActionRead, resourceSource, source.ID, source)
+	return source, nil
+}
+
+// readable reads one source the caller may reach, and who the caller is.
+func (s *Service) readable(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string) (domain.OrgMembership, domain.Source, error) {
+	caller, err := s.caller(ctx, credentials, organizationID)
+	if err != nil {
+		return domain.OrgMembership{}, domain.Source{}, err
 	}
 	source, err := s.store.Source(ctx, organizationID, sourceID)
 	if err != nil {
-		return domain.Source{}, err
+		return domain.OrgMembership{}, domain.Source{}, err
 	}
 	if err := mayRead(caller, source); err != nil {
-		return domain.Source{}, err
+		return domain.OrgMembership{}, domain.Source{}, err
 	}
-	return source, nil
+	return caller, source, nil
 }
 
 // Runs reads how a source's recent passes went, so a member can see why
 // nothing new arrived.
 func (s *Service) Runs(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string, limit int) ([]domain.SyncRun, error) {
-	if _, err := s.Source(ctx, credentials, organizationID, sourceID); err != nil {
+	caller, source, err := s.readable(ctx, credentials, organizationID, sourceID)
+	if err != nil {
 		return nil, err
 	}
+	s.record(ctx, caller, access.ActionRead, resourceSource, source.ID, source)
 	if limit <= 0 || limit > maxRuns {
 		limit = maxRuns
 	}
@@ -326,6 +339,7 @@ func (s *Service) RemoveSource(ctx context.Context, credentials authclient.Crede
 		s.retractions(knowledgev1.RemovedReasonSourceRemoved, pending)); err != nil {
 		return err
 	}
+	s.record(ctx, caller, access.ActionDelete, resourceSource, source.ID, source)
 	s.deleteOriginals(ctx, pending)
 	return nil
 }
@@ -367,6 +381,7 @@ func (s *Service) SyncSource(ctx context.Context, credentials authclient.Credent
 	if _, err := s.store.HastenSource(ctx, organizationID, sourceID, s.now()); err != nil {
 		return domain.Source{}, err
 	}
+	s.record(ctx, caller, access.ActionWrite, resourceSource, source.ID, source)
 	// Read back rather than answering what was passed in, so a caller sees
 	// when the sweep will now be — which is now for a source that was
 	// waiting, and unchanged for one already due.
@@ -399,6 +414,7 @@ func (s *Service) Document(ctx context.Context, credentials authclient.Credentia
 	if documentAccess(source, document) == accessAdmins && !caller.ActsAsAdmin() {
 		return domain.Document{}, domain.ErrNotFound
 	}
+	s.record(ctx, caller, access.ActionRead, resourceDocument, document.ID, source)
 	return document, nil
 }
 
@@ -484,5 +500,6 @@ func (s *Service) SetSourceKinds(ctx context.Context, credentials authclient.Cre
 	if !changed {
 		return domain.Source{}, domain.ErrNotFound
 	}
+	s.record(ctx, caller, access.ActionWrite, resourceSource, source.ID, source)
 	return s.store.Source(ctx, organizationID, sourceID)
 }

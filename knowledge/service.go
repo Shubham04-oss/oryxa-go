@@ -95,8 +95,12 @@ type Dependencies struct {
 	// Judge decides whether a connected app's document is worth indexing.
 	// Nil unless KNOWLEDGE_JUDGE_MODEL is configured, in which case only the
 	// rules keep noise out.
-	Judge  application.Judge
-	Logger *slog.Logger
+	Judge application.Judge
+	// Recorder keeps who reached a member's sources and documents, and why,
+	// for their Activity page. A host passes access.NewLog on the shared
+	// database; nil records nothing.
+	Recorder application.Recorder
+	Logger   *slog.Logger
 }
 
 // Config is what a host tells knowledge about itself.
@@ -149,6 +153,7 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		Extractors: extractors,
 		Originals:  dependencies.Originals,
 		Judge:      dependencies.Judge,
+		Recorder:   dependencies.Recorder,
 		Logger:     logger,
 	}, application.Config{
 		ServiceName: Name, FullSweepInterval: config.FullSweepInterval, OriginalsBucket: config.OriginalsBucket,

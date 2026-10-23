@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/membertoken"
@@ -34,10 +35,14 @@ import (
 // KNOWLEDGE_URL, which defaults to this process when it runs knowledge.
 var Definition = host.Definition{Name: Name, URLVariable: "KNOWLEDGE_URL", EventsQueueVariable: "KNOWLEDGE_EVENTS_QUEUE_URL", Migrate: Migrate, Mount: Mount}
 
-// Migrate installs knowledge's schema.
+// Migrate installs knowledge's schema, and the access decision log it
+// records to.
 func Migrate(ctx context.Context, platform host.Platform) error {
 	if platform.Database == nil {
 		return host.ErrDatabaseRequired
+	}
+	if err := access.Migrate(ctx, platform.Database); err != nil {
+		return err
 	}
 	return postgres.New(platform.Database).Migrate(ctx)
 }
@@ -196,7 +201,10 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		Extractors: extractors,
 		Originals:  documentOriginals,
 		Judge:      documentJudge,
-		Logger:     logger,
+		// Who reached a member's sources and documents, and why, is kept in
+		// the access log every service shares (docs/design/permissions).
+		Recorder: access.NewLog(platform.Database.Pool, logger),
+		Logger:   logger,
 	}
 	dependencies.Policy = platform.WorkspaceSettings()
 	service, err := New(dependencies, Config{

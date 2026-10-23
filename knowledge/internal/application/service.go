@@ -167,9 +167,12 @@ type Dependencies struct {
 	Originals Originals
 	// Judge decides whether a connected app's document is worth indexing. Nil
 	// indexes what the rules alone do not exclude, unjudged.
-	Judge  Judge
-	Logger *slog.Logger
-	Clock  func() time.Time
+	Judge Judge
+	// Recorder keeps the access decisions single reads and changes make. Nil
+	// records nothing.
+	Recorder Recorder
+	Logger   *slog.Logger
+	Clock    func() time.Time
 }
 
 type Config struct {
@@ -196,6 +199,7 @@ type Service struct {
 	originals       Originals
 	originalsBucket string
 	judge           Judge
+	recorder        Recorder
 	logger          *slog.Logger
 	now             func() time.Time
 	config          Config
@@ -212,6 +216,7 @@ func New(dependencies Dependencies, config Config) *Service {
 		originals:       dependencies.Originals,
 		originalsBucket: config.OriginalsBucket,
 		judge:           dependencies.Judge,
+		recorder:        dependencies.Recorder,
 		logger:          dependencies.Logger,
 		now:             dependencies.Clock,
 		config:          config,

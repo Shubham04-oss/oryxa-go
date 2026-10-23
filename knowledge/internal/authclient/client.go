@@ -58,7 +58,8 @@ type organizationResponse struct {
 	} `json:"membership"`
 	Agent       bool `json:"agent"`
 	AgentClaims struct {
-		Role string `json:"role"`
+		Agent string `json:"agent"`
+		Role  string `json:"role"`
 		// Grant is a specialist's grant; only its knowledge matters here.
 		// Absent or without knowledge means all of it.
 		Grant *struct {
@@ -121,6 +122,7 @@ func (client *Client) Membership(ctx context.Context, organizationID string, cre
 		UserID:         decoded.Membership.UserID,
 		Role:           domain.OrgRole(decoded.Membership.Role),
 		Agent:          decoded.Agent,
+		AgentID:        agentID(decoded.Agent, decoded.AgentClaims.Agent),
 		AgentRole:      agentRole(decoded.Agent, decoded.AgentClaims.Role),
 		AgentKnowledge: knowledge,
 	}, nil
@@ -133,6 +135,14 @@ func agentRole(agent bool, role string) string {
 		return "primary"
 	}
 	return role
+}
+
+// agentID is the agent its claims name, for an agent's token only.
+func agentID(agent bool, id string) string {
+	if !agent {
+		return ""
+	}
+	return id
 }
 
 func authError(status int) error {
