@@ -53,6 +53,14 @@ their `access: members` documents only. It manages a team's corpora only when
 its member is that team's own admin, copies a team's file only when its member
 is on that team, and writes to no organization corpus.
 
+A member's specialist agents are narrowed further by the `corpora` part of
+their grant, which auth carries on the token as `agent_claims.grant.corpora`:
+a list of corpus ids, or `"*"` for all. A grant without the field means all; an
+empty list means none. A corpus outside the grant is `404`, like a missing one,
+on every read and write path and in the list, and a limited specialist cannot
+create corpora. Primary and organization agents and members' own sessions are
+not limited by it.
+
 Documents in an organization corpus also have an ACL. `access: members` is
 the default and is visible to every member allowed into that corpus.
 `access: admins` is visible only to organization owners and admins. An admin

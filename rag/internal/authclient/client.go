@@ -60,6 +60,11 @@ type organizationResponse struct {
 	AgentClaims struct {
 		Agent string `json:"agent"`
 		Role  string `json:"role"`
+		// Grant is a specialist's grant; only its corpora matter here. Absent
+		// or without corpora means all of them.
+		Grant *struct {
+			Corpora []string `json:"corpora"`
+		} `json:"grant"`
 	} `json:"agent_claims"`
 }
 
@@ -76,6 +81,10 @@ func (client *Client) Membership(ctx context.Context, organizationID string, cre
 	if decoded.Organization.ID != organizationID || decoded.Membership.OrganizationID != organizationID || decoded.Membership.UserID == "" {
 		return domain.OrgMembership{}, fmt.Errorf("auth answered for a different organization or no member")
 	}
+	var corpora []string
+	if decoded.AgentClaims.Grant != nil {
+		corpora = decoded.AgentClaims.Grant.Corpora
+	}
 	return domain.OrgMembership{
 		OrganizationID:   organizationID,
 		OrganizationName: decoded.Organization.Name,
@@ -86,6 +95,7 @@ func (client *Client) Membership(ctx context.Context, organizationID string, cre
 		Agent:            decoded.Agent,
 		AgentID:          decoded.AgentClaims.Agent,
 		AgentRole:        agentRole(decoded.Agent, decoded.AgentClaims.Role),
+		AgentCorpora:     corpora,
 	}, nil
 }
 

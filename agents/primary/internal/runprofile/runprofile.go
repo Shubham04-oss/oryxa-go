@@ -236,9 +236,12 @@ func ModeOf(startedBy string, tools Toolset) (Mode, error) {
 // AllApps in Grant.Apps is every app the member has connected.
 const AllApps = "*"
 
+// AllCorpora in Grant.Corpora is every knowledge corpus its member can read.
+const AllCorpora = "*"
+
 // Grant is what a member lets one of their specialists reach in their apps
 // (I3): which apps (toolkits) and tools it may use, read-only unless a write
-// is granted here. Assembly builds the specialist's toolboxes from it, and
+// is granted here, and which knowledge corpora it may search. Assembly builds the specialist's toolboxes from it, and
 // apps enforces it on every call the specialist's agent token makes, which
 // is what holds when a prompt steers the specialist. The primary has none:
 // it reaches all its member does.
@@ -253,12 +256,16 @@ type Grant struct {
 	// still only in the apps named in Apps.
 	WriteApps  []string `json:"write_apps"`
 	WriteTools []string `json:"write_tools"`
+	// Corpora are the knowledge corpora (cor_…) it may read, or AllCorpora.
+	// A grant stored before this field existed has none, which means all;
+	// an explicit empty list means none. Rag enforces it.
+	Corpora []string `json:"corpora"`
 }
 
 // DefaultGrant is a specialist's until its member changes it: every app it
 // reached before grants existed, read-only.
 func DefaultGrant() Grant {
-	return Grant{Apps: []string{AllApps}, Tools: []string{}, WriteApps: []string{}, WriteTools: []string{}}
+	return Grant{Apps: []string{AllApps}, Tools: []string{}, WriteApps: []string{}, WriteTools: []string{}, Corpora: []string{AllCorpora}}
 }
 
 // ReachesApps is whether the grant names any app at all.

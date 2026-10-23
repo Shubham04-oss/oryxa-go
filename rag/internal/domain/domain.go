@@ -119,6 +119,26 @@ type OrgMembership struct {
 	// and primary, specialist or organization), when Agent is set.
 	AgentID   string
 	AgentRole string
+	// AgentCorpora is the corpus ids a specialist's grant names, or "*" for
+	// all. Nil, which a grant without the field gives, is all.
+	AgentCorpora []string
+}
+
+// MayReadCorpus refuses a specialist a corpus its grant does not name, as
+// not found, so a corpus outside the grant looks the same as one that does
+// not exist. Every other caller is limited only by what its member can see.
+func (membership OrgMembership) MayReadCorpus(corpusID string) error {
+	if membership.CorporaLimited() && !slices.Contains(membership.AgentCorpora, corpusID) {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// CorporaLimited is whether the caller is a specialist whose grant names
+// some corpora rather than all.
+func (membership OrgMembership) CorporaLimited() bool {
+	return membership.Agent && membership.AgentRole == "specialist" &&
+		membership.AgentCorpora != nil && !slices.Contains(membership.AgentCorpora, "*")
 }
 
 // ActsAsAdmin reports whether the caller acts with an org admin's reach:

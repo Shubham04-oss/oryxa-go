@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -188,6 +189,11 @@ func (service *Service) CreateCorpus(ctx context.Context, credentials authclient
 	if err != nil {
 		return domain.Corpus{}, err
 	}
+	// A new corpus cannot be in a grant that names corpora, so the specialist
+	// could not read what it made.
+	if member.CorporaLimited() {
+		return domain.Corpus{}, domain.ErrForbidden
+	}
 	name, err := domain.Name(input.Name)
 	if err != nil {
 		return domain.Corpus{}, err
@@ -313,7 +319,12 @@ func (service *Service) Corpora(ctx context.Context, credentials authclient.Cred
 			query.TeamID = access.TeamID
 		}
 	}
-	return service.store.Corpora(ctx, organizationID, query)
+	corpora, err := service.store.Corpora(ctx, organizationID, query)
+	if err != nil {
+		return nil, err
+	}
+	// A specialist lists only the corpora its grant names.
+	return slices.DeleteFunc(corpora, func(corpus domain.Corpus) bool { return member.MayReadCorpus(corpus.ID) != nil }), nil
 }
 
 // Corpus reads one corpus, with its counts, if the caller may see it.
@@ -728,6 +739,11 @@ func (service *Service) lookup(ctx context.Context, organizationID, reference st
 // An org admin's reach is a person's own: an agent acting for one reaches
 // what a plain member would (see domain.OrgMembership.ActsAsAdmin).
 func (service *Service) mayRead(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, corpus domain.Corpus) error {
+	// Every read, and every write, reaches a corpus through here, so a
+	// specialist's grant is enforced once.
+	if err := member.MayReadCorpus(corpus.ID); err != nil {
+		return err
+	}
 	switch corpus.Scope {
 	case domain.ScopeOrganization:
 		return nil

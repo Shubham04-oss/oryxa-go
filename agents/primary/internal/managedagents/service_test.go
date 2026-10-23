@@ -2,6 +2,7 @@ package managedagents
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"slices"
@@ -214,7 +215,7 @@ func TestASpecialistsGrantIsNormalizedAndOnlyASpecialistHasOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := runprofile.Grant{Apps: []string{"gmail", "*"}, Tools: []string{"GMAIL_FETCH_EMAILS"}, WriteApps: []string{"gmail"}, WriteTools: []string{}}
+	want := runprofile.Grant{Apps: []string{"gmail", "*"}, Tools: []string{"GMAIL_FETCH_EMAILS"}, WriteApps: []string{"gmail"}, WriteTools: []string{}, Corpora: []string{"*"}}
 	if !reflect.DeepEqual(*updated.Grant, want) {
 		t.Fatalf("stored grant = %+v, want %+v", *updated.Grant, want)
 	}
@@ -223,6 +224,8 @@ func TestASpecialistsGrantIsNormalizedAndOnlyASpecialistHasOne(t *testing.T) {
 		"a write to every app":    {Apps: []string{"*"}, WriteApps: []string{"*"}},
 		"a tool apps cannot name": {Apps: []string{"gmail"}, Tools: []string{"send email!"}},
 		"an app apps cannot name": {Apps: []string{"g mail"}},
+		"a bad corpus id":         {Apps: []string{"*"}, Corpora: []string{"nope"}},
+		"all mixed with an id":    {Apps: []string{"*"}, Corpora: []string{"*", "cor_abc"}},
 	} {
 		if _, err := service.Update(context.Background(), scope, specialist.ID, UpdateInput{Grant: &grant}); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: error = %v, want invalid", name, err)
@@ -239,8 +242,8 @@ func TestASpecialistsGrantIsNormalizedAndOnlyASpecialistHasOne(t *testing.T) {
 func TestASpecialistsRunCarriesItsGrant(t *testing.T) {
 	grant := runprofile.Grant{Apps: []string{"gmail"}, WriteTools: []string{"GMAIL_SEND_EMAIL"}}
 	for definition, want := range map[*Definition]string{
-		{ID: "agt_sales", Kind: KindSpecialist, Grant: &grant}: `{"apps":["gmail"],"tools":null,"write_apps":null,"write_tools":["GMAIL_SEND_EMAIL"]}`,
-		{ID: "agt_old", Kind: KindSpecialist}:                  `{"apps":["*"],"tools":[],"write_apps":[],"write_tools":[]}`,
+		{ID: "agt_sales", Kind: KindSpecialist, Grant: &grant}: `{"apps":["gmail"],"tools":null,"write_apps":null,"write_tools":["GMAIL_SEND_EMAIL"],"corpora":null}`,
+		{ID: "agt_old", Kind: KindSpecialist}:                  `{"apps":["*"],"tools":[],"write_apps":[],"write_tools":[],"corpora":["*"]}`,
 		{ID: "agt_primary", Kind: KindPrimary}:                 "",
 	} {
 		state, err := runState(*definition)
@@ -422,5 +425,32 @@ func TestASpecialistsConversationIsRenamedInItsOwnEngine(t *testing.T) {
 	}
 	if _, err := service.RenameThread(ctx, member, repo.primary.ID, created.ID, " "); !errors.Is(err, threads.ErrInvalid) {
 		t.Fatalf("a blank title = %v, want ErrInvalid", err)
+	}
+}
+
+// TestAGrantsCorporaDefaultToAllAndEmptyMeansNone: a grant sent without
+// corpora (or stored before they existed) reads every corpus; an explicit
+// empty list is none; ids are kept, without duplicates.
+func TestAGrantsCorporaDefaultToAllAndEmptyMeansNone(t *testing.T) {
+	if got := runprofile.DefaultGrant().Corpora; !slices.Equal(got, []string{"*"}) {
+		t.Fatalf("default corpora = %v, want all", got)
+	}
+	var stored runprofile.Grant = runprofile.DefaultGrant()
+	if err := json.Unmarshal([]byte(`{"apps":["gmail"]}`), &stored); err != nil || !slices.Equal(stored.Corpora, []string{"*"}) {
+		t.Fatalf("a stored grant without corpora = %v (%v), want all", stored.Corpora, err)
+	}
+	for in, want := range map[string][]string{
+		`{"apps":["gmail"]}`:                                     {"*"},
+		`{"apps":["gmail"],"corpora":[]}`:                        {},
+		`{"apps":["gmail"],"corpora":["cor_a","cor_a","cor_b"]}`: {"cor_a", "cor_b"},
+	} {
+		var grant runprofile.Grant
+		if err := json.Unmarshal([]byte(in), &grant); err != nil {
+			t.Fatal(err)
+		}
+		cleaned, err := cleanGrant(grant)
+		if err != nil || !slices.Equal(cleaned.Corpora, want) || cleaned.Corpora == nil {
+			t.Errorf("%s: corpora = %#v (%v), want %#v", in, cleaned.Corpora, err, want)
+		}
 	}
 }
