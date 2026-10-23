@@ -27,6 +27,7 @@ type options struct {
 	api, org, file, output, preset, domains string
 	json, dryRun, noInput, yes              bool
 	noBrowser                               bool
+	device                                  bool
 	forceLogin                              bool
 	agentHelp                               bool
 	to                                      int64
@@ -63,6 +64,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	flags.BoolVar(&opts.dryRun, "dry-run", false, "show changes without applying")
 	flags.BoolVar(&opts.noInput, "no-input", false, "never prompt for confirmation")
 	flags.BoolVar(&opts.noBrowser, "no-browser", false, "print sign-in URL without opening a browser")
+	flags.BoolVar(&opts.device, "device", false, "sign in with a code approved in any browser (for SSH or a machine without a browser)")
 	flags.BoolVar(&opts.forceLogin, "force-login", false, "sign in again instead of using the cached session")
 	flags.BoolVar(&opts.agentHelp, "agent-help", false, "print the coding-agent workspace mapping guide")
 	flags.BoolVar(&opts.yes, "yes", false, "confirm setup plan or overwrite an output file")
@@ -464,7 +466,11 @@ func signedInClient(ctx context.Context, opts options, stdout, stderr io.Writer,
 		}
 		var err error
 		var session cliSession
-		session, err = nativeLogin(ctx, opts.api, opts.noBrowser, opts.json, stderr)
+		if useDeviceLogin(opts, getenv) {
+			session, err = deviceLogin(ctx, opts.api, opts.json, stderr)
+		} else {
+			session, err = nativeLogin(ctx, opts.api, opts.noBrowser, opts.json, stderr)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -667,7 +673,10 @@ Commands:
 
 Remote commands reuse a private, short-lived access token cache, then prompt for
 browser sign-in when it expires. Use login --force-login to switch accounts or
-logout to remove the cached token. Use -f for
+logout to remove the cached token. Over SSH or on a machine without a browser,
+use login --device: it prints a URL and a short code to approve in any browser
+where you are signed in to Oryxa. It is chosen automatically when SSH_CONNECTION
+is set or no browser can be opened. Use -f for
 the input file, --org for an organization
 slug, --api for the API URL, --json for machine-readable output, and --dry-run
 to plan an apply. Unsupported sections are rejected before any write.
