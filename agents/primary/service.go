@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 	"log/slog"
 	"net/http"
 	"time"
@@ -109,6 +110,10 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 	}
 	if err := agentinteractions.NewStore(platform.Database).Migrate(ctx); err != nil {
 		return err
+	}
+	// The access decision log the activity feed reads (internal/access).
+	if err := access.Migrate(ctx, platform.Database); err != nil {
+		return fmt.Errorf("migrate access decisions: %w", err)
 	}
 	if err := rooms.NewStore(platform.Database).Migrate(ctx); err != nil {
 		return fmt.Errorf("migrate rooms: %w", err)
@@ -220,6 +225,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 
 	registryStore := managedagents.NewStore(platform.Database)
 	interactionStore := agentinteractions.NewStore(platform.Database)
+	decisionLog := access.NewLog(platform.Database.Pool, logger)
 	workspacePolicy := platform.WorkspaceSettings()
 	wakeupStore := wakeups.NewStoreWithPolicy(platform.Database, workspacePolicy)
 	// What each member chose about how strictly the answer guard reads what
@@ -314,7 +320,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		// owner chose there, so the ledger asks the teamspace for its seat.
 		interactionConfig := agentinteractions.Config{
 			Repository: interactionStore, Directory: organizationDirectory, Teamspaces: teamspaceService, Tokens: memberTokens,
-			Logger: logger,
+			Decisions: decisionLog, Logger: logger,
 		}
 		interactionConfig.Policy = workspacePolicy
 		if typeSafe != nil {
@@ -862,6 +868,24 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			})
 		}
 	}
+
+	// Decisions older than access.Retention go, once an hour.
+	workers = append(workers, func(ctx context.Context) {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			if purged, err := decisionLog.Purge(ctx, access.Retention); err != nil {
+				logger.Warn("purge access decisions", "error", err)
+			} else if purged > 0 {
+				logger.Info("access decisions purged", "count", purged)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	})
 
 	logger.Info("agents mounted", "model", settings.Model, "model_lite", settings.ModelLite, "run_timeout", settings.RunTimeout.String())
 	return host.Service{
