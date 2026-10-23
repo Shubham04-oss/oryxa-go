@@ -326,6 +326,9 @@ func object(prefix, typed string) *v1.ObjectReference {
 func TestReplayTodaysAnswersAgainstTheSchema(t *testing.T) {
 	config := FromEnv()
 	if !config.Enabled() {
+		if os.Getenv("CI") != "" {
+			t.Fatal("SPICEDB_ENDPOINT is not set; CI's Go job starts a SpiceDB for this replay")
+		}
 		t.Skip("SPICEDB_ENDPOINT is not set")
 	}
 	client, err := Dial(config)
