@@ -4,6 +4,7 @@
 //	oryxa migrate      install those services' schemas, then exit
 //	oryxa services     list the services this binary carries
 //	oryxa healthcheck  ask the process on ORYXA_ADDRESS whether it is serving
+//	oryxa spicedb-reconcile  repair SpiceDB's relationships from their sources now
 //
 // Every service reads its own variables, documented in .env.example at the
 // repository root. The process itself reads ORYXA_ADDRESS, ORYXA_SERVICES,
@@ -13,6 +14,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,8 +26,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/access/spicedb/projector"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
+	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
 
 func main() {
@@ -49,6 +53,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "healthcheck":
 		return healthcheck(ctx, os.Getenv("ORYXA_ADDRESS"), stderr)
+	case "spicedb-reconcile":
+		return reconcileSpiceDB(ctx, stdout, stderr)
 	case "help", "-h", "--help":
 		usage(stdout)
 		return 0
@@ -93,6 +99,8 @@ Commands:
   migrate      install those services' schemas, then exit
   services     list the services this binary carries: %s
   healthcheck  ask the process on ORYXA_ADDRESS whether it is serving
+  spicedb-reconcile  repair SpiceDB's relationships from their sources now,
+               as the nightly run does; needs DATABASE_URL and SPICEDB_*
 `, strings.Join(host.Names(definitions), ", "))
 }
 
@@ -124,6 +132,39 @@ func healthcheck(ctx context.Context, address string, stderr io.Writer) int {
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusNoContent {
 		fmt.Fprintf(stderr, "healthz answered %s\n", response.Status)
+		return 1
+	}
+	return 0
+}
+
+// reconcileSpiceDB runs the nightly reconcile once, on demand, and prints
+// what it fixed.
+func reconcileSpiceDB(ctx context.Context, stdout, stderr io.Writer) int {
+	if os.Getenv("SPICEDB_ENDPOINT") == "" {
+		fmt.Fprintln(stderr, "SPICEDB_ENDPOINT is not set")
+		return 1
+	}
+	database, err := postgreskit.Open(ctx, postgreskit.Config{URL: os.Getenv("DATABASE_URL"), ApplicationName: "oryxa-spicedb-reconcile", MaxConns: 2})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer database.Close()
+	platform := host.Platform{Database: database, Getenv: os.Getenv, Logger: slog.Default()}
+	if err := projector.Migrate(ctx, platform); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	reconciler, closeClient, err := projector.Open(platform)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer closeClient()
+	result, err := reconciler.Run(ctx)
+	_ = json.NewEncoder(stdout).Encode(result)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	return 0
