@@ -167,6 +167,21 @@ jobs:
           # A laptop's database, like production's, already has them.
           docker exec -i "${{ job.services.postgres.id }}" psql -U oryxa -d oryxa -v ON_ERROR_STOP=1 \
             -c 'CREATE SCHEMA IF NOT EXISTS agents_primary' -c 'CREATE SCHEMA IF NOT EXISTS workspace'
+      - name: SpiceDB
+        # For the permissions replay (internal/access/spicedb). A service
+        # container can't take serve-testing's argument, so it runs here, on
+        # a free host port like the database, and goes in the last step.
+        run: |
+          name="spicedb-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          docker run -d --rm --name "$name" -p 127.0.0.1::50051 authzed/spicedb:v1.56.2 serve-testing
+          port=$(docker port "$name" 50051/tcp | head -1 | cut -d: -f2)
+          for _ in $(seq 30); do (echo >"/dev/tcp/127.0.0.1/$port") 2>/dev/null && break; sleep 1; done
+          {
+            echo "SPICEDB_CONTAINER=$name"
+            echo "SPICEDB_ENDPOINT=127.0.0.1:$port"
+            echo "SPICEDB_PRESHARED_KEY=ci"
+            echo "SPICEDB_INSECURE=true"
+          } >> "$GITHUB_ENV"
       - name: Auth's schema
         # agents' session tests read auth's tables, which a laptop's database
         # already has; auth's own tests migrate them into this fresh one.
@@ -210,6 +225,9 @@ jobs:
             exit 1
           fi
           echo "No database test skipped for want of its database."
+      - name: Stop SpiceDB
+        if: always() && env.SPICEDB_CONTAINER != ''
+        run: docker rm -f "$SPICEDB_CONTAINER"
 
   web:
     name: Web
