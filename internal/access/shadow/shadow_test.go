@@ -3,6 +3,7 @@ package shadow
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +36,7 @@ func started(t *testing.T, check checker) (*Shadow, recorder) {
 	disagreements := make(recorder, 8)
 	shadow := New(check, disagreements, nil)
 	shadow.timeout = 20 * time.Millisecond
+	shadow.settle = 10 * time.Millisecond
 	shadow.checks = func(_ access.Actor, userID, _, action string, resource spicedb.Object, _ bool) ([]spicedb.Check, bool) {
 		return []spicedb.Check{{Resource: resource, Permission: action, Subject: spicedb.Object{Type: "member", ID: userID}}}, true
 	}
@@ -142,5 +144,27 @@ func TestRealSpiceDB(t *testing.T) {
 	}
 	if allowed {
 		t.Fatal("an unknown file is readable")
+	}
+}
+
+func TestDisagreementThatSettlesIsNotRecorded(t *testing.T) {
+	asked := make(chan struct{}, 2)
+	var calls atomic.Int32
+	// SpiceDB lags the change at first, then catches up.
+	shadow, disagreements := started(t, func(context.Context) (bool, error) {
+		defer func() { asked <- struct{}{} }()
+		return calls.Add(1) > 1, nil
+	})
+	shadow.Compare(context.Background(), ask, true)
+	for range 2 {
+		select {
+		case <-asked:
+		case <-time.After(time.Second):
+			t.Fatal("the disagreement was not asked again")
+		}
+	}
+	time.Sleep(20 * time.Millisecond)
+	if len(disagreements) != 0 {
+		t.Fatalf("recorded %v", <-disagreements)
 	}
 }
