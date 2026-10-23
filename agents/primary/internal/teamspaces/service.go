@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	authz "github.com/Shubham04-oss/oryxa-go/internal/access"
 	"log/slog"
 	"net/url"
 	"slices"
@@ -472,7 +473,7 @@ func (service *Service) organizationAccess(ctx context.Context, actor Actor) (te
 	access := teamAccess{organizationName: directory.Organization.Name}
 	for _, person := range directory.People {
 		if person.UserID == actor.UserID {
-			access.canManageOrganization = person.OrgRole == "owner" || person.OrgRole == "admin"
+			access.canManageOrganization = authz.Role(person.OrgRole).IsOrgAdmin()
 			return access, nil
 		}
 	}
@@ -503,7 +504,7 @@ func directoryAccess(directory primaryagents.OrganizationDirectory, userID strin
 	canManageOrganization := false
 	for _, person := range directory.People {
 		if person.UserID == userID {
-			canManageOrganization = person.OrgRole == "owner" || person.OrgRole == "admin"
+			canManageOrganization = authz.Role(person.OrgRole).IsOrgAdmin()
 			break
 		}
 	}

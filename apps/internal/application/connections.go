@@ -404,7 +404,7 @@ func (s *Service) Connections(ctx context.Context, credentials authclient.Creden
 		return nil, err
 	}
 	query := domain.ConnectionQuery{MemberID: caller.UserID}
-	if organization && caller.Role.IsOrgAdmin() && !caller.Agent {
+	if organization && caller.ActsAsAdmin() {
 		query.MemberID = ""
 	}
 	if toolkit != "" {
@@ -426,7 +426,7 @@ func (s *Service) Connection(ctx context.Context, credentials authclient.Credent
 	if err != nil {
 		return domain.Connection{}, err
 	}
-	if connection.MemberID != caller.UserID && (!caller.Role.IsOrgAdmin() || caller.Agent) {
+	if connection.MemberID != caller.UserID && !caller.ActsAsAdmin() {
 		return domain.Connection{}, domain.ErrNotFound
 	}
 	return connection, nil

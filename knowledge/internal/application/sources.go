@@ -244,7 +244,7 @@ func (s *Service) Sources(ctx context.Context, credentials authclient.Credential
 	if err != nil {
 		return nil, err
 	}
-	query.Admin = query.Admin && caller.Role.IsOrgAdmin()
+	query.Admin = query.Admin && caller.ActsAsAdmin()
 	query.CreatedBy = caller.UserID
 	listed, err := s.store.Sources(ctx, organizationID, query)
 	if err != nil {
@@ -264,7 +264,7 @@ func mayRead(caller domain.OrgMembership, source domain.Source) error {
 	if err := caller.MayReadSource(source.ID); err != nil {
 		return err
 	}
-	if source.CreatedBy != caller.UserID && !caller.Role.IsOrgAdmin() {
+	if source.CreatedBy != caller.UserID && !caller.ActsAsAdmin() {
 		return domain.ErrNotFound
 	}
 	return nil
@@ -392,7 +392,7 @@ func (s *Service) Document(ctx context.Context, credentials authclient.Credentia
 	if err := mayRead(caller, source); err != nil {
 		return domain.Document{}, err
 	}
-	if documentAccess(source, document) == accessAdmins && (!caller.Role.IsOrgAdmin() || caller.Agent) {
+	if documentAccess(source, document) == accessAdmins && !caller.ActsAsAdmin() {
 		return domain.Document{}, domain.ErrNotFound
 	}
 	return document, nil

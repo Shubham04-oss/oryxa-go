@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 	"strings"
 	"time"
 	"unicode"
@@ -22,23 +23,14 @@ var (
 )
 
 // OrgRole is the caller's place in the organization, as auth reports it.
-type OrgRole string
+// OrgRole is access.Role: the rules for it live there.
+type OrgRole = access.Role
 
 const (
 	OrgRoleOwner  OrgRole = "owner"
 	OrgRoleAdmin  OrgRole = "admin"
 	OrgRoleMember OrgRole = "member"
 )
-
-func (role OrgRole) Valid() bool {
-	return role == OrgRoleOwner || role == OrgRoleAdmin || role == OrgRoleMember
-}
-
-// IsOrgAdmin is the organization-level control: owners and admins may manage
-// every team in the organization.
-func (role OrgRole) IsOrgAdmin() bool {
-	return role == OrgRoleOwner || role == OrgRoleAdmin
-}
 
 // Role is a member's place on a team.
 type Role string
@@ -81,7 +73,7 @@ type OrgMembership struct {
 // member would: the teams its member is actually on, and management only
 // where its member is a team admin in its own right.
 func (membership OrgMembership) ActsAsAdmin() bool {
-	return membership.Role.IsOrgAdmin() && !membership.Agent
+	return access.Actor{Role: membership.Role, Agent: membership.Agent}.ActsAsAdmin()
 }
 
 type Organization struct {
