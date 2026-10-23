@@ -79,6 +79,7 @@ type Service struct {
 	directory Directory
 	teams     Teams
 	decisions Recorder
+	shadow    access.Comparer
 	logger    *slog.Logger
 	now       func() time.Time
 }
@@ -89,6 +90,13 @@ func New(store Store, blobs blob.Store, directory Directory, teams Teams, decisi
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return &Service{store: store, blobs: blobs, directory: directory, teams: teams, decisions: decisions, logger: logger, now: time.Now}
+}
+
+// WithShadow sets where the service's decisions are compared with SpiceDB.
+// Without one it compares nothing.
+func (s *Service) WithShadow(shadow access.Comparer) *Service {
+	s.shadow = shadow
+	return s
 }
 
 // InputReader supplies a create's input once the caller is known. Reading an
@@ -230,7 +238,7 @@ func (s *Service) List(ctx context.Context, credentials authclient.Credentials, 
 		// A team's files may be listed only by a caller who could read a
 		// file on it, so a team they can't reach, or one outside a
 		// specialist's grant, is as missing as one that doesn't exist.
-		if err := s.canSee(org, teams, domain.Object{OrganizationID: organizationID, Scope: domain.ScopeTeam, TeamID: filter.TeamID}); err != nil {
+		if err := s.canSee(ctx, org, teams, domain.Object{OrganizationID: organizationID, Scope: domain.ScopeTeam, TeamID: filter.TeamID}); err != nil {
 			return nil, err
 		}
 	}
@@ -251,7 +259,7 @@ func (s *Service) List(ctx context.Context, credentials authclient.Credentials, 
 	}
 	visible := objects[:0]
 	for _, object := range objects {
-		err := s.canSee(org, teams, object)
+		err := s.canSee(ctx, org, teams, object)
 		if errors.Is(err, domain.ErrNotFound) {
 			continue
 		}
@@ -273,7 +281,7 @@ func (s *Service) Get(ctx context.Context, credentials authclient.Credentials, o
 		return domain.Object{}, conceal(err)
 	}
 	teams := s.teamLookup(ctx, credentials, org, organizationID)
-	if err := s.canSee(org, teams, object); err != nil {
+	if err := s.canSee(ctx, org, teams, object); err != nil {
 		return domain.Object{}, err
 	}
 	// Content and DownloadURL read through here, so each records this once.
@@ -315,10 +323,10 @@ func (s *Service) Delete(ctx context.Context, credentials authclient.Credentials
 		return conceal(err)
 	}
 	teams := s.teamLookup(ctx, credentials, org, organizationID)
-	if err := s.canSee(org, teams, object); err != nil {
+	if err := s.canSee(ctx, org, teams, object); err != nil {
 		return err
 	}
-	if err := s.canDelete(org, teams, object); err != nil {
+	if err := s.canDelete(ctx, org, teams, object); err != nil {
 		return err
 	}
 	now := s.now().UTC()
@@ -510,7 +518,13 @@ func reason(org domain.OrgMembership, teams teamLookup, object domain.Object, ac
 // canSee is the one place every read of a file, its delete, and the list
 // decide whether the caller may reach it, so a specialist's grant is enforced
 // here once and a list can't show what Get would refuse.
-func (s *Service) canSee(org domain.OrgMembership, teams teamLookup, object domain.Object) error {
+func (s *Service) canSee(ctx context.Context, org domain.OrgMembership, teams teamLookup, object domain.Object) error {
+	err := s.see(org, teams, object)
+	s.compare(ctx, org, object, access.ActionRead, err)
+	return err
+}
+
+func (s *Service) see(org domain.OrgMembership, teams teamLookup, object domain.Object) error {
 	if err := org.MayReachFiles(object.Scope, object.TeamID); err != nil {
 		return err
 	}
@@ -536,7 +550,13 @@ func (s *Service) canSee(org domain.OrgMembership, teams teamLookup, object doma
 	}
 }
 
-func (s *Service) canDelete(org domain.OrgMembership, teams teamLookup, object domain.Object) error {
+func (s *Service) canDelete(ctx context.Context, org domain.OrgMembership, teams teamLookup, object domain.Object) error {
+	err := s.mayDelete(org, teams, object)
+	s.compare(ctx, org, object, access.ActionDelete, err)
+	return err
+}
+
+func (s *Service) mayDelete(org domain.OrgMembership, teams teamLookup, object domain.Object) error {
 	if org.ActsAsAdmin() {
 		return nil
 	}
@@ -558,6 +578,28 @@ func (s *Service) canDelete(org domain.OrgMembership, teams teamLookup, object d
 		}
 	}
 	return domain.ErrNotFound
+}
+
+// compare asks SpiceDB in shadow what canSee or canDelete just decided; their
+// answer stands. A failure that decided nothing, such as teams being
+// unreachable, and a team check with no file behind it, aren't compared.
+func (s *Service) compare(ctx context.Context, org domain.OrgMembership, object domain.Object, action string, err error) {
+	if s.shadow == nil || object.ID == "" {
+		return
+	}
+	if err != nil && !errors.Is(err, domain.ErrNotFound) && !errors.Is(err, domain.ErrForbidden) {
+		return
+	}
+	ask := access.Ask{
+		OrganizationID: object.OrganizationID, Service: "files", Action: action,
+		ResourceKind: "file", ResourceID: object.ID, UserID: org.UserID,
+		Actor:   access.Actor{Role: org.Role, Agent: org.Agent, AgentRole: org.AgentRole},
+		Limited: org.FilesLimited(),
+	}
+	if org.Agent {
+		ask.AgentID = org.AgentID
+	}
+	s.shadow.Compare(ctx, ask, err == nil)
 }
 
 // teamLookup answers teamAccess for one team of the organization.

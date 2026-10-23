@@ -256,7 +256,7 @@ func (s *Service) Sources(ctx context.Context, credentials authclient.Credential
 	if err != nil {
 		return nil, err
 	}
-	return slices.DeleteFunc(listed, func(source domain.Source) bool { return mayRead(caller, source) != nil }), nil
+	return slices.DeleteFunc(listed, func(source domain.Source) bool { return s.mayRead(ctx, caller, source, access.ActionRead) != nil }), nil
 }
 
 // mayRead is the one place every read of a source, of its runs and of its
@@ -265,7 +265,15 @@ func (s *Service) Sources(ctx context.Context, credentials authclient.Credential
 // names it, so the grant is enforced here once. Answering not-found tells
 // the caller nothing they did not know, and a source outside a specialist's
 // grant looks the same as one that does not exist.
-func mayRead(caller domain.OrgMembership, source domain.Source) error {
+//
+// SpiceDB is asked the same in shadow, as action; this answer stands.
+func (s *Service) mayRead(ctx context.Context, caller domain.OrgMembership, source domain.Source, action string) error {
+	err := decide(caller, source)
+	s.compare(ctx, caller, source, action, err)
+	return err
+}
+
+func decide(caller domain.OrgMembership, source domain.Source) error {
 	if err := caller.MayReadSource(source.ID); err != nil {
 		return err
 	}
@@ -295,7 +303,7 @@ func (s *Service) readable(ctx context.Context, credentials authclient.Credentia
 	if err != nil {
 		return domain.OrgMembership{}, domain.Source{}, err
 	}
-	if err := mayRead(caller, source); err != nil {
+	if err := s.mayRead(ctx, caller, source, access.ActionRead); err != nil {
 		return domain.OrgMembership{}, domain.Source{}, err
 	}
 	return caller, source, nil
@@ -331,7 +339,7 @@ func (s *Service) RemoveSource(ctx context.Context, credentials authclient.Crede
 	if err != nil {
 		return err
 	}
-	if err := mayRead(caller, source); err != nil {
+	if err := s.mayRead(ctx, caller, source, access.ActionDelete); err != nil {
 		return err
 	}
 	pending := &pendingOriginals{}
@@ -364,7 +372,7 @@ func (s *Service) SyncSource(ctx context.Context, credentials authclient.Credent
 	if err != nil {
 		return domain.Source{}, err
 	}
-	if err := mayRead(caller, source); err != nil {
+	if err := s.mayRead(ctx, caller, source, access.ActionWrite); err != nil {
 		return domain.Source{}, err
 	}
 	if err := s.allowProvider(ctx, organizationID, source.Provider); err != nil {
@@ -408,7 +416,7 @@ func (s *Service) Document(ctx context.Context, credentials authclient.Credentia
 	if err != nil {
 		return domain.Document{}, err
 	}
-	if err := mayRead(caller, source); err != nil {
+	if err := s.mayRead(ctx, caller, source, access.ActionRead); err != nil {
 		return domain.Document{}, err
 	}
 	if documentAccess(source, document) == accessAdmins && !caller.ActsAsAdmin() {
@@ -468,7 +476,7 @@ func (s *Service) SetSourceKinds(ctx context.Context, credentials authclient.Cre
 	if err != nil {
 		return domain.Source{}, err
 	}
-	if err := mayRead(caller, source); err != nil {
+	if err := s.mayRead(ctx, caller, source, access.ActionWrite); err != nil {
 		return domain.Source{}, err
 	}
 	if s.judge == nil || !gated(source) {

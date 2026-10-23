@@ -264,7 +264,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			Metric:             config.DefaultMetric,
 			Backend:            config.DefaultBackend,
 			AnswerInstructions: config.AnswerInstructions,
-		}, logger).WithDecisions(access.NewLog(platform.Database.Pool, logger))
+		}, logger).WithDecisions(access.NewLog(platform.Database.Pool, logger)).WithShadow(platform.Shadow)
 
 	signer, err := platform.EventAuth.Signer(Name)
 	if err != nil {

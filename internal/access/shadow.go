@@ -57,3 +57,9 @@ func (log *Log) Disagree(ctx context.Context, disagreement Disagreement) {
 			"resource_kind", ask.ResourceKind, "error", err)
 	}
 }
+
+// Comparer asks SpiceDB in shadow what the code just decided
+// (*shadow.Shadow). A service holding a nil one compares nothing.
+type Comparer interface {
+	Compare(ctx context.Context, ask Ask, allowed bool)
+}

@@ -18,7 +18,9 @@ func (check checker) Check(ctx context.Context, _ string, _ []spicedb.Check) (bo
 
 type recorder chan access.Disagreement
 
-func (record recorder) Disagree(_ context.Context, disagreement access.Disagreement) { record <- disagreement }
+func (record recorder) Disagree(_ context.Context, disagreement access.Disagreement) {
+	record <- disagreement
+}
 
 var ask = access.Ask{
 	OrganizationID: "org_1", Service: "files", Action: access.ActionRead,
@@ -97,7 +99,9 @@ func TestSkippedWhenChecksHasNoMapping(t *testing.T) {
 		t.Error("asked SpiceDB for an unmapped decision")
 		return false, nil
 	})
-	shadow.checks = func(access.Actor, string, string, string, spicedb.Object, bool) ([]spicedb.Check, bool) { return nil, false }
+	shadow.checks = func(access.Actor, string, string, string, spicedb.Object, bool) ([]spicedb.Check, bool) {
+		return nil, false
+	}
 	shadow.Compare(context.Background(), ask, true)
 	time.Sleep(20 * time.Millisecond)
 	shadow.Close()

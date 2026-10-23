@@ -27,6 +27,7 @@ import (
 	"cloud.google.com/go/auth"
 	"github.com/aws/aws-sdk-go-v2/aws"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/access"
 	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
@@ -120,6 +121,9 @@ type Platform struct {
 	// signing key cannot publish; a consumer never runs a handler on an
 	// unsigned or wrongly-signed event.
 	EventAuth *eventauth.Registry
+	// Shadow asks SpiceDB, in shadow, each access decision a service makes
+	// (internal/access/shadow). It is nil unless SPICEDB_ENDPOINT is set.
+	Shadow access.Comparer
 	// Getenv reads configuration. A URL variable naming a service that runs
 	// in this process defaults to this process.
 	Getenv func(string) string
