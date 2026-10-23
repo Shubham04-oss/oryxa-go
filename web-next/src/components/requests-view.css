@@ -148,6 +148,9 @@
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
+.workspace-requests-activity-reason {
+  color: var(--tone-777777);
+}
 .workspace-requests-activity-actions {
   display: flex;
   flex: none;

@@ -738,6 +738,35 @@ export type AgentActivityKind =
   | "secret_viewed"
   | "lease_given"
   | "lease_revoked"
+  | "accessed"
+
+/**
+ * One allow from the access decision log (internal/access.Decision): someone
+ * else, or one of the member's own agents, reaching a file, a collection, a
+ * document or a source, and the rule that let it.
+ */
+export type AgentAccessDecision = {
+  at: string
+  service: string
+  action: "read" | "search" | "write" | "delete"
+  resource_kind: "file" | "corpus" | "document" | "source"
+  resource_id: string
+  /** The member whose it is; left out for a team's or the organization's. */
+  owner_id?: string
+  actor_user_id: string
+  /** Set when an agent reached it, rather than its member in their own session. */
+  actor_agent_id?: string
+  /** The agent's kind: `primary` or `specialist`. */
+  actor_agent_role?: string
+  /** The rule that granted it. */
+  reason:
+    | "owner"
+    | "org_admin"
+    | "team_member"
+    | "team_admin"
+    | "organization"
+    | "grant"
+}
 
 /**
  * One thing that happened to the member's Slack asks, as the ledger holds it:
@@ -761,14 +790,21 @@ export type AgentActivityEntry = {
   decided_by?: AgentRequestDecider
   /** On the two lease entries. */
   lease?: AgentLease
+  /**
+   * On an `accessed` entry: who reached what, and why. `role` is `owner` when
+   * someone, or the member's own agent, reached the member's thing, and
+   * `asker` when one of the member's agents reached someone else's.
+   */
+  access?: AgentAccessDecision
 }
 
 /**
  * `GET …/agent-requests/activity[?limit=]` (server.interactionActivity): what
  * happened to the member's Slack asks, newest first: asks made and received,
  * how each was decided and where, bypasses and leases among the decisions,
- * answers, leases given and revoked, and secrets opened. It lists what the
- * ledger still has.
+ * answers, leases given and revoked, and secrets opened; and, from the access
+ * decision log, who reached the member's things and what their agents
+ * reached. It lists what the ledger still has.
  */
 export async function listAgentActivity(
   organizationId: string,
