@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/Shubham04-oss/oryxa-go/test/identities"
@@ -89,4 +90,71 @@ func do(method, path, authorization, cookie string) *httptest.ResponseRecorder {
 	response := httptest.NewRecorder()
 	Handler().ServeHTTP(response, request)
 	return response
+}
+
+func TestMeByCookie(t *testing.T) {
+	response := do(http.MethodGet, "/v1/auth/me", "", "member")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.Bytes())
+	}
+	var body struct {
+		User struct {
+			ID string `json:"id"`
+		} `json:"user"`
+		Organizations []struct {
+			ID string `json:"id"`
+		} `json:"organizations"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.User.ID != "user-member" || len(body.Organizations) != 1 || body.Organizations[0].ID != "org_sim" {
+		t.Fatalf("body = %+v", body)
+	}
+}
+
+func TestStrangerHasNoOrganizations(t *testing.T) {
+	response := do(http.MethodGet, "/v1/organizations", "Bearer stranger", "")
+	if response.Code != http.StatusOK || response.Body.String() != "{\"organizations\":[]}\n" {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.Bytes())
+	}
+}
+
+func TestMeNeedsToken(t *testing.T) {
+	if response := do(http.MethodGet, "/v1/auth/me", "", ""); response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", response.Code)
+	}
+}
+
+func TestSessionRoutesWebNextCalls(t *testing.T) {
+	if response := do(http.MethodGet, "/v1/auth/config", "", ""); response.Code != http.StatusOK {
+		t.Fatalf("config status = %d", response.Code)
+	}
+	for _, path := range []string{"/v1/auth/refresh", "/v1/auth/logout"} {
+		if response := do(http.MethodPost, path, "", ""); response.Code != http.StatusNoContent {
+			t.Fatalf("%s status = %d", path, response.Code)
+		}
+	}
+}
+
+func TestUnmatchedGoesUpstream(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("X-Path", request.Method+" "+request.URL.Path)
+	}))
+	defer api.Close()
+	upstream, _ := url.Parse(api.URL)
+	handler := NewHandler(Config{Upstream: upstream})
+	for path, want := range map[string]string{
+		"/v1/agents":                  "GET /v1/agents",
+		"/v1/organizations/org_sim/x": "GET /v1/organizations/org_sim/x",
+		"/v1/auth/me":                 "",
+	} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Authorization", "Bearer member")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if got := response.Header().Get("X-Path"); got != want {
+			t.Fatalf("%s reached upstream as %q, want %q", path, got, want)
+		}
+	}
 }

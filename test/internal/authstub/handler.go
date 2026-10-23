@@ -12,6 +12,7 @@ package authstub
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httputil"
 	"strings"
 
 	"github.com/Shubham04-oss/oryxa-go/test/identities"
@@ -33,10 +34,58 @@ func NewHandler(config Config) http.Handler {
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
+	// What web-next asks auth for a session; the stub has no sign-in, so
+	// refresh and logout just succeed and the role cookie stays.
+	mux.HandleFunc("GET /v1/auth/config", func(writer http.ResponseWriter, _ *http.Request) {
+		writeJSON(writer, http.StatusOK, map[string]any{"identity_providers": []string{}})
+	})
+	mux.HandleFunc("GET /v1/auth/me", me)
+	mux.HandleFunc("POST /v1/auth/refresh", noContent)
+	mux.HandleFunc("POST /v1/auth/logout", noContent)
+	mux.HandleFunc("GET /v1/organizations", organizations)
 	mux.HandleFunc("GET /v1/organizations/{organizationID}", organization)
 	mux.HandleFunc("GET /v1/organizations/{organizationID}/members", members)
 	mux.HandleFunc("POST /v1/internal/agent-tokens", config.mintAgentToken)
+	// In front of the API, the stub plays the one host real auth and the
+	// API share, so web-next needs no proxy of its own.
+	if config.Upstream != nil {
+		mux.Handle("/", httputil.NewSingleHostReverseProxy(config.Upstream))
+	}
 	return mux
+}
+
+// simulatedOrganization is the one organization every InOrg person is in;
+// dev-stack/seed.sql seeds the same row.
+var simulatedOrganization = map[string]string{"id": "org_sim", "name": "Simulated Org", "slug": "org-sim"}
+
+func noContent(writer http.ResponseWriter, _ *http.Request) {
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func callerOrganizations(caller identities.Person) []map[string]string {
+	if !caller.InOrg {
+		return []map[string]string{}
+	}
+	return []map[string]string{simulatedOrganization}
+}
+
+func me(writer http.ResponseWriter, request *http.Request) {
+	caller, _, ok := lookup(writer, request)
+	if !ok {
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"user":          map[string]string{"id": caller.UserID, "email": caller.Email, "display_name": caller.DisplayName},
+		"organizations": callerOrganizations(caller),
+	})
+}
+
+func organizations(writer http.ResponseWriter, request *http.Request) {
+	caller, _, ok := lookup(writer, request)
+	if !ok {
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"organizations": callerOrganizations(caller)})
 }
 
 func organization(writer http.ResponseWriter, request *http.Request) {
@@ -50,7 +99,7 @@ func organization(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	response := map[string]any{
-		"organization": map[string]string{"id": organizationID, "name": "Simulated Org"},
+		"organization": map[string]string{"id": organizationID, "name": simulatedOrganization["name"]},
 		"membership": map[string]string{
 			"organization_id": organizationID,
 			"user_id":         caller.UserID,

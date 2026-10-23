@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -72,6 +73,9 @@ type Config struct {
 	// absent from Ungranted is treated as granted, which is every member
 	// by default (Ungranted is nil).
 	Ungranted map[string]bool
+	// Upstream, when set, receives every request the stub has no route
+	// for (AUTHSTUB_UPSTREAM), so one address serves auth and the API.
+	Upstream *url.URL
 }
 
 // ConfigFromEnv builds Config the way test/cmd/authstub runs it against the
@@ -88,8 +92,17 @@ type Config struct {
 //     other AWS client in this stack does (internal/host.Platform.AWS).
 //   - AUTHSTUB_UNGRANTED_MEMBERS is a comma-separated list of stand-in
 //     UserIDs to answer as ungranted; see Config.Ungranted.
+//   - AUTHSTUB_UPSTREAM is the API the stub forwards everything else to;
+//     see Config.Upstream.
 func ConfigFromEnv(ctx context.Context) (Config, error) {
 	config := Config{Ungranted: parseUngranted(os.Getenv("AUTHSTUB_UNGRANTED_MEMBERS"))}
+	if raw := strings.TrimSpace(os.Getenv("AUTHSTUB_UPSTREAM")); raw != "" {
+		upstream, err := url.Parse(raw)
+		if err != nil || upstream.Host == "" {
+			return config, fmt.Errorf("authstub: AUTHSTUB_UPSTREAM %q is not a URL", raw)
+		}
+		config.Upstream = upstream
+	}
 
 	keyID := strings.TrimSpace(os.Getenv("AGENTS_PRIMARY_SERVICE_KEY_ID"))
 	if keyID == "" {

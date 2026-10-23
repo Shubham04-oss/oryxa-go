@@ -49,7 +49,8 @@ services:
   # target is how a service on the host receives what was published. DynamoDB
   # holds what services keep about the events they handled, such as the email
   # service's delivery log. S3 is the object store the files service owns;
-  # buckets are created by that service's provisioner, not this file.
+  # buckets are created by that service's provisioner, not this file. KMS
+  # holds the dev stack's signing and sealing keys (dev-stack/up.sh).
   #
   # Point the AWS SDK here with AWS_ENDPOINT_URL=http://localhost:4566 and any
   # non-empty credentials; the region is whatever the client sends.
@@ -61,7 +62,7 @@ services:
     image: localstack/localstack:4.14.0
     restart: unless-stopped
     environment:
-      SERVICES: events,sqs,dynamodb,s3
+      SERVICES: events,sqs,dynamodb,s3,kms
       # Start them at boot instead of on first request. Loaded lazily they
       # report "available" until something calls them, and the healthcheck
       # below would never pass.
@@ -74,7 +75,7 @@ services:
           "CMD",
           "python3",
           "-c",
-          "import json, urllib.request; services = json.load(urllib.request.urlopen('http://localhost:4566/_localstack/health'))['services']; raise SystemExit(any(services[name] != 'running' for name in ('events', 'sqs', 'dynamodb', 's3')))",
+          "import json, urllib.request; services = json.load(urllib.request.urlopen('http://localhost:4566/_localstack/health'))['services']; raise SystemExit(any(services[name] != 'running' for name in ('events', 'sqs', 'dynamodb', 's3', 'kms')))",
         ]
       interval: 5s
       timeout: 5s
