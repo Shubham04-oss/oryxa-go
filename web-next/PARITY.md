@@ -309,6 +309,7 @@ Legend: **W** = used by `web/`, **N** = used by `web-next/`, **—** = used by n
 | `POST /v1/invitations/{iid}/accept` | W | N |
 | `PATCH/DELETE /v1/organizations/{id}/members/{uid}` | W | N |
 | `GET/POST/DELETE /v1/agent-grant`, `GET .../callback` | W | N |
+| `POST /v1/auth/cli/device/{lookup,approve,deny}` (the `/cli/device` approve page for `oryxa-cli login --device`) | — | N |
 
 ### teams
 | Endpoint | web | web-next |

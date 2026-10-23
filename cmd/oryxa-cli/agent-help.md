@@ -4,6 +4,14 @@ You are the customer's coding agent. Gather facts from the company sources you
 can access, prepare a reviewable `oryxa.yaml`, and let an organization admin
 review the plan before applying it. Slack installation remains a manual step.
 
+## Sign in
+
+Remote commands sign the admin in when needed. On a remote or headless
+machine (over SSH, or with no browser), run `oryxa login --device --json`:
+it returns a URL and a short code. Give both to the admin, who approves in
+their own signed-in browser, and wait for `"status":"done"`. Never approve
+the code yourself or ask the admin for a password or token.
+
 ## Map source facts
 
 1. Start with `oryxa init --org SLUG --domains example.com -o oryxa.yaml`.

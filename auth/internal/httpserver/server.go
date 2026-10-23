@@ -87,7 +87,11 @@ type Config struct {
 	CLISignUpURL       string
 	CLIVerifier        cliIdentityVerifier
 	CLISessions        clisession.Store
-	CLICompleteLogin   func(context.Context, application.FederatedIdentity) (domain.User, bool, error)
+	// CLIDevices stores device sign-ins; nil turns them off. CLIDeviceURL
+	// is the web page where a signed-in member enters the user code.
+	CLIDevices       clisession.DeviceStore
+	CLIDeviceURL     string
+	CLICompleteLogin func(context.Context, application.FederatedIdentity) (domain.User, bool, error)
 
 	// AgentClientID is COGNITO_AGENT_CLIENT_ID: the Cognito agent app
 	// client's ID. Whenever it is set, a verified access token whose
@@ -112,6 +116,12 @@ type Server struct {
 	mux                *http.ServeMux
 	patterns           []string
 	cliChallengeLimits cliChallengeLimiter
+	cliDeviceLimits    cliChallengeLimiter
+	// A polling CLI asks every five seconds or more, so twelve a minute;
+	// a few may share an office's address.
+	cliPollLimits cliChallengeLimiter
+	// Looking up, approving and denying a user code: a member needs two.
+	cliDecisionLimits cliChallengeLimiter
 }
 
 type authContextKey struct{}
@@ -132,6 +142,7 @@ func New(verifier accessTokenVerifier, oauth authFlow, passwords passwordAuth, s
 		config:         config,
 		allowedOrigins: make(map[string]struct{}),
 		mux:            http.NewServeMux(),
+		cliPollLimits:  cliChallengeLimiter{perPeer: 60, perMinute: 6000},
 	}
 	for _, origin := range config.AllowedOrigins {
 		if parsed, err := url.Parse(origin); err == nil && parsed.Scheme != "" && parsed.Host != "" {
@@ -143,6 +154,11 @@ func New(verifier accessTokenVerifier, oauth authFlow, passwords passwordAuth, s
 	server.handleFunc("GET /v1/auth/config", server.authConfig)
 	server.handleFunc("POST /v1/auth/cli/session", server.cliSession)
 	server.handleFunc("POST /v1/auth/cli/challenge", server.cliChallenge)
+	server.handleFunc("POST /v1/auth/cli/device", server.cliDevice)
+	server.handleFunc("POST /v1/auth/cli/device/token", server.cliDeviceToken)
+	server.handle("POST /v1/auth/cli/device/lookup", server.authenticated(http.HandlerFunc(server.cliDeviceLookup)))
+	server.handle("POST /v1/auth/cli/device/approve", server.authenticated(http.HandlerFunc(server.cliDeviceApprove)))
+	server.handle("POST /v1/auth/cli/device/deny", server.authenticated(http.HandlerFunc(server.cliDeviceDeny)))
 	server.handleFunc("GET /v1/auth/login", server.login)
 	server.handleFunc("GET /v1/auth/callback", server.callback)
 	server.handleFunc("POST /v1/auth/refresh", server.refresh)
@@ -759,7 +775,13 @@ func (server *Server) authenticated(next http.Handler) http.Handler {
 			writeError(writer, http.StatusForbidden, "origin is required for cookie authentication")
 			return
 		}
-		claims, err := server.verifier.Verify(request.Context(), rawToken)
+		var claims authn.Claims
+		var err error
+		if clisession.IsDeviceToken(rawToken) && !fromCookie {
+			claims, err = server.deviceTokenClaims(request.Context(), rawToken)
+		} else {
+			claims, err = server.verifier.Verify(request.Context(), rawToken)
+		}
 		if err != nil {
 			writeError(writer, http.StatusUnauthorized, "access token is invalid")
 			return

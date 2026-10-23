@@ -67,7 +67,7 @@ func (store *Store) AdmitCLISession(ctx context.Context, state, nonce, tokenHash
 }
 func (store *Store) CLISession(ctx context.Context, tokenHash string) (clisession.Session, error) {
 	var result clisession.Session
-	err := store.pool.QueryRow(ctx, `SELECT organization_id,expires_at FROM auth_cli_sessions WHERE token_hash=$1 AND expires_at>now()`, tokenHash).Scan(&result.OrganizationID, &result.ExpiresAt)
+	err := store.pool.QueryRow(ctx, `SELECT organization_id,expires_at,subject FROM auth_cli_sessions WHERE token_hash=$1 AND expires_at>now()`, tokenHash).Scan(&result.OrganizationID, &result.ExpiresAt, &result.Subject)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return clisession.Session{}, domain.ErrUnauthorized
 	}
@@ -114,6 +114,9 @@ func (store *Store) FinishCLIOrganization(ctx context.Context, tokenHash, organi
 func (store *Store) PurgeCLISessions(ctx context.Context) error {
 	return pgx.BeginFunc(ctx, store.pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `DELETE FROM auth_cli_challenges WHERE expires_at<=now()`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM auth_cli_devices WHERE expires_at<=now()`); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, `DELETE FROM auth_cli_sessions WHERE expires_at<=now()`)

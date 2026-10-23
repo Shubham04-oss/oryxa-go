@@ -16,6 +16,18 @@ Cloudflare is the public edge. Route the public auth hostname to this service wi
 
 The setup CLI opens a local browser start page. Existing creators sign in through the CLI Cognito app client; new creators open the web sign-up page, verify email, then return to the start page to sign in. `/v1/auth/config` publishes the CLI client ID, fixed loopback callback, Cognito domain, and web sign-up URL when the CLI client is configured. The CLI exchanges the authorization code with PKCE, registers the verified identity through `/v1/auth/cli/session`, and keeps only the short-lived access token in memory.
 
+### Device sign-in for the CLI
+
+Over SSH or on a machine without a browser, `oryxa-cli login --device` signs in with a device code in the style of RFC 8628 (the CLI also picks it when `SSH_CONNECTION` is set or no browser can be opened). Cognito has no device flow, so auth runs it itself, on top of the same CLI sessions:
+
+1. The CLI calls `POST /v1/auth/cli/device` with an optional `{client_name}` and gets `{device_code, user_code, verification_uri, verification_uri_complete, expires_in, interval}`. The user code looks like `HJKM-PQRT`: eight characters from 16 consonants with no lookalikes (no digits, vowels, `L`, `Z`, `S` or `B`); case, spaces and the hyphen don't matter when typed. `verification_uri` is web-next's `/cli/device` page on the email verification URL's host.
+2. The member opens that page in any browser. If they aren't signed in, it sends them to sign-in and back. The page calls `POST /v1/auth/cli/device/lookup` with `{user_code}` and shows the device's name, the address it asked from, when, and what approving grants (workspace setup for one organization they administer, for at most 15 minutes), with a warning to deny a code someone else sent. Nothing is granted until they choose `POST /v1/auth/cli/device/approve` or `/deny`. These three routes need the member's own web session (a cookie from an allowed origin, or a web bearer token); `cliscope` refuses them to a CLI token and the agent rules refuse an agent token.
+3. The CLI polls `POST /v1/auth/cli/device/token` with `{grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code}` every `interval` seconds. Until a decision it gets `400 {"error": "authorization_pending"}`; polling faster than the interval gets `slow_down` and five more seconds on the interval; afterwards `access_denied` or `expired_token`. Once approved it gets `{access_token, token_type: "Bearer", expires_in, expires_at}`.
+
+The access token is opaque (`oryxa_cli_…`), not a Cognito JWT. Auth admits its hash into `auth_cli_sessions` with the approver's `subject`, for 15 minutes, in the same transaction that consumes the device request. Auth then answers it as it answers a Cognito CLI token: `cliscope` limits it to setup routes, it binds to the first organization it touches, the member's administrator role is rechecked on every use, and `GET /v1/auth/me` reports `"cli": true` to the services that ask.
+
+Auth stores only SHA-256 hashes of the device code, the user code and the token (`auth_cli_devices`, migration 013). A request expires after 10 minutes, is decided once, and its outcome is collected once: a second poll, or a decision after the first, finds nothing. Starting a request is limited to 10 per client address a minute (120 per process), polling to 60 per address (6000), and lookups and decisions to 10 per address (120). The client address is the peer's, except that a loopback peer (the cloudflared sidecar every request arrives through in production) is keyed by Cloudflare's `CF-Connecting-IP`; any other caller's forwarding headers are ignored. The approve page shows that same address. Beyond that, a Postgres-wide cap of 4096 live requests bounds the table across replicas. Expired requests are purged with expired CLI sessions.
+
 Access JWTs are verified locally against Cognito's signed OIDC keys. The auth state tables store only SHA-256 token hashes. Delivery outbox records temporarily contain the action URL needed by email and are scrubbed immediately after successful EventBridge publication. Verification tokens expire after 24 hours; reset tokens expire after 30 minutes. Token redemption uses a PostgreSQL claim lease to prevent concurrent reuse and recover safely after a crashed worker. Cookie-backed and public credential mutations require an allowed browser `Origin`; bearer-token API calls remain supported for authenticated APIs.
 
 ## API
@@ -34,6 +46,10 @@ Access JWTs are verified locally against Cognito's signed OIDC keys. The auth st
 | `POST` | `/v1/auth/password/login` | Authenticate an enabled, verified password account |
 | `POST` | `/v1/auth/password/forgot` | Request password-reset delivery without account enumeration |
 | `POST` | `/v1/auth/password/reset` | Set a new Cognito password and revoke refresh sessions |
+| `POST` | `/v1/auth/cli/device` | Start a CLI device sign-in |
+| `POST` | `/v1/auth/cli/device/token` | Poll a CLI device sign-in for its setup token |
+| `POST` | `/v1/auth/cli/device/lookup` | Show a pending device sign-in to the signed-in member |
+| `POST` | `/v1/auth/cli/device/approve`, `/v1/auth/cli/device/deny` | Decide a pending device sign-in |
 | `GET` | `/v1/auth/me` | Current user and organizations |
 | `GET`, `POST` | `/v1/organizations` | List or create organizations |
 | `GET`, `PATCH`, `DELETE` | `/v1/organizations/{organizationID}` | Read, update, or delete an organization |
