@@ -40,6 +40,10 @@ locals {
       PIPEDREAM_CLIENT_ID     = "pipedream-client-id"
       PIPEDREAM_CLIENT_SECRET = "pipedream-client-secret"
       PIPEDREAM_PROJECT_ID    = "pipedream-project-id"
+      # The keys the integrations service signs connectors' egress handles
+      # with, {"current": "<kid>", "keys": {"<kid>": "<64 hex>"}}, which
+      # put-secrets.sh makes when there are none.
+      INTEGRATIONS_EGRESS_KEYS = "integrations-egress-keys"
     },
     # Only when Jev judges: the tasks cannot start while a secret they name
     # holds no value, so it exists only once there is one to put in it.
@@ -61,9 +65,10 @@ locals {
     APPS_SLACK_APP                  = var.slack_app_ready
     AGENTS_PRIMARY_SLACK_TICKET_KEY = var.slack_app_ready
     # All three of Pipedream's wait for the one switch: none is any use alone.
-    PIPEDREAM_CLIENT_ID     = var.pipedream_ready
-    PIPEDREAM_CLIENT_SECRET = var.pipedream_ready
-    PIPEDREAM_PROJECT_ID    = var.pipedream_ready
+    PIPEDREAM_CLIENT_ID      = var.pipedream_ready
+    PIPEDREAM_CLIENT_SECRET  = var.pipedream_ready
+    PIPEDREAM_PROJECT_ID     = var.pipedream_ready
+    INTEGRATIONS_EGRESS_KEYS = var.integrations_ready
   }
 
   task_secrets = { for variable, slug in local.external_secrets : variable => slug if lookup(local.secret_gates, variable, true) }
@@ -97,6 +102,15 @@ variable "slack_app_ready" {
 # this on and apply.
 variable "pipedream_ready" {
   description = "Whether PIPEDREAM_CLIENT_ID, PIPEDREAM_CLIENT_SECRET and PIPEDREAM_PROJECT_ID hold real values yet. False keeps them out of the task definition, since ECS refuses to start a task whose definition names a secret with no value."
+  type        = bool
+  default     = false
+}
+
+# The integrations service ships off (INTEGRATIONS_ENABLED). Run
+# put-secrets.sh to make INTEGRATIONS_EGRESS_KEYS, then turn this on and apply
+# before switching the service on.
+variable "integrations_ready" {
+  description = "Whether INTEGRATIONS_EGRESS_KEYS holds a value yet. False keeps it out of the task definition, since ECS refuses to start a task whose definition names a secret with no value."
   type        = bool
   default     = false
 }

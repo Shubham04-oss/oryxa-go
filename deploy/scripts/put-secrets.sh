@@ -197,3 +197,16 @@ else
   fi
   unset slack_ticket_key
 fi
+
+# The integrations service's egress handle keys. Made once and then left:
+# replacing them refuses every handle in flight, which live at most minutes,
+# so rotating means adding a key and making it current, not starting over.
+egress_secret=$(secret_id integrations-egress-keys)
+if ! secret_exists "$egress_secret"; then
+  step "integrations skipped: its secret's container does not exist yet (tofu apply in deploy/production makes it)"
+elif secret_has_value "$egress_secret"; then
+  step "INTEGRATIONS_EGRESS_KEYS is stored already: left as it is"
+else
+  printf '{"current":"k1","keys":{"k1":"%s"}}' "$(openssl rand -hex 32)" | put_secret "$egress_secret"
+  step "made and stored INTEGRATIONS_EGRESS_KEYS"
+fi
