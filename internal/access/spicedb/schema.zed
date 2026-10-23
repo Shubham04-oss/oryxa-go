@@ -71,7 +71,9 @@ definition corpus {
     permission read = read_member_reach + org->administer
     permission write_member_reach = owner + team->see_member_reach
     permission write = write_member_reach + org->administer
-    permission delete_member_reach = owner + team->manage_member_reach + created_by
+    // a creator deletes only a team corpus, and only while on the team: rag
+    // reads the corpus first and refuses an org corpus to all but admins
+    permission delete_member_reach = owner + team->manage_member_reach + (created_by & team->see_member_reach)
     permission delete = delete_member_reach + org->administer
 }
 
@@ -86,7 +88,9 @@ definition file {
 
     permission read_member_reach = owner + team->see_member_reach + everyone->participate
     permission read = read_member_reach + org->administer + admins_only->administer
-    permission delete_member_reach = owner + created_by + team->manage_member_reach
+    // as for a corpus: files' canSee comes first, so a creator who can't see
+    // the file (someone else's, an org file, a team they left) can't delete it
+    permission delete_member_reach = owner + team->manage_member_reach + (created_by & team->see_member_reach)
     permission delete = delete_member_reach + org->administer
 }
 
