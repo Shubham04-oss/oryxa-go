@@ -29,6 +29,10 @@ const (
 	Timeout   = 100 * time.Millisecond
 	queueSize = 1024
 	workers   = 8
+	// Settle is how long a disagreement waits to be asked again. A check
+	// that follows a change can reach SpiceDB before the projector has
+	// written it; only a disagreement that outlasts that lag is recorded.
+	Settle = 5 * time.Second
 )
 
 // Checker answers whether every check holds. An error is no answer.
@@ -48,6 +52,7 @@ type Shadow struct {
 	logger   *slog.Logger
 	checks   func(access.Actor, string, string, string, spicedb.Object, bool) ([]spicedb.Check, bool)
 	timeout  time.Duration
+	settle   time.Duration
 	jobs     chan job
 	done     chan struct{}
 	stop     sync.Once
@@ -62,6 +67,8 @@ type job struct {
 	ctx     context.Context
 	ask     access.Ask
 	allowed bool
+	// again is a disagreement asked a second time, after settle.
+	again bool
 }
 
 // New starts a shadow that asks checker and records into recorder. Close
@@ -73,7 +80,7 @@ func New(checker Checker, recorder Recorder, logger *slog.Logger) *Shadow {
 	outcomes, _ := otel.Meter("github.com/Shubham04-oss/oryxa-go/internal/access/shadow").Int64Counter(
 		"access.shadow.checks", metric.WithDescription("Access decisions compared with SpiceDB, by outcome"))
 	shadow := &Shadow{
-		checker: checker, recorder: recorder, logger: logger, checks: spicedb.Checks, timeout: Timeout,
+		checker: checker, recorder: recorder, logger: logger, checks: spicedb.Checks, timeout: Timeout, settle: Settle,
 		jobs: make(chan job, queueSize), done: make(chan struct{}), outcomes: outcomes,
 	}
 	for range workers {
@@ -149,7 +156,23 @@ func (shadow *Shadow) compare(next job) {
 		return
 	}
 	if answer == next.allowed {
-		shadow.count(next.ctx, ask, "agreed")
+		if next.again {
+			shadow.count(next.ctx, ask, "settled")
+		} else {
+			shadow.count(next.ctx, ask, "agreed")
+		}
+		return
+	}
+	if !next.again && shadow.settle > 0 {
+		next.again = true
+		time.AfterFunc(shadow.settle, func() {
+			select {
+			case <-shadow.done:
+			case shadow.jobs <- next:
+			default:
+				shadow.count(next.ctx, ask, "dropped")
+			}
+		})
 		return
 	}
 	shadow.count(next.ctx, ask, "disagreed")
