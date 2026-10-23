@@ -64,6 +64,13 @@ func (reconciler *Reconciler) Run(ctx context.Context) (Result, error) {
 // change shows in SpiceDB without waiting for the night.
 func (reconciler *Reconciler) SyncGrants(ctx context.Context, org, agent string) error {
 	world := ReadWorld(ctx, reconciler.pool, org, reconciler.logger, "agents", "apps", "files")
+	// A source that did not answer fails the event, so it comes back rather
+	// than leaving a grant that changed unrepaired until the night.
+	for _, source := range []string{"agents", "apps", "files"} {
+		if !world.Read[source] {
+			return fmt.Errorf("sync agent %s grants: %s is unreadable", agent, source)
+		}
+	}
 	subject := Filter{SubjectType: "agent", SubjectID: agent}
 	_, token, err := reconciler.fix(ctx, world, subject, func(s slice) bool {
 		return slices.Contains(s.relations, "granted")
