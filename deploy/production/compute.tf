@@ -203,6 +203,9 @@ locals {
     { for service, url in local.queue_urls : (service == "email" ? "EMAIL_QUEUE_URL" : "${upper(service)}_EVENTS_QUEUE_URL") => url },
     # Each publisher's event signing key (keys.tf), as internal/host reads it.
     { for service, key in local.event_signing_keys : "${upper(service)}_EVENT_SIGNING_KEY_ID" => key },
+    # Where the image puts the integrations service's connectors (Dockerfile);
+    # nothing reads it while INTEGRATIONS_ENABLED is off.
+    { INTEGRATIONS_CONNECTORS_DIR = "/connectors" },
     # The guardrail that grounds every answer to a question asked in Slack
     # (answer_guard.tf). Both variables come together or the service refuses to
     # start, and this is the one place that names either. They are set whatever

@@ -14,11 +14,20 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
     -ldflags="-s -w -X github.com/Shubham04-oss/oryxa-go/internal/observability.version=${VERSION}" \
     -o /out/oryxa ./cmd/oryxa
+# The integrations service's connectors, one binary each, named by its
+# directory, which is its manifest id (INTEGRATIONS_CONNECTORS_DIR). fakeapp is
+# for tests and stays out.
+RUN mkdir -p /out/connectors && for dir in integrations/connectors/*/; do \
+      id=$(basename "$dir"); [ "$id" = fakeapp ] && continue; \
+      CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" \
+        -o "/out/connectors/$id" "./$dir" || exit 1; \
+    done
 
 # Every service in one static executable. ORYXA_SERVICES picks which of them
 # a container runs; all of them by default.
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/oryxa /oryxa
+COPY --from=build /out/connectors /connectors
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s CMD ["/oryxa", "healthcheck"]
 ENTRYPOINT ["/oryxa"]
