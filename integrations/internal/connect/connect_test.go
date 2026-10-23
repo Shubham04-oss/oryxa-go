@@ -82,6 +82,8 @@ type fakeApp struct {
 	expiresIn  int           // seconds; 0 answers none
 	refreshLag time.Duration // how long a refresh takes
 	validCode  string
+	// revokeStatus answers a revocation, when set; 200 otherwise.
+	revokeStatus int
 }
 
 func newFakeApp(t *testing.T) *fakeApp {
@@ -92,8 +94,12 @@ func newFakeApp(t *testing.T) *fakeApp {
 	mux.HandleFunc("POST /revoke", func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
 		app.mu.Lock()
+		defer app.mu.Unlock()
+		if app.revokeStatus != 0 {
+			w.WriteHeader(app.revokeStatus)
+			return
+		}
 		app.revoked = append(app.revoked, r.Form.Get("token"))
-		app.mu.Unlock()
 	})
 	mux.HandleFunc("GET /me", func(w http.ResponseWriter, r *http.Request) {
 		app.mu.Lock()

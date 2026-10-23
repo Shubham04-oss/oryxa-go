@@ -52,6 +52,10 @@ type Config struct {
 	// in the same task, so it is loopback (INTEGRATIONS_BROKER_ADDRESS,
 	// default 127.0.0.1:8091).
 	BrokerAddress string
+	// EventsQueueURL is the SQS queue auth's departures reach the service on
+	// (INTEGRATIONS_EVENTS_QUEUE_URL); see integrations/infra/events. Without
+	// it a member who leaves keeps their connections.
+	EventsQueueURL string
 }
 
 // OryxaApp is one of Oryxa's own apps (design §9.3).
@@ -106,6 +110,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("INTEGRATIONS_EGRESS_KEYS: %w", err)
 		}
 	}
+	config.EventsQueueURL = strings.TrimSpace(getenv("INTEGRATIONS_EVENTS_QUEUE_URL"))
 	config.BrokerAddress = strings.TrimSpace(getenv("INTEGRATIONS_BROKER_ADDRESS"))
 	if config.BrokerAddress == "" {
 		config.BrokerAddress = "127.0.0.1:8091"

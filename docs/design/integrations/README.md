@@ -184,8 +184,10 @@ All tables live in schema `integrations`; migrations are numbered in `integratio
   `{connection, app, trigger, object_id, occurred_at, dedupe_key, data}`
 - `integrations.records.changed.v1`: a hint that `connection` has new feed entries up to `seq`. Knowledge pages the feed; the event carries no data.
 
-**Consumed:**
-- `teams.member.removed.v1` and `teams.organization.deleted.v1` revoke and purge.
+**Consumed** (from `INTEGRATIONS_EVENTS_QUEUE_URL`, provisioned by `integrations/infra/events`):
+- `auth.member.removed.v1` revokes the member's personal connections in that org, and spends their sign-ins under way; org-level connections stay. `auth.organization.deleted.v1` revokes all of the org's connections. These are auth's events, as apps consumes: `teams.member.removed.v1` ends a place in one team, not in the org, and teams publishes no org deletion.
+- Each connection is revoked at the app where it can be, and here regardless, so the member loses access either way; `connections.provider_revoked` records whether the app confirmed. Each revocation publishes `integrations.connection.removed.v1` through the outbox.
+- Handled event ids are kept in `integrations.handled_events` for as long as a message can sit in the dead-letter queue (14 days). A member's removal that arrives late spares connections made after it.
 - `agents.*` nothing.
 
 ### 7.3 apps as router

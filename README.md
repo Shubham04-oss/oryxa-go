@@ -43,9 +43,10 @@ go run ./cmd/oryxa migrate            # install schemas, then exit
 | `DEPLOYMENT_ENVIRONMENT` (or `ENVIRONMENT`) | `development` | Named in logs and traces; `production` makes event queues required |
 | `ORYXA_REQUIRE_EVENT_QUEUES` | on in production | Refuse to start while a selected service's events queue is unset |
 
-Twelve services consume events, each from its own queue: `AGENTS_EVENTS_QUEUE_URL`,
+Thirteen services consume events, each from its own queue: `AGENTS_EVENTS_QUEUE_URL`,
 `APPS_EVENTS_QUEUE_URL`, `AUTH_EVENTS_QUEUE_URL`, `BATCHING_EVENTS_QUEUE_URL`,
 `BILLING_EVENTS_QUEUE_URL`, `EMAIL_QUEUE_URL`, `FILES_EVENTS_QUEUE_URL`,
+`INTEGRATIONS_EVENTS_QUEUE_URL` (required only once `INTEGRATIONS_ENABLED=true`),
 `KNOWLEDGE_EVENTS_QUEUE_URL`, `RAG_EVENTS_QUEUE_URL`,
 `REALTIME_EVENTS_QUEUE_URL`, `TEAMS_EVENTS_QUEUE_URL` and
 `WORKSPACE_EVENTS_QUEUE_URL`, each made by its
