@@ -45,6 +45,16 @@ relationships: |-
   file:f_lee#owner@member:lee
   file:f_board#org@org:acme
   file:f_board#admins_only@org:acme
+  file:f_board#created_by@member:maya
+  file:f_sam_by_lee#org@org:acme
+  file:f_sam_by_lee#owner@member:sam
+  file:f_sam_by_lee#created_by@member:lee
+  corpus:cor_payments_lee#org@org:acme
+  corpus:cor_payments_lee#team@team:payments
+  corpus:cor_payments_lee#created_by@member:sam
+  corpus:cor_eng_sam#org@org:acme
+  corpus:cor_eng_sam#team@team:eng
+  corpus:cor_eng_sam#created_by@member:sam
 
   agent:agt_sam#acts_for@member:sam
   agent:agt_sam_research#acts_for@member:sam
@@ -72,8 +82,8 @@ assertions:
     # The team lead manages the team and deletes its corpora
     - team:eng#manage@member:maya
     - corpus:cor_eng#delete_member_reach@member:maya
-    # The creator of an org corpus may delete it
-    - corpus:cor_handbook#delete_member_reach@member:lee
+    # A team member who made a team corpus may delete it
+    - corpus:cor_eng_sam#delete_member_reach@member:sam
     - source:src_sam#manage@member:sam
     - source:src_sam#manage@member:maya
     # Specialist grants
@@ -98,6 +108,13 @@ assertions:
     - file:f_lee#read_member_reach@member:olu
     - file:f_board#read_member_reach@member:maya
     - source:src_sam#manage_member_reach@member:maya
+    # A creator deletes only a team corpus or file, while on the team: not
+    # an org corpus (rag lets only admins delete one), not another member's
+    # file, not an admins-only file through an agent
+    - corpus:cor_handbook#delete_member_reach@member:lee
+    - corpus:cor_payments_lee#delete_member_reach@member:sam
+    - file:f_sam_by_lee#delete_member_reach@member:lee
+    - file:f_board#delete_member_reach@member:maya
     # Only an admin reads an admins-only file
     - file:f_board#read@member:lee
     - corpus:cor_sam#read@member:lee
