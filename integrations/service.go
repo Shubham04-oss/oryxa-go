@@ -21,6 +21,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
 	"github.com/Shubham04-oss/oryxa-go/integrations/egress"
 	connectorhost "github.com/Shubham04-oss/oryxa-go/integrations/host"
@@ -32,6 +33,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/tools"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/vault"
 	"github.com/Shubham04-oss/oryxa-go/integrations/manifest"
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 	"github.com/Shubham04-oss/oryxa-go/internal/secrets"
@@ -42,8 +44,16 @@ import (
 const Name = "integrations"
 
 // Definition is how a host builds the service. Nothing calls it by a URL
-// variable yet, and it consumes no events.
-var Definition = host.Definition{Name: Name, Enabled: serviceconfig.Enabled, Migrate: Migrate, Mount: Mount}
+// variable yet. It consumes auth's departures from its events queue, which
+// is required only once the service is switched on.
+var Definition = host.Definition{
+	Name: Name, EventsQueueVariable: "INTEGRATIONS_EVENTS_QUEUE_URL",
+	Enabled: serviceconfig.Enabled, Migrate: Migrate, Mount: Mount,
+}
+
+// Subscriptions are the detail types integrations consumes, by source, for a
+// host or provisioning to route to its queue.
+func Subscriptions() map[string][]string { return events.Subscriptions() }
 
 //go:embed migrations/*.sql
 var migrations embed.FS
@@ -231,7 +241,41 @@ func mountOrgApps(ctx context.Context, server *httpserver.Server, platform host.
 	if err != nil {
 		return nil, nil, err
 	}
-	return connections, []host.Worker{outbox.NewDispatcher(table, publisher, platform.Logger).Run}, nil
+	workers := []host.Worker{outbox.NewDispatcher(table, publisher, platform.Logger).Run}
+	consumers, err := mountDepartures(platform, config, connections)
+	if err != nil {
+		return nil, nil, err
+	}
+	return connections, append(workers, consumers...), nil
+}
+
+// mountDepartures consumes auth's departures from the events queue: a member
+// leaving an organization, or the organization deleted, revokes the
+// connections they made there. It answers the consumer and the sweep of
+// handled events as workers, or none, and says so, without a queue.
+func mountDepartures(platform host.Platform, config serviceconfig.Config, connections *connect.Service) ([]host.Worker, error) {
+	if config.EventsQueueURL == "" {
+		platform.Logger.Warn("INTEGRATIONS_EVENTS_QUEUE_URL is not set: a member who leaves an organization keeps their connections")
+		return nil, nil
+	}
+	handled := events.NewHandled(platform.Database.Pool, platform.Logger)
+	consumer, err := events.NewConsumer(departures{connections, handled},
+		platform.EventAuth.Verifier(eventauth.MaxAge(events.SignatureMaxAge)), platform.Logger)
+	if err != nil {
+		return nil, err
+	}
+	queue := sqs.NewFromConfig(platform.AWS)
+	return []host.Worker{
+		func(ctx context.Context) { consumer.Poll(ctx, queue, config.EventsQueueURL) },
+		handled.RunForget,
+	}, nil
+}
+
+// departures is what the consumer hands auth's events to: the connections,
+// and the record of the events already handled.
+type departures struct {
+	*connect.Service
+	*events.Handled
 }
 
 // namedIn reports whether services, ORYXA_SERVICES's value, names this
