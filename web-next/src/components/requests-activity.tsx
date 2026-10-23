@@ -1,30 +1,36 @@
 // Activity, the third tab of Requests (DESIGN.md §3, "Requests"): what
 // happened to the member's Slack asks, newest first and by day: asks made
 // and received, how each was decided and where, bypasses, answers, access
-// given and ended, and secrets opened. Names, states and times, never a
-// question or an answer: the request an entry points to is the place for
-// those. It is re-read on focus and on a timer, like the lists.
-import { useState } from "react"
+// given and ended, and secrets opened; and, from the access decision log, who
+// reached the member's things and what their own agents reached, with the rule
+// that let them. Names, states and times, never a question or an answer: the
+// request an entry points to is the place for those. It is re-read on focus
+// and on a timer, like the lists.
+import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Ban,
   Check,
   KeyRound,
+  Eye,
   MessageSquare,
+  PenLine,
   Reply,
   Timer,
   TimerOff,
+  Trash2,
 } from "lucide-react"
 import { AgentsNotice } from "./agents-parts"
 import { agentsErrorMessage } from "./agents-format"
 import { clockTime, dayLabel } from "./direct-message-format"
 import {
+  accessReason,
   activityIcon,
   activitySentence,
   openableRows,
   repliedRequestIds,
 } from "./requests-activity-format"
-import type { ActivityIcon } from "./requests-activity-format"
+import type { ActivityIcon, ThingNames } from "./requests-activity-format"
 import {
   activityQueryOptions,
   refreshRequests,
@@ -36,6 +42,8 @@ import { fullTime } from "./teamspace-format"
 import { isLeaseLive, revokeAgentLease } from "@/lib/agents/agent-requests"
 import type { AgentActivityEntry } from "@/lib/agents/agent-requests"
 import { isUnavailableHere } from "@/lib/agents/policy"
+import { agentsQueryOptions } from "@/lib/agents/queries"
+import { corporaQueryOptions } from "@/lib/rag/client"
 
 function EntryIcon({ icon }: { icon: ActivityIcon }) {
   const props = { size: 14, strokeWidth: 1.8, "aria-hidden": true } as const
@@ -54,7 +62,50 @@ function EntryIcon({ icon }: { icon: ActivityIcon }) {
       return <Timer {...props} />
     case "access-ended":
       return <TimerOff {...props} />
+    case "reached":
+      return <Eye {...props} />
+    case "changed":
+      return <PenLine {...props} />
+    case "deleted":
+      return <Trash2 {...props} />
   }
+}
+
+/**
+ * The names of the agents and collections access entries point to, from the
+ * lists the page can read in one call each, and only once there is an entry
+ * to name. A list that can't be read leaves those entries saying the kind.
+ */
+function useThingNames(
+  organizationId: string,
+  entries: readonly AgentActivityEntry[] | undefined
+): ThingNames {
+  const accesses = (entries ?? []).flatMap((entry) =>
+    entry.kind === "accessed" && entry.access ? [entry.access] : []
+  )
+  const agents = useQuery({
+    ...agentsQueryOptions(organizationId),
+    enabled: accesses.some((access) => access.actor_agent_id),
+    retry: false,
+  })
+  const corpora = useQuery({
+    ...corporaQueryOptions(organizationId),
+    enabled: accesses.some((access) => access.resource_kind === "corpus"),
+    retry: false,
+  })
+  return useMemo(() => {
+    const agentNames = new Map(
+      (agents.data ?? []).map((agent) => [agent.id, agent.name.trim()])
+    )
+    const corpusNames = new Map(
+      (corpora.data ?? []).map((corpus) => [corpus.id, corpus.name.trim()])
+    )
+    return {
+      agentName: (id) => agentNames.get(id) || undefined,
+      resourceName: (kind, id) =>
+        kind === "corpus" ? corpusNames.get(id) || undefined : undefined,
+    }
+  }, [agents.data, corpora.data])
 }
 
 /** The entries grouped by the day they happened, in the order they came. */
@@ -91,6 +142,7 @@ export function RequestsActivity({
   const queryClient = useQueryClient()
   const people = usePeopleNames(organizationId, viewerId)
   const activity = useQuery(activityQueryOptions(organizationId))
+  const things = useThingNames(organizationId, activity.data)
   const [problem, setProblem] = useState("")
   const endAccess = useMutation({
     mutationFn: (leaseId: string) => revokeAgentLease(organizationId, leaseId),
@@ -170,6 +222,7 @@ export function RequestsActivity({
                 entry.role === "owner" &&
                 lease !== undefined &&
                 isLeaseLive(lease, now)
+              const reason = accessReason(entry, reader)
               return (
                 <li
                   className="workspace-requests-activity-row"
@@ -180,7 +233,13 @@ export function RequestsActivity({
                     <EntryIcon icon={activityIcon(entry)} />
                   </span>
                   <span className="workspace-requests-activity-text">
-                    {activitySentence(entry, reader, replied)}
+                    {activitySentence(entry, reader, replied, things)}
+                    {reason && (
+                      <span className="workspace-requests-activity-reason">
+                        {" · "}
+                        {reason}
+                      </span>
+                    )}
                   </span>
                   <span className="workspace-requests-activity-actions">
                     {canEnd && (

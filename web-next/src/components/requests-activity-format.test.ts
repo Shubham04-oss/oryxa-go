@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { clockTime } from "./direct-message-format"
 import {
+  accessReason,
   activityIcon,
   activitySentence,
   openableRows,
@@ -13,7 +14,11 @@ import {
   lease,
   reader,
 } from "./request-card-fixtures"
-import type { AgentActivityEntry } from "@/lib/agents/agent-requests"
+import type {
+  AgentAccessDecision,
+  AgentActivityEntry,
+} from "@/lib/agents/agent-requests"
+import type { ThingNames } from "./requests-activity-format"
 
 const owner = reader(OWNER)
 const asker = reader(ASKER)
@@ -323,5 +328,255 @@ describe("how an entry reads at a glance", () => {
     ]
 
     expect([...openableRows(entries)].sort()).toEqual([1, 3])
+  })
+})
+
+/** An access entry from the decision log, as Go lists it for its reader. */
+function accessed(
+  access: Partial<AgentAccessDecision>,
+  role: "owner" | "asker",
+  withUserId?: string
+): AgentActivityEntry {
+  return {
+    kind: "accessed",
+    at: "2026-09-29T12:00:00Z",
+    role,
+    with_user_id: withUserId,
+    access: {
+      at: "2026-09-29T12:00:00Z",
+      service: "files",
+      action: "read",
+      resource_kind: "file",
+      resource_id: "fil_1",
+      actor_user_id: ASKER,
+      reason: "team_member",
+      ...access,
+    },
+  }
+}
+
+const named: ThingNames = {
+  agentName: (id) => (id === "agt_researcher" ? "Researcher" : undefined),
+  resourceName: (kind, id) =>
+    kind === "corpus" && id === "cor_sales" ? "Sales playbooks" : undefined,
+}
+
+describe("what Activity says of access", () => {
+  it("says who reached the member's things, and how", () => {
+    // Raya's agent read Ada's file.
+    expect(
+      activitySentence(
+        accessed(
+          {
+            owner_id: OWNER,
+            actor_agent_id: "agt_raya",
+            actor_agent_role: "primary",
+          },
+          "owner",
+          ASKER
+        ),
+        owner
+      )
+    ).toBe("Raya's agent read your file.")
+    // Raya, an admin, opened Ada's source herself.
+    expect(
+      activitySentence(
+        accessed(
+          { owner_id: OWNER, resource_kind: "source", reason: "org_admin" },
+          "owner",
+          ASKER
+        ),
+        owner
+      )
+    ).toBe("An admin, Raya, opened your source.")
+    expect(
+      activitySentence(
+        accessed({ owner_id: OWNER, action: "write" }, "owner", ASKER),
+        owner
+      )
+    ).toBe("Raya changed your file.")
+    expect(
+      activitySentence(
+        accessed(
+          {
+            owner_id: OWNER,
+            action: "delete",
+            resource_kind: "document",
+            actor_agent_id: "agt_raya",
+            actor_agent_role: "specialist",
+          },
+          "owner",
+          ASKER
+        ),
+        owner
+      )
+    ).toBe("Raya's specialist deleted your document.")
+  })
+
+  it("says what the member's own agents reached", () => {
+    expect(
+      activitySentence(
+        accessed(
+          {
+            owner_id: undefined,
+            actor_user_id: OWNER,
+            actor_agent_id: "agt_researcher",
+            actor_agent_role: "specialist",
+            action: "search",
+            resource_kind: "corpus",
+            resource_id: "cor_sales",
+            reason: "grant",
+          },
+          "asker"
+        ),
+        owner,
+        undefined,
+        named
+      )
+    ).toBe("Your specialist Researcher searched Sales playbooks.")
+    expect(
+      activitySentence(
+        accessed(
+          {
+            owner_id: ASKER,
+            actor_user_id: OWNER,
+            actor_agent_id: "agt_ada",
+            actor_agent_role: "primary",
+          },
+          "asker",
+          ASKER
+        ),
+        owner
+      )
+    ).toBe("Your agent read Raya's file.")
+    // Their own agent, on their own thing: Go lists it as the owner's.
+    expect(
+      activitySentence(
+        accessed(
+          {
+            owner_id: OWNER,
+            actor_user_id: OWNER,
+            actor_agent_id: "agt_ada",
+            actor_agent_role: "primary",
+            reason: "owner",
+          },
+          "owner"
+        ),
+        owner
+      )
+    ).toBe("Your agent read your file.")
+    // The member themself, as an admin, in someone else's things.
+    expect(
+      activitySentence(
+        accessed(
+          { owner_id: ASKER, actor_user_id: OWNER, reason: "org_admin" },
+          "asker",
+          ASKER
+        ),
+        owner
+      )
+    ).toBe("You opened Raya's file.")
+  })
+
+  it("says each rule as a short phrase", () => {
+    const reasons = {
+      owner: "your own",
+      org_admin: "org admin",
+      team_member: "on the same team",
+      team_admin: "team admin",
+      organization: "shared with everyone",
+      grant: "allowed by its grant",
+    } as const
+    for (const [reason, phrase] of Object.entries(reasons)) {
+      expect(
+        accessReason(
+          accessed(
+            {
+              actor_user_id: OWNER,
+              actor_agent_id: "agt_ada",
+              reason: reason as AgentAccessDecision["reason"],
+            },
+            "asker"
+          ),
+          owner
+        )
+      ).toBe(phrase)
+    }
+    expect(
+      accessReason(accessed({ reason: "owner" }, "owner", ASKER), owner)
+    ).toBe("their own")
+    // Only access entries carry a reason.
+    expect(
+      accessReason(activityEntry({ kind: "asked" }), owner)
+    ).toBeUndefined()
+  })
+
+  it("falls back to someone, an agent, or the kind, never an id", () => {
+    const strangers = reader(OWNER, { nameOf: () => undefined })
+    const sentences = [
+      accessed({ owner_id: OWNER, actor_user_id: "user-x" }, "owner", "user-x"),
+      accessed(
+        { owner_id: OWNER, actor_user_id: "user-x", actor_agent_id: "agt_x" },
+        "owner",
+        "user-x"
+      ),
+      accessed(
+        { owner_id: OWNER, actor_user_id: "user-x", reason: "org_admin" },
+        "owner",
+        "user-x"
+      ),
+      accessed(
+        {
+          owner_id: "user-x",
+          actor_user_id: OWNER,
+          actor_agent_id: "agt_ada",
+          resource_kind: "corpus",
+          resource_id: "cor_unknown",
+        },
+        "asker",
+        "user-x"
+      ),
+    ].map((entry) => activitySentence(entry, strangers, undefined, named))
+
+    expect(sentences).toEqual([
+      "Someone opened your file.",
+      "An agent read your file.",
+      "An admin opened your file.",
+      "Your agent read someone's collection.",
+    ])
+    for (const sentence of sentences) {
+      expect(sentence).not.toMatch(/user-x|agt_|cor_|fil_/)
+    }
+  })
+
+  it("doesn't trip on what it doesn't know", () => {
+    const odd = {
+      kind: "accessed",
+      at: "2026-09-29T12:00:00Z",
+      role: "owner",
+      access: {
+        action: "teleport",
+        resource_kind: "hologram",
+        reason: "vibes",
+        extra: { nested: true },
+      },
+    } as unknown as AgentActivityEntry
+
+    expect(activitySentence(odd, owner)).toBe("Someone reached an item.")
+    expect(accessReason(odd, owner)).toBeUndefined()
+    expect(activityIcon(odd)).toBe("reached")
+    const bare = { ...odd, access: undefined }
+    expect(activitySentence(bare, owner)).toBe("Someone reached an item.")
+  })
+
+  it("reads with an icon for what was done", () => {
+    expect(activityIcon(accessed({ action: "read" }, "owner"))).toBe("reached")
+    expect(activityIcon(accessed({ action: "search" }, "owner"))).toBe(
+      "reached"
+    )
+    expect(activityIcon(accessed({ action: "write" }, "owner"))).toBe("changed")
+    expect(activityIcon(accessed({ action: "delete" }, "owner"))).toBe(
+      "deleted"
+    )
   })
 })

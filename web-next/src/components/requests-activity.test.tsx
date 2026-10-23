@@ -290,6 +290,133 @@ describe("Activity", () => {
     )
   })
 
+  it("says who reached the member's things, with the rule that let them", async () => {
+    const at = "2026-09-29T12:15:00Z"
+    const access = {
+      at,
+      service: "rag",
+      resource_id: "cor_sales",
+      actor_user_id: OWNER,
+    }
+    const { go } = renderActivity({
+      [`GET ${activityPath}`]: () => ({
+        activity: [
+          activityEntry({
+            kind: "accessed",
+            at,
+            request_id: undefined,
+            access: {
+              ...access,
+              action: "read",
+              resource_kind: "file",
+              resource_id: "fil_1",
+              owner_id: OWNER,
+              actor_user_id: ASKER,
+              actor_agent_id: "agt_raya",
+              actor_agent_role: "primary",
+              reason: "team_member",
+            },
+          }),
+          activityEntry({
+            kind: "accessed",
+            at,
+            role: "asker",
+            with_user_id: undefined,
+            request_id: undefined,
+            access: {
+              ...access,
+              action: "search",
+              resource_kind: "corpus",
+              actor_agent_id: "agt_researcher",
+              actor_agent_role: "specialist",
+              reason: "grant",
+            },
+          }),
+          activityEntry({
+            kind: "accessed",
+            at,
+            request_id: undefined,
+            access: {
+              ...access,
+              action: "read",
+              resource_kind: "source",
+              resource_id: "src_1",
+              owner_id: OWNER,
+              actor_user_id: ASKER,
+              reason: "org_admin",
+            },
+          }),
+        ],
+      }),
+      [`GET /v1/organizations/${ORG}/agents`]: () => ({
+        agents: [{ id: "agt_researcher", name: "Researcher" }],
+      }),
+      [`GET /v1/organizations/${ORG}/corpora`]: () => ({
+        corpora: [{ id: "cor_sales", name: "Sales playbooks" }],
+      }),
+    })
+
+    await screen.findByText(
+      "Your specialist Researcher searched Sales playbooks."
+    )
+    const rows = within(screen.getByRole("region", { name: "Today" }))
+      .getAllByRole("listitem")
+      .map(
+        (row) =>
+          row.querySelector(".workspace-requests-activity-text")?.textContent
+      )
+    expect(rows).toEqual([
+      "Raya's agent read your file. · on the same team",
+      "Your specialist Researcher searched Sales playbooks. · allowed by its grant",
+      "An admin, Raya, opened your source. · org admin",
+    ])
+    // Access entries point to no request.
+    expect(screen.queryByRole("button", { name: "View request" })).toBeNull()
+    expect(document.body.textContent).not.toMatch(/agt_|cor_|fil_|src_/)
+    expect(go.count("GET", `/v1/organizations/${ORG}/corpora`)).toBe(1)
+  })
+
+  it("says the kind when the names can't be read", async () => {
+    renderActivity({
+      [`GET ${activityPath}`]: () => ({
+        activity: [
+          activityEntry({
+            kind: "accessed",
+            role: "asker",
+            with_user_id: undefined,
+            request_id: undefined,
+            access: {
+              at: "2026-09-29T12:15:00Z",
+              service: "rag",
+              action: "search",
+              resource_kind: "corpus",
+              resource_id: "cor_sales",
+              actor_user_id: OWNER,
+              actor_agent_id: "agt_researcher",
+              actor_agent_role: "specialist",
+              reason: "organization",
+            },
+          }),
+        ],
+      }),
+      // The agents and corpora routes are missing: a 404 each.
+    })
+
+    await screen.findByText("Your specialist searched a collection.")
+    expect(
+      screen.getByText("· shared with everyone", { exact: false })
+    ).toBeTruthy()
+  })
+
+  it("asks for no names when nothing was accessed", async () => {
+    const { go } = renderActivity({
+      [`GET ${activityPath}`]: () => ({ activity: entries }),
+    })
+
+    await screen.findByText("Raya opened the secret you shared.")
+    expect(go.sent()).toEqual([`GET ${activityPath}`])
+  })
+
   it("says while it loads, and when there is nothing yet", async () => {
     renderActivity({ [`GET ${activityPath}`]: () => ({ activity: [] }) })
 
