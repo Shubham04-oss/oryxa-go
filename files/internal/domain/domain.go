@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -55,6 +56,49 @@ type OrgMembership struct {
 	// What it reads can end up in front of any of them, so it gets a plain
 	// member's reach whatever its member's role; see ActsAsAdmin.
 	Agent bool
+	// AgentRole is the agent's role in its claims (primary, specialist or
+	// organization), when Agent is set.
+	AgentRole string
+	// AgentFiles is the file scopes a specialist's grant names: FilesMember,
+	// FilesOrganization, team ids, or "*" for all. Nil, which a grant without
+	// the field gives, is all.
+	AgentFiles []string
+}
+
+// The file scopes a specialist's grant may name besides team ids.
+const (
+	FilesMember       = "member"
+	FilesOrganization = "org"
+)
+
+// MayReachFiles refuses a specialist the files of a scope its grant does not
+// name, as not found, so a file outside the grant looks the same as one that
+// does not exist. A team's files are named by the team's id. Every other
+// caller is limited only by what its member can see.
+func (membership OrgMembership) MayReachFiles(scope Scope, teamID string) error {
+	if !membership.FilesLimited() {
+		return nil
+	}
+	var name string
+	switch scope {
+	case ScopeMember:
+		name = FilesMember
+	case ScopeOrganization:
+		name = FilesOrganization
+	case ScopeTeam:
+		name = teamID
+	}
+	if name == "" || !slices.Contains(membership.AgentFiles, name) {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// FilesLimited is whether the caller is a specialist whose grant names some
+// file scopes rather than all.
+func (membership OrgMembership) FilesLimited() bool {
+	return membership.Agent && membership.AgentRole == "specialist" &&
+		membership.AgentFiles != nil && !slices.Contains(membership.AgentFiles, "*")
 }
 
 // ActsAsAdmin reports whether the caller acts with an org admin's reach:
