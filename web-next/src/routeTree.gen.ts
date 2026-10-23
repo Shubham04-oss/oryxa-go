@@ -15,6 +15,7 @@ import { Route as AuthResetPasswordRouteImport } from './routes/auth.reset-passw
 import { Route as AuthSignInRouteImport } from './routes/auth.sign-in'
 import { Route as AuthSignUpRouteImport } from './routes/auth.sign-up'
 import { Route as AuthVerifyEmailRouteImport } from './routes/auth.verify-email'
+import { Route as CliDeviceRouteImport } from './routes/cli.device'
 import { Route as InvitationsAcceptRouteImport } from './routes/invitations.accept'
 import { Route as SettingsBillingRouteImport } from './routes/settings.billing'
 
@@ -48,6 +49,11 @@ const AuthVerifyEmailRoute = AuthVerifyEmailRouteImport.update({
   path: '/auth/verify-email',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CliDeviceRoute = CliDeviceRouteImport.update({
+  id: '/cli/device',
+  path: '/cli/device',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const InvitationsAcceptRoute = InvitationsAcceptRouteImport.update({
   id: '/invitations/accept',
   path: '/invitations/accept',
@@ -66,6 +72,7 @@ export interface FileRoutesByFullPath {
   '/auth/sign-in': typeof AuthSignInRoute
   '/auth/sign-up': typeof AuthSignUpRoute
   '/auth/verify-email': typeof AuthVerifyEmailRoute
+  '/cli/device': typeof CliDeviceRoute
   '/invitations/accept': typeof InvitationsAcceptRoute
   '/settings/billing': typeof SettingsBillingRoute
 }
@@ -76,6 +83,7 @@ export interface FileRoutesByTo {
   '/auth/sign-in': typeof AuthSignInRoute
   '/auth/sign-up': typeof AuthSignUpRoute
   '/auth/verify-email': typeof AuthVerifyEmailRoute
+  '/cli/device': typeof CliDeviceRoute
   '/invitations/accept': typeof InvitationsAcceptRoute
   '/settings/billing': typeof SettingsBillingRoute
 }
@@ -87,6 +95,7 @@ export interface FileRoutesById {
   '/auth/sign-in': typeof AuthSignInRoute
   '/auth/sign-up': typeof AuthSignUpRoute
   '/auth/verify-email': typeof AuthVerifyEmailRoute
+  '/cli/device': typeof CliDeviceRoute
   '/invitations/accept': typeof InvitationsAcceptRoute
   '/settings/billing': typeof SettingsBillingRoute
 }
@@ -99,6 +108,7 @@ export interface FileRouteTypes {
     | '/auth/sign-in'
     | '/auth/sign-up'
     | '/auth/verify-email'
+    | '/cli/device'
     | '/invitations/accept'
     | '/settings/billing'
   fileRoutesByTo: FileRoutesByTo
@@ -109,6 +119,7 @@ export interface FileRouteTypes {
     | '/auth/sign-in'
     | '/auth/sign-up'
     | '/auth/verify-email'
+    | '/cli/device'
     | '/invitations/accept'
     | '/settings/billing'
   id:
@@ -119,6 +130,7 @@ export interface FileRouteTypes {
     | '/auth/sign-in'
     | '/auth/sign-up'
     | '/auth/verify-email'
+    | '/cli/device'
     | '/invitations/accept'
     | '/settings/billing'
   fileRoutesById: FileRoutesById
@@ -130,6 +142,7 @@ export interface RootRouteChildren {
   AuthSignInRoute: typeof AuthSignInRoute
   AuthSignUpRoute: typeof AuthSignUpRoute
   AuthVerifyEmailRoute: typeof AuthVerifyEmailRoute
+  CliDeviceRoute: typeof CliDeviceRoute
   InvitationsAcceptRoute: typeof InvitationsAcceptRoute
   SettingsBillingRoute: typeof SettingsBillingRoute
 }
@@ -178,6 +191,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthVerifyEmailRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/cli/device': {
+      id: '/cli/device'
+      path: '/cli/device'
+      fullPath: '/cli/device'
+      preLoaderRoute: typeof CliDeviceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/invitations/accept': {
       id: '/invitations/accept'
       path: '/invitations/accept'
@@ -202,6 +222,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthSignInRoute: AuthSignInRoute,
   AuthSignUpRoute: AuthSignUpRoute,
   AuthVerifyEmailRoute: AuthVerifyEmailRoute,
+  CliDeviceRoute: CliDeviceRoute,
   InvitationsAcceptRoute: InvitationsAcceptRoute,
   SettingsBillingRoute: SettingsBillingRoute,
 }
