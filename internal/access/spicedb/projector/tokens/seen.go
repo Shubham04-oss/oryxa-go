@@ -28,6 +28,11 @@ func (seen *Seen) Guard(ctx context.Context, check, record []string, at time.Tim
 	keys := slices.Concat(check, record)
 	slices.Sort(keys) // one order, so two calls can't deadlock
 	keys = slices.Compact(keys)
+	// One change often names a pair twice (a file's owner and created_by),
+	// and an upsert may not touch the same row twice.
+	record = slices.Clone(record)
+	slices.Sort(record)
+	record = slices.Compact(record)
 	err = pgx.BeginFunc(ctx, seen.pool, func(tx pgx.Tx) error {
 		for _, key := range keys {
 			if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, $2))`, key, int64(seenLockSpace)); err != nil {
