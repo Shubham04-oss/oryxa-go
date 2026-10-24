@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"slices"
 	"strings"
@@ -32,9 +33,39 @@ const migrationsAdvisoryLock int64 = 7263510702
 
 // Store persists member-owned agents and writes their lifecycle events to the
 // agents outbox in the same transaction.
-type Store struct{ database *postgreskit.Database }
+type Store struct {
+	database      *postgreskit.Database
+	relationships Relationships
+	logger        *slog.Logger
+}
 
 func NewStore(database *postgreskit.Database) *Store { return &Store{database: database} }
+
+// Relationships writes an agent and its grants to SpiceDB as they commit,
+// sooner than the projector writes them from the agent's events.
+type Relationships interface {
+	AgentChanged(ctx context.Context, agent Definition) error
+	AgentDeleted(ctx context.Context, organizationID, agentID string) error
+}
+
+// WithRelationships writes each agent created, updated or deleted to SpiceDB.
+func (store *Store) WithRelationships(relationships Relationships, logger *slog.Logger) *Store {
+	store.relationships, store.logger = relationships, logger
+	return store
+}
+
+// wrote writes a committed change's relationships. It runs after the commit:
+// an agent's grants are read back from the tables, so a grant narrowed is
+// seen only once it is there. A failed write is logged and the change
+// stands; the projector follows from its event.
+func (store *Store) wrote(ctx context.Context, what, agentID string, write func(Relationships) error) {
+	if store.relationships == nil {
+		return
+	}
+	if err := write(store.relationships); err != nil {
+		store.logger.WarnContext(ctx, what+" not written to spicedb; the projector will", "agent_id", agentID, "error", err)
+	}
+}
 
 func (store *Store) Migrate(ctx context.Context) error {
 	return store.database.Migrate(ctx, "managed-agents", migrations, "migrations/*.sql", migrationsAdvisoryLock)
@@ -46,6 +77,7 @@ func (store *Store) EnsurePrimary(ctx context.Context, scope Scope) (Definition,
 	}
 	for attempt := 0; attempt < 5; attempt++ {
 		var result Definition
+		inserted := false
 		err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
 			found, err := getPrimary(ctx, tx, scope)
 			if err == nil {
@@ -91,9 +123,13 @@ func (store *Store) EnsurePrimary(ctx context.Context, scope Scope) (Definition,
 				}
 				return err
 			}
+			inserted = true
 			return recordLifecycle(ctx, tx, agentsv1.AgentCreatedDetailType, result)
 		})
 		if err == nil {
+			if inserted {
+				store.wrote(ctx, "primary agent", result.ID, func(r Relationships) error { return r.AgentChanged(ctx, result) })
+			}
 			return result, nil
 		}
 		if isNameConflict(err) {
@@ -141,6 +177,7 @@ func (store *Store) Create(ctx context.Context, scope Scope, definition Definiti
 	if err != nil {
 		return Definition{}, fmt.Errorf("create agent: %w", err)
 	}
+	store.wrote(ctx, "agent created", definition.ID, func(r Relationships) error { return r.AgentChanged(ctx, definition) })
 	return definition, nil
 }
 
@@ -281,6 +318,7 @@ func (store *Store) Update(ctx context.Context, scope Scope, id string, input Up
 	if err != nil {
 		return Definition{}, err
 	}
+	store.wrote(ctx, "agent updated", result.ID, func(r Relationships) error { return r.AgentChanged(ctx, result) })
 	return result, nil
 }
 
@@ -342,7 +380,11 @@ func (store *Store) Delete(ctx context.Context, scope Scope, id string) error {
 	if errors.As(err, &pgErr) && (pgErr.Code == "23001" || pgErr.Code == "23503") && agentInUse(pgErr.ConstraintName) {
 		return fmt.Errorf("%w: remove the specialist from its teams and teamspaces first", ErrInUse)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	store.wrote(ctx, "agent deleted", id, func(r Relationships) error { return r.AgentDeleted(ctx, scope.OrganizationID, id) })
+	return nil
 }
 
 // Forget removes agent definitions when their member leaves or their

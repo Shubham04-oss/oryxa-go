@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -245,7 +244,8 @@ func (s *Service) usableConnection(ctx context.Context, credentials authclient.C
 // The query only narrows what is read; each source listed is decided by
 // mayRead, the check a single read makes, so a listing can never answer what
 // reading that source would refuse (docs/design/permissions, G3). There is
-// no paging to keep: the listing answers every match at once.
+// no paging to keep: the listing answers every match at once. SpiceDB is
+// asked about all of it in one round trip, and its failure fails the listing.
 func (s *Service) Sources(ctx context.Context, credentials authclient.Credentials, organizationID string, query domain.SourceQuery) ([]domain.Source, error) {
 	caller, err := s.caller(ctx, credentials, organizationID)
 	if err != nil {
@@ -257,7 +257,20 @@ func (s *Service) Sources(ctx context.Context, credentials authclient.Credential
 	if err != nil {
 		return nil, err
 	}
-	return slices.DeleteFunc(listed, func(source domain.Source) bool { return s.mayRead(ctx, caller, source, access.ActionRead) != nil }), nil
+	codes := make([]error, len(listed))
+	for i, source := range listed {
+		codes[i] = decide(caller, source)
+	}
+	if codes, err = s.decideMany(ctx, caller, listed, access.ActionRead, codes); err != nil {
+		return nil, err
+	}
+	visible := listed[:0]
+	for i, source := range listed {
+		if codes[i] == nil {
+			visible = append(visible, source)
+		}
+	}
+	return visible, nil
 }
 
 // mayRead is the one place every read of a source, of its runs and of its

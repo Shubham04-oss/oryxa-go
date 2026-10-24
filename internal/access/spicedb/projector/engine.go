@@ -19,7 +19,9 @@ import (
 type Engine struct {
 	Decider access.Decider
 	writer  *Writer
-	close   func()
+	// grants re-reads an agent's grants; only OpenWriter's engine has it.
+	grants *Reconciler
+	close  func()
 }
 
 // OpenEngine reads ACCESS_ENGINE_<SERVICE>. It answers nil when the service
@@ -52,6 +54,34 @@ func OpenEngine(platform host.Platform, service string) (*Engine, error) {
 func (engine *Engine) Apply(ctx context.Context, change Change) error {
 	_, err := engine.writer.Apply(ctx, change)
 	return err
+}
+
+// OpenWriter is for the sources every service's decisions hang on, org roles
+// (auth) and agents and their grants (agents), so it is on whenever SpiceDB
+// is, whatever ACCESS_ENGINE_* says: they write a change as it commits rather
+// than when the projector reaches its event. It has no Decider, and is nil
+// while SPICEDB_ENDPOINT is unset.
+func OpenWriter(platform host.Platform) (*Engine, error) {
+	if !enabled(platform.Getenv) {
+		return nil, nil
+	}
+	if platform.Database == nil {
+		return nil, errors.New("the spicedb writer needs the database for its tokens")
+	}
+	reconciler, closeClient, err := Open(platform)
+	if err != nil {
+		return nil, err
+	}
+	return &Engine{writer: reconciler.writer, grants: reconciler, close: closeClient}, nil
+}
+
+// SyncGrants brings one agent's grants in line with agents, reading every
+// source the grant names, as the projector does after an agent's event.
+func (engine *Engine) SyncGrants(ctx context.Context, org, agent string) error {
+	if engine.grants == nil {
+		return errors.New("sync grants: this engine was not opened by OpenWriter")
+	}
+	return engine.grants.SyncGrants(ctx, org, agent)
 }
 
 // Placed writes a corpus's or file's relationships as it is created.

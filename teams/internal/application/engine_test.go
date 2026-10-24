@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/access"
@@ -16,6 +17,36 @@ type decider struct {
 }
 
 func (d decider) Decide(context.Context, access.Ask, bool) (bool, error) { return d.answer, d.err }
+
+// DecideMany answers as *shadow.Shadow does: answer narrows the code's, no
+// answer leaves the code's, and any other error fails the batch.
+func (d decider) DecideMany(_ context.Context, asks []access.Ask, codeAllowed []bool) ([]bool, error) {
+	if d.err != nil && !errors.Is(d.err, access.ErrNoAnswer) {
+		return nil, d.err
+	}
+	allowed := make([]bool, len(asks))
+	for i := range asks {
+		allowed[i] = codeAllowed[i] && (d.answer || d.err != nil)
+	}
+	return allowed, nil
+}
+
+// counted is a decider that counts its calls and what a batch asked.
+type counted struct {
+	decider
+	singles int
+	batches [][]access.Ask
+}
+
+func (c *counted) Decide(ctx context.Context, ask access.Ask, code bool) (bool, error) {
+	c.singles++
+	return c.decider.Decide(ctx, ask, code)
+}
+
+func (c *counted) DecideMany(ctx context.Context, asks []access.Ask, code []bool) ([]bool, error) {
+	c.batches = append(c.batches, asks)
+	return c.decider.DecideMany(ctx, asks, code)
+}
 
 type teamWrites struct{ log []string }
 
@@ -137,5 +168,32 @@ func TestRelationshipsFollowTeamsAndMembers(t *testing.T) {
 	deleted := writes.log[len(want):]
 	if len(deleted) != 2 || !(deleted[0] == "deleted "+parent.ID || deleted[1] == "deleted "+parent.ID) {
 		t.Fatalf("deleting the parent deleted %v, want it and its subteam", deleted)
+	}
+}
+
+// A list asks the engine once, for seeing and managing every team on it.
+func TestAListIsDecidedInOneCall(t *testing.T) {
+	ctx := context.Background()
+	service, _, _ := newService()
+	for _, name := range []string{"Engineering", "Design"} {
+		if _, err := service.CreateTeam(ctx, creds("user-owner"), "org_1", CreateTeamInput{Name: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	engine := &counted{decider: decider{answer: true}}
+	service.WithEngine(engine, nil)
+	listed, err := service.Teams(ctx, creds("user-owner"), "org_1")
+	if err != nil || len(listed) != 2 || !listed[0].CanManage || !listed[1].CanManage {
+		t.Fatalf("Teams = %+v, %v; want both, managed", listed, err)
+	}
+	if engine.singles != 0 || len(engine.batches) != 1 {
+		t.Fatalf("engine asked %d singles and %d batches; want 1 batch", engine.singles, len(engine.batches))
+	}
+	var actions []string
+	for _, ask := range engine.batches[0] {
+		actions = append(actions, ask.Action)
+	}
+	if want := []string{access.ActionRead, access.ActionRead, access.ActionWrite, access.ActionWrite}; !slices.Equal(actions, want) {
+		t.Fatalf("the batch asked %v, want %v", actions, want)
 	}
 }

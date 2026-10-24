@@ -30,6 +30,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/secrets"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/serviceconfig"
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	"github.com/Shubham04-oss/oryxa-go/internal/access/spicedb/projector"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
@@ -206,10 +207,20 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		AgentGrants:        agentGrants,
 		Services:           services,
 	})
+	// Org roles reach SpiceDB as they commit, whichever services decide
+	// from it; the projector still follows from the events.
+	writer, err := projector.OpenWriter(platform)
+	if err != nil {
+		return host.Service{}, err
+	}
+	if writer != nil {
+		service.WithRelationships(relationships{writer}, logger)
+	}
 	return host.Service{
 		Handler:  server,
 		Routes:   server.Patterns(),
 		Timeouts: host.Timeouts{Read: 15 * time.Second, Write: 15 * time.Second},
 		Workers:  workers,
+		Close:    writer.Close,
 	}, nil
 }

@@ -7,6 +7,15 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
 )
 
+// Relationships writes org roles to SpiceDB as they commit, sooner than the
+// projector writes them from the events (docs/design/permissions).
+type Relationships interface {
+	MemberJoined(ctx context.Context, organizationID, userID string, role domain.Role) error
+	MemberRoleChanged(ctx context.Context, organizationID, userID string, role domain.Role) error
+	MemberRemoved(ctx context.Context, organizationID, userID string) error
+	OrganizationDeleted(ctx context.Context, organizationID string) error
+}
+
 type Store interface {
 	SaveLoginFlow(context.Context, domain.LoginFlow) error
 	ConsumeLoginFlow(context.Context, string) (domain.LoginFlow, error)

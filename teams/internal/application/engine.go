@@ -41,13 +41,7 @@ func (s *Service) wrote(ctx context.Context, what string, err error) {
 // allow. Where SpiceDB has no answer the code's stands; a SpiceDB failure is an
 // error, and the caller refuses.
 func (s *Service) decide(ctx context.Context, org domain.OrgMembership, team domain.Team, action string, allowed bool) (bool, error) {
-	// ponytail: teams' membership carries no agent id or role, so an agent
-	// is asked as a primary; specialists aren't narrowed on teams today.
-	ask := access.Ask{
-		OrganizationID: team.OrganizationID, Service: "teams", Action: action,
-		ResourceKind: "team", ResourceID: team.ID, UserID: org.UserID,
-		Actor: access.Actor{Role: access.Role(org.Role), Agent: org.Agent},
-	}
+	ask := teamAsk(org, team, action)
 	if s.engine == nil {
 		if s.shadow != nil {
 			s.shadow.Compare(ctx, ask, allowed)
@@ -62,4 +56,34 @@ func (s *Service) decide(ctx context.Context, org domain.OrgMembership, team dom
 		return false, fmt.Errorf("decide access to team %s: %w", team.ID, err)
 	}
 	return allowed && answer, nil
+}
+
+// decideMany is decide for a list, with one round trip to SpiceDB for all of
+// asks: it answers what the caller gets for each.
+func (s *Service) decideMany(ctx context.Context, asks []access.Ask, allowed []bool) ([]bool, error) {
+	if s.engine == nil {
+		if s.shadow != nil {
+			for i, ask := range asks {
+				s.shadow.Compare(ctx, ask, allowed[i])
+			}
+		}
+		return allowed, nil
+	}
+	allowed, err := s.engine.DecideMany(ctx, asks, allowed)
+	if err != nil {
+		return nil, fmt.Errorf("decide access to %d teams: %w", len(asks), err)
+	}
+	return allowed, nil
+}
+
+// teamAsk is a decision on team in the terms SpiceDB is asked about it: read
+// is seeing it, write is managing it.
+func teamAsk(org domain.OrgMembership, team domain.Team, action string) access.Ask {
+	// ponytail: teams' membership carries no agent id or role, so an agent
+	// is asked as a primary; specialists aren't narrowed on teams today.
+	return access.Ask{
+		OrganizationID: team.OrganizationID, Service: "teams", Action: action,
+		ResourceKind: "team", ResourceID: team.ID, UserID: org.UserID,
+		Actor: access.Actor{Role: access.Role(org.Role), Agent: org.Agent},
+	}
 }
