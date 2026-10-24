@@ -26,10 +26,14 @@ var permissions = map[string]map[string]string{
 	"file":       {access.ActionRead: "read", access.ActionSearch: "read", access.ActionDelete: "delete"},
 	"team":       {access.ActionRead: "see", access.ActionWrite: "manage", access.ActionDelete: "manage", ActionManage: "manage"},
 	"source":     {access.ActionRead: "manage", access.ActionSearch: "manage", access.ActionWrite: "manage", access.ActionDelete: "manage", ActionManage: "manage"},
-	"connection": {access.ActionRead: "use", access.ActionSearch: "use", access.ActionWrite: "use", access.ActionUse: "use"},
+	"connection": {access.ActionRead: "read", access.ActionSearch: "read", access.ActionWrite: "use", access.ActionUse: "use", access.ActionDelete: "delete"},
 }
 
-var sameForAgents = map[string]bool{"connection": true}
+var sameForAgents = map[string]bool{"connection#use": true}
+
+// ungranted are what a specialist does without its grant: apps' grant gates
+// acting through a connection, not seeing that its member has one.
+var ungranted = map[string]bool{"connection#read": true, "connection#delete": true}
 
 // grants is the relation a limited specialist needs on the resource, by
 // type. Only apps grants writes apart from reads; rag, files and knowledge
@@ -56,12 +60,13 @@ func Checks(actor access.Actor, userID, agentID, action string, resource Object,
 		if resource.Type == "source" && action != access.ActionRead && action != access.ActionSearch {
 			return nil, false
 		}
-		if !sameForAgents[resource.Type] {
-			permission += "_member_reach"
-		}
+	}
+	key := resource.Type + "#" + permission
+	if actor.Agent && !sameForAgents[key] {
+		permission += "_member_reach"
 	}
 	checks = []Check{{Resource: resource, Permission: permission, Subject: Object{"member", userID}}}
-	if limited && grants[resource.Type] {
+	if limited && grants[resource.Type] && !ungranted[key] {
 		if agentID == "" {
 			return nil, false
 		}

@@ -68,6 +68,16 @@ func (engine *Engine) SourceRegistered(ctx context.Context, org, id, connection,
 	return err
 }
 
+// ConnectionOwned writes an apps connection's relationships as it starts.
+func (engine *Engine) ConnectionOwned(ctx context.Context, org, id, member string) error {
+	change, err := ConnectionOwned(org, id, member)
+	if err != nil {
+		return err
+	}
+	_, err = engine.writer.Apply(ctx, change)
+	return err
+}
+
 // Deleted drops a resource's relationships as it is deleted.
 func (engine *Engine) Deleted(ctx context.Context, resourceType, organizationID, id string) error {
 	change, err := Deleted(resourceType, organizationID, id)

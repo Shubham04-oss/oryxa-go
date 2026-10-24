@@ -62,6 +62,10 @@ type Dependencies struct {
 	Policy application.PolicySource
 	// Shadow compares access decisions with SpiceDB; nil compares nothing.
 	Shadow access.Comparer
+	// Engine and Relationships switch connection access to SpiceDB (see
+	// application.Dependencies); nil keeps the code deciding.
+	Engine        access.Decider
+	Relationships application.Relationships
 	// Sink is where published events go. Without one, apps still works and
 	// its outbox simply fills up, which a host should not choose to do.
 	Sink events.Sink
@@ -160,14 +164,16 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		return nil, errors.New("apps: Oryxa's sign-in is given toolkits or default OAuth apps, and is not configured")
 	}
 	applicationDependencies := application.Dependencies{
-		Store:     dependencies.Store,
-		Directory: dependencies.Directory,
-		Composio:  dependencies.Composio,
-		Policy:    dependencies.Policy,
-		Oryxa:     oryxa,
-		Sealer:    dependencies.Sealer,
-		Shadow:    dependencies.Shadow,
-		Logger:    logger,
+		Store:         dependencies.Store,
+		Directory:     dependencies.Directory,
+		Composio:      dependencies.Composio,
+		Policy:        dependencies.Policy,
+		Oryxa:         oryxa,
+		Sealer:        dependencies.Sealer,
+		Shadow:        dependencies.Shadow,
+		Engine:        dependencies.Engine,
+		Relationships: dependencies.Relationships,
+		Logger:        logger,
 	}
 	if dependencies.Native != nil {
 		applicationDependencies.Native = dependencies.Native

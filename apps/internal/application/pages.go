@@ -71,9 +71,8 @@ func (s *Service) ownConnection(ctx context.Context, credentials authclient.Cred
 	// acting through it rather than merely seeing that it exists: the same
 	// line targets.go draws for a target. So only the connection's own member
 	// may read it, asking by hand or through an agent acting for them.
-	s.compare(ctx, caller, connection, access.ActionUse, connection.MemberID == caller.UserID)
-	if connection.MemberID != caller.UserID {
-		return domain.OrgMembership{}, domain.Connection{}, domain.ErrNotFound
+	if err := s.decide(ctx, caller, connection, access.ActionUse, connection.MemberID == caller.UserID); err != nil {
+		return domain.OrgMembership{}, domain.Connection{}, err
 	}
 	if err := s.allowToolkit(ctx, organizationID, connection.Toolkit); err != nil {
 		return domain.OrgMembership{}, domain.Connection{}, err

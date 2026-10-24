@@ -78,7 +78,7 @@ var ownedSlices = []slice{
 	{"corpus", []string{"granted", "granted_write"}, []string{"agents"}},
 	{"file", []string{"org", "owner", "team", "everyone", "admins_only", "created_by"}, []string{"files"}},
 	{"file", []string{"granted"}, []string{"agents", "files"}},
-	{"connection", []string{"owner"}, []string{"apps"}},
+	{"connection", []string{"org", "owner"}, []string{"apps"}},
 	{"connection", []string{"granted", "granted_write"}, []string{"agents", "apps"}},
 	{"source", []string{"org", "connection", "created_by"}, []string{"knowledge"}},
 	{"source", []string{"granted"}, []string{"agents"}},
@@ -132,7 +132,8 @@ func Expected(world World) []Rel {
 		}
 	}
 	for _, connection := range world.Connections {
-		rels = append(rels, rel("connection", connection.ID, "owner", "member", connection.Member))
+		rels = append(rels, rel("connection", connection.ID, "org", "org", connection.Org),
+			rel("connection", connection.ID, "owner", "member", connection.Member))
 	}
 	for _, agent := range world.Agents {
 		rels = append(rels, rel("agent", agent.ID, "acts_for", "member", agent.User), rel("agent", agent.ID, "org", "org", agent.Org))
