@@ -34,8 +34,9 @@ var ErrNoAnswer = errors.New("spicedb has no answer for this decision")
 
 // Decider decides from SpiceDB for a service switched to it
 // (*shadow.Shadow). codeAllowed is what the code would have answered; a
-// difference is recorded as a disagreement, and SpiceDB's answer stands. Any
-// error other than ErrNoAnswer means no decision: the caller refuses.
+// difference is recorded as a disagreement. While services phase in, a caller
+// lets SpiceDB only narrow: it allows when both do. Any error other than
+// ErrNoAnswer means no decision: the caller refuses.
 type Decider interface {
 	Decide(ctx context.Context, ask Ask, codeAllowed bool) (allowed bool, err error)
 }

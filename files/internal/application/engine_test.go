@@ -38,8 +38,9 @@ func (w *written) FileDeleted(_ context.Context, _, fileID string) error {
 	return w.err
 }
 
-// With the engine on, SpiceDB's answer is the one the caller gets, both ways.
-func TestTheEngineDecides(t *testing.T) {
+// With the engine on, SpiceDB can refuse what the code allows but not grant
+// what it refuses, and the engine hears the code's answer both times.
+func TestTheEngineOnlyNarrows(t *testing.T) {
 	ctx := context.Background()
 	store, blobs := newFakeStore(), blob.NewMemory()
 	owner := testService(store, blobs)
@@ -49,8 +50,8 @@ func TestTheEngineDecides(t *testing.T) {
 	}
 
 	allow := &decider{answer: true}
-	if _, err := testService(store, blobs).WithEngine(allow, nil).Get(ctx, creds("user-member"), "org_1", created.ID); err != nil {
-		t.Fatalf("SpiceDB allowed what the code refuses, but Get = %v", err)
+	if _, err := testService(store, blobs).WithEngine(allow, nil).Get(ctx, creds("user-member"), "org_1", created.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("SpiceDB alone granted what the code refuses: Get = %v", err)
 	}
 	if len(allow.code) != 1 || allow.code[0] {
 		t.Fatalf("the engine was told the code allowed: %v", allow.code)

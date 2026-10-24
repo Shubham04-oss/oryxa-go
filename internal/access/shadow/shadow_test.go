@@ -191,7 +191,9 @@ func TestDecideRefusesWithoutAnAnswer(t *testing.T) {
 		t.Fatalf("Decide = %v, %v; want an error and no access", allowed, err)
 	}
 	unmapped, _ := started(t, nil)
-	unmapped.checks = func(access.Actor, string, string, string, spicedb.Object, bool) ([]spicedb.Check, bool) { return nil, false }
+	unmapped.checks = func(access.Actor, string, string, string, spicedb.Object, bool) ([]spicedb.Check, bool) {
+		return nil, false
+	}
 	if _, err := unmapped.Decide(context.Background(), ask, true); !errors.Is(err, access.ErrNoAnswer) {
 		t.Fatalf("unmapped: %v, want ErrNoAnswer", err)
 	}

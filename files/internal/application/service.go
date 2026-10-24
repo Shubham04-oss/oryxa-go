@@ -610,9 +610,13 @@ func (s *Service) mayDelete(org domain.OrgMembership, teams teamLookup, object d
 
 // decide returns what the caller gets for action on object, given the code's
 // answer. With no engine the code's answer stands and SpiceDB is asked in
-// shadow. With one, SpiceDB's stands, except where it has no answer (the org
-// agent) or the code decided nothing (teams unreachable, a team check with no
-// file behind it). A SpiceDB failure refuses.
+// shadow. With one, SpiceDB decides but may only narrow: the caller gets in
+// when both SpiceDB and the code allow. A revoke reaches SpiceDB through the
+// projector a moment after the code sees it, so SpiceDB granting alone could
+// let a removed member in during that lag. Where SpiceDB has no answer (the
+// org agent) or the code decided nothing (teams unreachable, a team check
+// with no file behind it) the code's answer stands. A SpiceDB failure refuses.
+// Every difference is recorded by Decide.
 //
 // ponytail: a list still comes from SQL filtered by the code, so SpiceDB can
 // only narrow it; LookupResources replaces that once lists flip.
@@ -630,10 +634,10 @@ func (s *Service) decide(ctx context.Context, org domain.OrgMembership, object d
 		return code
 	case err != nil:
 		return fmt.Errorf("decide access to file %s: %w", object.ID, err)
-	case allowed:
-		return nil
 	case code != nil:
 		return code
+	case allowed:
+		return nil
 	default:
 		return domain.ErrNotFound
 	}
