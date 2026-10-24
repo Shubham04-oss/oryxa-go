@@ -91,7 +91,7 @@ func MemberRemoved(org, user string) (Change, error) {
 }
 
 // orgSubjects are the types that point at an organization.
-var orgSubjects = []string{"member", "team", "agent", "corpus", "file", "source", "request"}
+var orgSubjects = []string{"member", "chart_person", "team", "agent", "corpus", "file", "source", "request"}
 
 // OrganizationDeleted drops the org and every arrow into it. What hangs on
 // the org's teams, corpora and files goes when their own deletions arrive.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -46,8 +47,16 @@ type ConnectInput struct {
 	Fields map[string]string
 	// Host is the host the request was sent to. The browser keeps the state
 	// cookie for that host alone, so an OAuth sign-in starts only from the
-	// redirect URI's host.
+	// redirect URI's host, and a Composio or Pipedream callback goes back to
+	// it (callbackBase).
 	Host string
+	// BrowserNonce is a random value the HTTP layer keeps in an HttpOnly
+	// cookie of the browser that started the connect, so that only that
+	// browser can finish it (#476, #477). Composio's and Pipedream's
+	// callbacks carry it as their state; the native sign-in keeps its hash.
+	// Empty there means a new state, which only a browser signed in as the
+	// member can finish.
+	BrowserNonce string
 }
 
 // callbackPath is where Composio sends a member's browser back to.
@@ -78,7 +87,7 @@ func (s *Service) Connect(ctx context.Context, credentials authclient.Credential
 		return domain.Connection{}, "", err
 	}
 
-	state, stateHash, err := newState()
+	state, stateHash, err := connectState(input)
 	if err != nil {
 		return domain.Connection{}, "", err
 	}
@@ -86,7 +95,7 @@ func (s *Service) Connect(ctx context.Context, credentials authclient.Credential
 	link, err := s.composio.CreateConnectLink(ctx, composio.LinkRequest{
 		AuthConfigID: config.AuthConfigID,
 		UserID:       userID,
-		CallbackURL:  s.publicBaseURL + callbackPath + "?state=" + url.QueryEscape(state),
+		CallbackURL:  s.callbackBase(input.Host) + callbackPath + "?state=" + url.QueryEscape(state),
 		Alias:        strings.TrimSpace(input.Alias),
 	})
 	if err != nil {
@@ -281,11 +290,24 @@ type Completion struct {
 // a moment before it records the account active.
 const connectPolls = 5
 
-// CompleteConnection finishes the connection a callback's state names. The
+// ConnectCallback is what a member's browser brought back from Composio or
+// Pipedream.
+type ConnectCallback struct {
+	State string
+	// Status and AccountID are what the broker reported: hints only.
+	Status, AccountID string
+	// CookieState is the state cookie the browser sent, and AccessCookie
+	// its Oryxa session, when it sent them.
+	CookieState, AccessCookie string
+}
+
+// CompleteConnection finishes the connection a callback's state names, once
+// the browser proves it is the one that started it (checkBrowser). The
 // callback's own query is only a hint: the account is read back from
 // Composio, and must belong to the member and app the connection was
 // started for.
-func (s *Service) CompleteConnection(ctx context.Context, state, reportedStatus, reportedAccountID string) (Completion, error) {
+func (s *Service) CompleteConnection(ctx context.Context, callback ConnectCallback) (Completion, error) {
+	state, reportedStatus, reportedAccountID := callback.State, callback.Status, callback.AccountID
 	if state == "" {
 		return Completion{}, fmt.Errorf("the callback carries no state: %w", domain.ErrInvalid)
 	}
@@ -297,6 +319,9 @@ func (s *Service) CompleteConnection(ctx context.Context, state, reportedStatus,
 		// Every other broker's connect comes back through its own callback;
 		// Composio's never finishes one.
 		return Completion{}, domain.ErrNotFound
+	}
+	if err := s.checkBrowser(ctx, connection, callback); err != nil {
+		return Completion{}, err
 	}
 	if reportedAccountID != "" && reportedAccountID != connection.ComposioAccountID {
 		s.logger.WarnContext(ctx, "callback named another account", "connection_id", connection.ID)
@@ -578,6 +603,81 @@ func returnAllowed(origins []*url.URL, target string) bool {
 		}
 	}
 	return false
+}
+
+// RemovedWrongBrowser is why a pending connection was removed when its
+// callback came from a browser that did not start it, as a forwarded link's
+// does.
+const RemovedWrongBrowser = "callback_from_another_browser"
+
+// checkBrowser refuses a callback from any browser but the one that started
+// the connect (#476). It must bring back the state cookie, or be signed in as
+// the connection's member; signed in as anyone else, it is refused even with
+// the cookie. A refused connection is removed with whatever its broker made
+// for it, so a forwarded link leaves the sender nothing.
+func (s *Service) checkBrowser(ctx context.Context, connection domain.Connection, callback ConnectCallback) error {
+	sameBrowser := callback.CookieState != "" &&
+		subtle.ConstantTimeCompare([]byte(callback.CookieState), []byte(callback.State)) == 1
+	sameMember := false
+	if callback.AccessCookie != "" {
+		membership, err := s.directory.Membership(ctx, connection.OrganizationID, authclient.Credentials{AccessCookie: callback.AccessCookie})
+		switch {
+		case errors.Is(err, domain.ErrUnauthorized):
+			// A cookie auth does not take for a session is no one signed in.
+		case errors.Is(err, domain.ErrUnavailable), errors.Is(err, domain.ErrRateLimited),
+			errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			return err
+		case err != nil || membership.Agent || membership.UserID != connection.MemberID:
+			return s.refuseBrowser(ctx, connection, "the browser is signed in as someone other than the member who began connecting")
+		default:
+			sameMember = true
+		}
+	}
+	if !sameBrowser && !sameMember {
+		return s.refuseBrowser(ctx, connection, "the callback came from another browser than the one that began connecting")
+	}
+	return nil
+}
+
+func (s *Service) refuseBrowser(ctx context.Context, connection domain.Connection, reason string) error {
+	s.logger.WarnContext(ctx, "connect callback refused", "connection_id", connection.ID, "reason", reason)
+	if connection.Pipedream() && s.pipedream != nil {
+		// Pipedream makes the account only as the member finishes; find it
+		// so it goes too.
+		if account, found, err := s.newPipedreamAccount(ctx, connection); err == nil && found {
+			connection.PipedreamAccountID = account.ID
+		}
+	}
+	if err := s.remove(ctx, connection, RemovedWrongBrowser); err != nil {
+		return err
+	}
+	return fmt.Errorf("%s: %w", reason, domain.ErrForbidden)
+}
+
+// connectState is a Composio or Pipedream connect's callback state and its
+// hash: the browser's nonce when the HTTP layer set one, else a new one.
+func connectState(input ConnectInput) (string, string, error) {
+	if input.BrowserNonce != "" {
+		return input.BrowserNonce, hashState(input.BrowserNonce), nil
+	}
+	return newState()
+}
+
+// callbackBase is the origin a Composio or Pipedream callback goes back to:
+// the return origin the connect was sent to, so the state cookie set on its
+// answer comes back too; else the first return origin, the web app's, where
+// a member's session cookie lives (a connect started from the CLI); else the
+// public base URL.
+func (s *Service) callbackBase(host string) string {
+	for _, origin := range s.returnOrigins {
+		if strings.EqualFold(origin.Host, host) {
+			return origin.Scheme + "://" + origin.Host
+		}
+	}
+	if len(s.returnOrigins) > 0 {
+		return s.returnOrigins[0].Scheme + "://" + s.returnOrigins[0].Host
+	}
+	return s.publicBaseURL
 }
 
 // newState is a callback state and the hash apps keeps of it. Only the member's

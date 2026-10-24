@@ -40,15 +40,21 @@ func (s *Service) nativeServes(toolkit string) bool {
 }
 
 // connectNative starts a member's sign-in at the integrations service and
-// answers the URL their browser goes to. It checks what every connect checks,
+// answers the URL their browser goes to. The sign-in is bound to the hash of
+// the browser's nonce, which the HTTP layer keeps in the cookie the
+// integrations callback asks for. It checks what every connect checks,
 // and records nothing: the connection itself is the integrations service's.
 func (s *Service) connectNative(ctx context.Context, credentials authclient.Credentials, organizationID string, input ConnectInput) (string, error) {
 	start, err := s.startConnect(ctx, credentials, organizationID, input)
 	if err != nil {
 		return "", err
 	}
+	if input.BrowserNonce == "" {
+		return "", fmt.Errorf("a native connect needs the browser's nonce: %w", domain.ErrInvalid)
+	}
 	url, err := s.native.Connect(ctx, nativeclient.ConnectRequest{
 		Org: organizationID, Member: start.memberID, App: start.toolkit, Level: nativeLevel, ReturnTo: start.returnTo,
+		BrowserHash: hashState(input.BrowserNonce),
 	})
 	switch {
 	case err == nil:

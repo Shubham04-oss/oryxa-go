@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/internal/access/spicedb/projector"
@@ -15,7 +16,7 @@ func (r relationships) apply(ctx context.Context, change projector.Change, err e
 	if err != nil {
 		return err
 	}
-	return r.engine.Apply(ctx, change)
+	return r.engine.Apply(ctx, change, time.Now())
 }
 
 func (r relationships) MemberJoined(ctx context.Context, organizationID, userID string, role domain.Role) error {

@@ -161,7 +161,7 @@ func TestEventRollsBackWithTheChange(t *testing.T) {
 
 func (r *rig) connectedAs(t *testing.T, member, level string) string {
 	t.Helper()
-	raw, err := r.Start(context.Background(), StartRequest{Org: r.org, Member: member, App: "google", Level: level})
+	raw, err := r.Start(context.Background(), StartRequest{BrowserHash: testBrowserHash, Org: r.org, Member: member, App: "google", Level: level})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func (r *rig) connectedAs(t *testing.T, member, level string) string {
 	r.app.mu.Lock()
 	r.app.challenge = authorize.Query().Get("code_challenge")
 	r.app.mu.Unlock()
-	done, err := r.Complete(context.Background(), Callback{State: authorize.Query().Get("state"), Code: "code-1"})
+	done, err := r.Complete(context.Background(), Callback{Cookie: testCookie, State: authorize.Query().Get("state"), Code: "code-1"})
 	if err != nil {
 		t.Fatal(err)
 	}

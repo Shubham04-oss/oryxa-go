@@ -1,5 +1,5 @@
 // The two signed-URL routes (contract §3): /p/{token}/… serves a sandbox
-// preview, /t/{token} its terminal. The token is the grant: the signature
+// preview, on EDGE_PREVIEW_URL's host only, /t/{token} its terminal. The token is the grant: the signature
 // and expiry are checked here, then the request goes to that one sandbox.
 import { sandboxDOName } from "./contracts";
 import type { Env } from "./env";
@@ -9,6 +9,12 @@ const LINK = /^\/(p|t)\/([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)(\/.*)?$/;
 
 export function isLink(pathname: string): boolean {
   return LINK.test(pathname);
+}
+
+// isPreview says whether pathname is a preview link, which only the preview
+// host serves.
+export function isPreview(pathname: string): boolean {
+  return LINK.exec(pathname)?.[1] === "p";
 }
 
 export async function handleLink(request: Request, env: Env): Promise<Response> {

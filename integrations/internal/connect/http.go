@@ -19,7 +19,8 @@ const maxBody = 16 << 10
 // Routes registers POST /v1/connect (internal: apps calls it for a member it
 // has already authenticated), GET /v1/connections and GET and DELETE
 // /v1/connections/{id} (internal), and GET /v1/integrations/oauth/callback
-// (public: the browser, which proves itself by the state).
+// (public: the browser, which proves itself by the state and by the cookie
+// apps set when the member started).
 func Routes(server *httpserver.Server, service *Service, logger *slog.Logger) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
@@ -43,6 +44,8 @@ type connectBody struct {
 	App      string `json:"app"`
 	Level    string `json:"level"`
 	ReturnTo string `json:"return_to"`
+	// BrowserHash binds the sign-in to the member's browser (StartRequest).
+	BrowserHash string `json:"browser_hash"`
 }
 
 func (h handlers) connect(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +82,12 @@ func (h handlers) callback(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	completion, err := h.service.Complete(r.Context(), Callback{
 		State: query.Get("state"), Code: query.Get("code"), Error: query.Get("error"),
+		Cookie: func(name string) string {
+			if cookie, err := r.Cookie(name); err == nil {
+				return cookie.Value
+			}
+			return ""
+		},
 	})
 	var failure *Failure
 	switch {
@@ -95,7 +104,7 @@ func (h handlers) callback(w http.ResponseWriter, r *http.Request) {
 	if failure != nil {
 		result = url.Values{"status": {"failed"}, "app": {completion.App}, "reason": {failure.Reason}}
 		status = http.StatusBadGateway
-		if failure.Reason == ReasonDenied || failure.Reason == ReasonInvalid {
+		if failure.Reason == ReasonDenied || failure.Reason == ReasonInvalid || failure.Reason == ReasonWrongBrowser {
 			status = http.StatusForbidden
 		}
 	} else {

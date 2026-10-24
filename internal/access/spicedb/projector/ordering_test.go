@@ -7,6 +7,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	teamsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 )
 
 func TestOrderingKeys(t *testing.T) {
@@ -85,5 +87,40 @@ func TestConsumerSkipsAnEventOlderThanOneApplied(t *testing.T) {
 	}
 	if len(writer.changes[0].Delete) != 1 || len(writer.changes[2].Touch) != 1 {
 		t.Fatalf("wrong changes applied: %+v", writer.changes)
+	}
+}
+
+// A service's synchronous removal records its keys like an event, so the
+// add event it overtook, delivered late, can't bring the member back (#457).
+func TestEngineWriteOrdersAgainstLateEvents(t *testing.T) {
+	writer := &fakeApplier{}
+	seen := memorySeen{}
+	engine := &Engine{writer: writer, seen: seen}
+	consumer := &Consumer{writer: writer, grants: &fakeGrants{}, seen: seen, logger: slog.New(slog.DiscardHandler)}
+	t0 := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	ctx := context.Background()
+
+	removal, err := TeamMemberRemoved("acme", "t1", "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Apply(ctx, removal, t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	added := mappers[teamsv1.Source][teamsv1.MemberAddedDetailType]
+	data, _ := json.Marshal(teamsv1.MemberAdded{OrganizationID: "acme", TeamID: "t1", UserID: "u1", Role: "member"})
+	if err := consumer.project(ctx, teamsv1.MemberAddedDetailType, added, data, t0); err != nil {
+		t.Fatal(err)
+	}
+	if len(writer.changes) != 1 || len(writer.changes[0].Touch) != 0 {
+		t.Fatalf("the late add was applied after the removal: %+v", writer.changes)
+	}
+
+	// A newer add still lands.
+	if err := consumer.project(ctx, teamsv1.MemberAddedDetailType, added, data, t0.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if len(writer.changes) != 2 || len(writer.changes[1].Touch) != 1 {
+		t.Fatalf("a newer add was skipped: %+v", writer.changes)
 	}
 }

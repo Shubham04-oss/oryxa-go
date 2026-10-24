@@ -14,6 +14,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -63,7 +64,21 @@ const (
 	ReasonDenied      = "denied"
 	ReasonUnavailable = "unavailable"
 	ReasonInvalid     = "invalid_credentials"
+	// ReasonWrongBrowser means the callback came from a browser other than
+	// the one that started the sign-in, as a forwarded authorize link does.
+	ReasonWrongBrowser = "wrong_browser"
 )
+
+// BrowserCookiePrefix names the cookie holding a sign-in's browser nonce.
+// The rest of the name is the first 16 hex digits of the nonce's SHA-256, so
+// two sign-ins started in one browser each keep their own. Apps sets it, on
+// the answer to the member's own connect, with Path CallbackPath.
+const BrowserCookiePrefix = "oryxa_integrations_signin_"
+
+// BrowserCookieName is the cookie a sign-in with this browser hash reads.
+func BrowserCookieName(browserHash string) string {
+	return BrowserCookiePrefix + browserHash[:16]
+}
 
 // Failure is why a sign-in that had a state ended without a connection.
 type Failure struct {
@@ -147,6 +162,9 @@ type StartRequest struct {
 	App      string
 	Level    string // personal | org
 	ReturnTo string
+	// BrowserHash is the hex SHA-256 of a nonce the starting browser keeps
+	// in its BrowserCookieName cookie; the callback must bring it back.
+	BrowserHash string
 }
 
 // Start records a sign-in and answers the app's authorization URL. The app is
@@ -160,6 +178,9 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (string, erro
 	}
 	if request.Level != "personal" && request.Level != "org" {
 		return "", invalid("level", "must be personal or org")
+	}
+	if len(request.BrowserHash) != sha256.Size*2 || strings.Trim(request.BrowserHash, "0123456789abcdef") != "" {
+		return "", invalid("browser_hash", "must be a hex SHA-256")
 	}
 	if request.ReturnTo != "" && !s.returnAllowed(request.ReturnTo) {
 		return "", invalid("return_to", "is not an allowed page")
@@ -213,10 +234,10 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (string, erro
 		sealedVerifier = &sealed
 	}
 	if _, err := s.pool.Exec(ctx, `INSERT INTO integrations.oauth_states
-		(state_hash, org_id, member_id, app, org_app_id, pkce_verifier, return_to, level, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		(state_hash, org_id, member_id, app, org_app_id, pkce_verifier, return_to, level, expires_at, browser_hash)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		hash, request.Org, request.Member, request.App, chosen.ID, sealedVerifier, request.ReturnTo, request.Level,
-		s.now().Add(StateLifetime)); err != nil {
+		s.now().Add(StateLifetime), request.BrowserHash); err != nil {
 		return "", err
 	}
 	authorize, err := url.Parse(m.Auth.OAuth2.AuthorizationURL)
@@ -253,6 +274,8 @@ type Callback struct {
 	Code  string
 	// Error is the app's error parameter (access_denied) when it sent one.
 	Error string
+	// Cookie answers the browser's cookie of that name, or "".
+	Cookie func(name string) string
 }
 
 // Completion is how a callback ended. Once the state is found, ReturnTo names
@@ -274,13 +297,14 @@ func (s *Service) Complete(ctx context.Context, callback Callback) (Completion, 
 	var (
 		org, member, app, appID, returnTo, level string
 		sealedVerifier                           *secrets.SealedData
+		browserHash                              *string
 	)
 	hash := hashState(callback.State)
 	now := s.now()
 	err := s.pool.QueryRow(ctx, `UPDATE integrations.oauth_states SET used_at = $2
 		WHERE state_hash = $1 AND used_at IS NULL AND expires_at > $2
-		RETURNING org_id, member_id, app, org_app_id, pkce_verifier, return_to, level`, hash, now).
-		Scan(&org, &member, &app, &appID, &sealedVerifier, &returnTo, &level)
+		RETURNING org_id, member_id, app, org_app_id, pkce_verifier, return_to, level, browser_hash`, hash, now).
+		Scan(&org, &member, &app, &appID, &sealedVerifier, &returnTo, &level, &browserHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Completion{}, ErrBadState
 	}
@@ -300,6 +324,10 @@ func (s *Service) Complete(ctx context.Context, callback Callback) (Completion, 
 		return completion, &Failure{Reason: reason, cause: cause}
 	}
 
+	// Before the code is redeemed: a forwarded link must never yield tokens.
+	if !sameBrowser(browserHash, callback.Cookie) {
+		return fail(ReasonWrongBrowser, errors.New("the browser did not bring back the sign-in's cookie"))
+	}
 	if callback.Error != "" || callback.Code == "" {
 		return fail(ReasonDenied, errors.New("the app sent back no code"))
 	}
@@ -411,6 +439,16 @@ func (s *Service) keep(ctx context.Context, org, member, app, appID, level strin
 		return "", err
 	}
 	return id, tx.Commit(ctx)
+}
+
+// sameBrowser says whether the browser brought back the nonce whose hash the
+// sign-in keeps.
+func sameBrowser(browserHash *string, cookie func(string) string) bool {
+	if browserHash == nil || len(*browserHash) != sha256.Size*2 || cookie == nil {
+		return false
+	}
+	nonce := cookie(BrowserCookieName(*browserHash))
+	return nonce != "" && subtle.ConstantTimeCompare([]byte(hashState(nonce)), []byte(*browserHash)) == 1
 }
 
 func (s *Service) returnAllowed(returnTo string) bool {

@@ -62,7 +62,7 @@ func TestEventsMapToRelationships(t *testing.T) {
 		{
 			name:   "organization deleted",
 			change: mapEvent(t, authv1.Source, authv1.OrganizationDeletedDetailType, authv1.OrganizationDeleted{OrganizationID: "acme"}),
-			deletes: []string{"agent:#@org:acme", "corpus:#@org:acme", "file:#@org:acme", "member:#@org:acme", "org:acme#@:",
+			deletes: []string{"agent:#@org:acme", "chart_person:#@org:acme", "corpus:#@org:acme", "file:#@org:acme", "member:#@org:acme", "org:acme#@:",
 				"request:#@org:acme", "source:#@org:acme", "team:#@org:acme"},
 		},
 		{
@@ -227,11 +227,14 @@ func TestChartFollowsAbove(t *testing.T) {
 	}}
 	got := strs(chartRels(chart, memberships))
 	want := []string{
-		"member:lee#chart@org:acme",
-		"member:maya#chart@org:acme",
-		"member:maya#exec_of@org:acme",
-		"member:sam#chart@org:acme",
-		"member:sam#manager@member:maya",
+		"chart_person:acme/lee#chart@org:acme",
+		"chart_person:acme/lee#user@member:lee",
+		"chart_person:acme/maya#chart@org:acme",
+		"chart_person:acme/maya#exec_of@org:acme",
+		"chart_person:acme/maya#user@member:maya",
+		"chart_person:acme/sam#chart@org:acme",
+		"chart_person:acme/sam#manager@chart_person:acme/maya",
+		"chart_person:acme/sam#user@member:sam",
 		"org:acme#executive@member:maya",
 	}
 	if !slices.Equal(got, want) {

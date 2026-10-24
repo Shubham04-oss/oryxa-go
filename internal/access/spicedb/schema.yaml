@@ -4,6 +4,9 @@
 # executive Sam "manages" on paper; Eng has a Payments subteam; Sam has a
 # primary agent and a research specialist. Lee is a plain member, Olu the
 # owner, and Zed is in the org but not the org chart.
+#
+# Globex: Sam and Lee are in it too, with the chart the other way round: Lee
+# is its executive and manages Sam. Neither org's chart counts in the other.
 schemaFile: "./schema.zed"
 relationships: |-
   org:acme#owner@member:olu
@@ -15,15 +18,29 @@ relationships: |-
   org:acme#executive@member:maya
   org:acme#executive@member:ann
 
-  member:maya#chart@org:acme
-  member:maya#exec_of@org:acme
-  member:ann#chart@org:acme
-  member:ann#exec_of@org:acme
-  member:sam#chart@org:acme
-  member:lee#chart@org:acme
-  member:sam#manager@member:maya
-  member:lee#manager@member:sam
-  member:ann#manager@member:sam
+  chart_person:acme/maya#user@member:maya
+  chart_person:acme/ann#user@member:ann
+  chart_person:acme/sam#user@member:sam
+  chart_person:acme/lee#user@member:lee
+  chart_person:acme/maya#chart@org:acme
+  chart_person:acme/maya#exec_of@org:acme
+  chart_person:acme/ann#chart@org:acme
+  chart_person:acme/ann#exec_of@org:acme
+  chart_person:acme/sam#chart@org:acme
+  chart_person:acme/lee#chart@org:acme
+  chart_person:acme/sam#manager@chart_person:acme/maya
+  chart_person:acme/lee#manager@chart_person:acme/sam
+  chart_person:acme/ann#manager@chart_person:acme/sam
+
+  org:globex#owner@member:lee
+  org:globex#member@member:sam
+  org:globex#executive@member:lee
+  chart_person:globex/lee#user@member:lee
+  chart_person:globex/sam#user@member:sam
+  chart_person:globex/lee#chart@org:globex
+  chart_person:globex/lee#exec_of@org:globex
+  chart_person:globex/sam#chart@org:globex
+  chart_person:globex/sam#manager@chart_person:globex/lee
 
   team:eng#org@org:acme
   team:eng#lead@member:maya
@@ -65,7 +82,7 @@ relationships: |-
   source:src_sam#org@org:acme
   source:src_sam#created_by@member:sam
 
-  member:sam#lease@member:lee[in_thread:{"channel":"C1","thread":"171.2"}][expiration:2099-01-01T00:00:00Z]
+  chart_person:acme/sam#lease@member:lee[in_thread:{"channel":"C1","thread":"171.2"}][expiration:2099-01-01T00:00:00Z]
 
   request:int_1#requester@agent:agt_lee
   request:int_1#target@member:sam
@@ -100,12 +117,15 @@ assertions:
     - request:int_1#decide@member:sam
     - request:int_1#decide@agent:agt_sam
     # Above: the chain and executives
-    - member:sam#outranked_by@member:maya
-    - member:lee#outranked_by@member:sam
-    - member:lee#outranked_by@member:maya
-    - member:sam#outranked_by@member:ann
+    - chart_person:acme/sam#outranked_by@member:maya
+    - chart_person:acme/lee#outranked_by@member:sam
+    - chart_person:acme/lee#outranked_by@member:maya
+    - chart_person:acme/sam#outranked_by@member:ann
+    # Each org's own chart, and Lee being Globex's executive doesn't put him
+    # out of reach in Acme
+    - chart_person:globex/sam#outranked_by@member:lee
   assertCaveated:
-    - member:sam#access_without_asking@member:lee
+    - chart_person:acme/sam#access_without_asking@member:lee
   assertFalse:
     # The agent rule: member-reach permissions carry no admin arrow, so an
     # agent acting for an admin gets a member's reach
@@ -143,9 +163,17 @@ assertions:
     # Above: nobody outranks an executive, executives don't outrank each
     # other, the chart's edge from Sam to Ann counts for nothing, and a person
     # the chart leaves out is above and below nobody
-    - member:ann#outranked_by@member:sam
-    - member:ann#outranked_by@member:maya
-    - member:maya#outranked_by@member:ann
-    - member:zed#outranked_by@member:maya
-    - member:sam#outranked_by@member:zed
-    - member:maya#outranked_by@member:maya
+    - chart_person:acme/ann#outranked_by@member:sam
+    - chart_person:acme/ann#outranked_by@member:maya
+    - chart_person:acme/maya#outranked_by@member:ann
+    - chart_person:acme/zed#outranked_by@member:maya
+    - chart_person:acme/sam#outranked_by@member:zed
+    - chart_person:acme/maya#outranked_by@member:maya
+    # One org's chart never counts in another (#442): Lee over Sam (Globex)
+    # not in Acme, Acme's executives not in Globex, Sam over Lee (Acme) not in
+    # Globex, and Globex's executive not over Acme's
+    - chart_person:acme/sam#outranked_by@member:lee
+    - chart_person:globex/sam#outranked_by@member:maya
+    - chart_person:globex/sam#outranked_by@member:ann
+    - chart_person:globex/lee#outranked_by@member:sam
+    - chart_person:acme/maya#outranked_by@member:lee

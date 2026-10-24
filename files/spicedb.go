@@ -2,6 +2,7 @@ package files
 
 import (
 	"context"
+	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/files/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/files/internal/domain"
@@ -27,9 +28,9 @@ type relationships struct{ engine *projector.Engine }
 
 func (r relationships) FileCreated(ctx context.Context, object domain.Object) error {
 	return r.engine.Placed(ctx, "file", object.ID, projector.Placement{Org: object.OrganizationID, Scope: string(object.Scope),
-		Team: object.TeamID, Member: object.MemberID, Access: string(object.Access), CreatedBy: object.CreatedBy})
+		Team: object.TeamID, Member: object.MemberID, Access: string(object.Access), CreatedBy: object.CreatedBy}, time.Now())
 }
 
 func (r relationships) FileDeleted(ctx context.Context, organizationID, fileID string) error {
-	return r.engine.Deleted(ctx, "file", organizationID, fileID)
+	return r.engine.Deleted(ctx, "file", organizationID, fileID, time.Now())
 }

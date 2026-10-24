@@ -72,14 +72,15 @@ func TestOnReadsWhereBrowsersReachTheServiceAndWhereTheyMayReturnTo(t *testing.T
 func TestOnReadsConnectorsEgressKeysAndTheBrokerAddress(t *testing.T) {
 	key := strings.Repeat("s", 32)
 	config, err := FromEnv(env(map[string]string{
-		"INTEGRATIONS_ENABLED":        "true",
-		"INTEGRATIONS_CONNECTORS_DIR": " /connectors ",
-		"INTEGRATIONS_EGRESS_KEYS":    `{"current":"k1","keys":{"k1":"` + key + `"}}`,
+		"INTEGRATIONS_ENABLED":            "true",
+		"INTEGRATIONS_CONNECTORS_DIR":     " /connectors ",
+		"INTEGRATIONS_CONNECTOR_LAUNCHER": " /connector-launch ",
+		"INTEGRATIONS_EGRESS_KEYS":        `{"current":"k1","keys":{"k1":"` + key + `"}}`,
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.ConnectorsDir != "/connectors" || config.EgressKeys.Current != "k1" || config.BrokerAddress != "127.0.0.1:8091" {
+	if config.ConnectorsDir != "/connectors" || config.ConnectorLauncher != "/connector-launch" || config.EgressKeys.Current != "k1" || config.BrokerAddress != "127.0.0.1:8091" {
 		t.Fatalf("config = %+v", config)
 	}
 	for name, raw := range map[string]string{

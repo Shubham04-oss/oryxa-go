@@ -370,7 +370,7 @@ do now.
 
 | The asker is… | Relation | Skips consent for | Answer goes to | Plan |
 |---|---|---|---|---|
-| Above the owner in the chart | `member:owner#outranked_by` | A summary only | Asker's DM (`AnswerFor`) | Team (today: every plan, see §5) |
+| Above the owner in the chart | `chart_person:<org>/<owner>#outranked_by` (per org, #442) | A summary only | Asker's DM (`AnswerFor`) | Team (today: every plan, see §5) |
 | Someone the owner said may always get summaries | `standing_summary` | A summary only | Asker's DM | Free |
 | In a thread with a live lease | `lease`, caveat `in_thread` + expiry | Summary and access, follow-ups in that thread | The thread, as today | Free |
 | The owner's delegate this week | `delegate`, caveat `during_window` | Summary; access if the delegation says so | Asker's DM | Business |

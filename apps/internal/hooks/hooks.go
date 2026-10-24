@@ -47,6 +47,13 @@ const (
 	// replica, before it answers 429.
 	RatePerSecond = 50
 
+	// RefusalsPerSecond is how many deliveries that fail verification one
+	// client IP may send one endpoint a second, per replica, before its requests are
+	// answered 429 without being checked. An app's own deliveries are never
+	// refused, so this bounds forgers' work (a JWKS refetch for an unknown
+	// key id, say) without touching anyone else's.
+	RefusalsPerSecond = 20
+
 	// RotationOverlap is how long an endpoint's previous secret still
 	// verifies after a rotation, while the app switches to the new one.
 	RotationOverlap = 24 * time.Hour

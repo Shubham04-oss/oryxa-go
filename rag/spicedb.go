@@ -2,6 +2,7 @@ package rag
 
 import (
 	"context"
+	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/access/spicedb/projector"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
@@ -27,9 +28,9 @@ type relationships struct{ engine *projector.Engine }
 
 func (r relationships) CorpusCreated(ctx context.Context, corpus domain.Corpus) error {
 	return r.engine.Placed(ctx, "corpus", corpus.ID, projector.Placement{Org: corpus.OrganizationID, Scope: string(corpus.Scope),
-		Team: corpus.TeamID, Member: corpus.MemberID, CreatedBy: corpus.CreatedBy})
+		Team: corpus.TeamID, Member: corpus.MemberID, CreatedBy: corpus.CreatedBy}, time.Now())
 }
 
 func (r relationships) CorpusDeleted(ctx context.Context, organizationID, corpusID string) error {
-	return r.engine.Deleted(ctx, "corpus", organizationID, corpusID)
+	return r.engine.Deleted(ctx, "corpus", organizationID, corpusID, time.Now())
 }

@@ -189,7 +189,7 @@ func TestAPipedreamConnectionNeverReachesComposio(t *testing.T) {
 	if err := h.store.CreateConnection(ctx, pending, hashState("state-1"), domain.Event{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.service.CompleteConnection(ctx, "state-1", "success", ""); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := h.service.CompleteConnection(ctx, ConnectCallback{State: "state-1", CookieState: "state-1", Status: "success"}); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("CompleteConnection = %v, want not found", err)
 	}
 
