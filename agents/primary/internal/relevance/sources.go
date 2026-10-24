@@ -151,8 +151,14 @@ var privateSources = map[string]string{
 	// private for the same reason (browser_, below), and the researcher reads
 	// pages the same way.
 	"researcher":    "the open web, by search and by address",
+	"web_search":    "the open web, by search and by address, as the researcher reads it",
 	"google_search": "the open web, by search",
 	"url_context":   "a page on the open web",
+
+	// Krude's todo list for the thread (single-agent Krude). It returns what
+	// Krude wrote, but it reads back steps earlier runs in the thread wrote,
+	// which can carry what those runs read.
+	"plan": "the thread's todo list, written by earlier runs that may have read private material",
 }
 
 // privateFamilies are tool families whose every tool reads private material:
