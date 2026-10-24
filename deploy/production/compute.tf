@@ -205,7 +205,8 @@ locals {
     { for service, key in local.event_signing_keys : "${upper(service)}_EVENT_SIGNING_KEY_ID" => key },
     # Where the image puts the integrations service's connectors (Dockerfile);
     # nothing reads it while INTEGRATIONS_ENABLED is off.
-    { INTEGRATIONS_CONNECTORS_DIR = "/connectors" },
+    # Connectors run as the image's connector user, not the service's (#478).
+    { INTEGRATIONS_CONNECTORS_DIR = "/connectors", INTEGRATIONS_CONNECTOR_LAUNCHER = "/connector-launch" },
     # The guardrail that grounds every answer to a question asked in Slack
     # (answer_guard.tf). Both variables come together or the service refuses to
     # start, and this is the one place that names either. They are set whatever
@@ -503,6 +504,15 @@ resource "aws_ecs_task_definition" "oryxa" {
         startPeriod = 90
       }
       dependsOn = [{ containerName = "otel", condition = "START" }]
+      # The process runs as nonroot. Running connectors as their own user needs
+      # only the file capabilities the image gives (Dockerfile): SETGID and
+      # SETUID to /connector-launch, KILL to /oryxa. Every other default
+      # capability goes, so nothing in the container can gain it.
+      linuxParameters = {
+        capabilities = {
+          drop = ["AUDIT_WRITE", "CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "MKNOD", "NET_BIND_SERVICE", "NET_RAW", "SETFCAP", "SETPCAP", "SYS_CHROOT"]
+        }
+      }
       # The drain (ORYXA_DRAIN_TIMEOUT 20s), then requests and workers, can take
       # about 100s when something hangs; 120 is Fargate's most.
       stopTimeout      = 120
