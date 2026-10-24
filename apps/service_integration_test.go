@@ -118,7 +118,8 @@ func TestConnectRunAndDeliverEndToEnd(t *testing.T) {
 
 	// 2. Composio sends the browser back. The account is read back from
 	// Composio, not believed from the query.
-	response := get(t, api.URL+"/v1/apps/connect/callback?state="+url.QueryEscape(state)+"&status=success&connected_account_id="+composio.accountID, 0)
+	response := get(t, api.URL+"/v1/apps/connect/callback?state="+url.QueryEscape(state)+"&status=success&connected_account_id="+composio.accountID, 0,
+		connectCookie(state))
 	if response.StatusCode != http.StatusSeeOther {
 		t.Fatalf("callback = %d", response.StatusCode)
 	}
@@ -650,11 +651,21 @@ func post(t *testing.T, target, body string, wantStatus int, into any) {
 	}
 }
 
-func get(t *testing.T, target string, wantStatus int) *http.Response {
+// connectCookie is the cookie the connect's answer left in the member's
+// browser, whose value is the state.
+func connectCookie(state string) *http.Cookie {
+	sum := sha256.Sum256([]byte(state))
+	return &http.Cookie{Name: "oryxa_apps_connect_" + hex.EncodeToString(sum[:])[:16], Value: state}
+}
+
+func get(t *testing.T, target string, wantStatus int, cookies ...*http.Cookie) *http.Response {
 	t.Helper()
 	request, err := http.NewRequest(http.MethodGet, target, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, cookie := range cookies {
+		request.AddCookie(cookie)
 	}
 	request.Header.Set("Authorization", memberToken)
 	// A redirect is what a browser follows; the test wants to see it.
