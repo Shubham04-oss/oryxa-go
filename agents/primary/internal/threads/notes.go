@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -64,7 +65,7 @@ const (
 	// maxNoteAttempts bounds how often a note is appended again after ADK
 	// refuses it. What it refuses is nearly always a write to the thread by
 	// someone else a moment earlier, which a fresh read of the thread absorbs.
-	maxNoteAttempts = 4
+	maxNoteAttempts = 12
 )
 
 // Note is one line about a request, for a member's Requests thread.
@@ -145,7 +146,8 @@ func (service *Service) Note(ctx context.Context, member Member, note Note) erro
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(time.Duration(attempt) * 20 * time.Millisecond):
+			// Jittered, so writers that collided do not wake together and collide again.
+			case <-time.After(time.Duration(attempt)*10*time.Millisecond + rand.N(20*time.Millisecond)):
 			}
 		}
 		stored, err := service.requestsThread(ctx, member)
