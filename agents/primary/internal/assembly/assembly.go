@@ -307,6 +307,12 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 			logger.WarnContext(ctx, "apps toolbox unavailable, running without it", "error", err)
 		} else {
 			toolboxes = append(toolboxes, appsToolbox)
+			krude.closers = append(krude.closers, func(context.Context) error {
+				if err := appsToolbox.Close(); err != nil {
+					return fmt.Errorf("close apps toolbox: %w", err)
+				}
+				return nil
+			})
 			logger.InfoContext(ctx, "apps toolbox", "url", settings.AppsURL)
 		}
 		readOnly, err := agents.AppsToolbox(agents.AppsConfig{
@@ -318,6 +324,12 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		if err == nil {
 			unattended = append(unattended, readOnly)
 			krude.readOnlyApps = &readOnly
+			krude.closers = append(krude.closers, func(context.Context) error {
+				if err := readOnly.Close(); err != nil {
+					return fmt.Errorf("close read-only apps toolbox: %w", err)
+				}
+				return nil
+			})
 		}
 	}
 	if settings.RagURL != "" {
