@@ -301,6 +301,7 @@ variable "signin_requests_per_period" {
 # rate only on verified deliveries, but nothing else stops one address from
 # flooding these public URLs with junk. Slack's own egress is spread over many
 # addresses, so a per-IP limit well above any one of them leaves it alone.
+# No host condition: app.*/v1/* reaches the same tasks as api.
 variable "slack_requests_per_period" {
   description = "How many POSTs to Slack's delivery routes one client IP may make in 60 seconds, at one Cloudflare data center, before it is blocked for 1 minute (deploy/production/hardening.tf)."
   type        = number
@@ -336,7 +337,7 @@ resource "cloudflare_ruleset" "rate_limits" {
     description = "Slack event and interactivity deliveries, per client IP"
     action      = "block"
     enabled     = true
-    expression  = "(http.host eq \"${local.api_host}\" and http.request.method eq \"POST\" and http.request.uri.path in {\"/v1/apps/slack/events\" \"/v1/apps/slack/interactivity\"})"
+    expression  = "(http.request.method eq \"POST\" and starts_with(http.request.uri.path, \"/v1/apps/slack/\"))"
     ratelimit = {
       characteristics     = ["cf.colo.id", "ip.src"]
       period              = 60
