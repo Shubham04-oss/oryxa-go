@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Runs one self-hosted runner forever, one job at a time, each on a clean
-# slate. linux.sh installs this as the oryxa-runner@NAME systemd service, which
-# runs it as root; nothing of a job runs as root.
+# Runs one job on a self-hosted runner, on a clean slate. linux.sh installs
+# this as the oryxa-runner@NAME systemd service, which runs it as root and
+# starts it again after every job; nothing of a job runs as root.
 #
-# Each pass:
-# 1. kills whatever the runner's user left running and deletes its home, so a
-#    job can't plant anything a later job would run (#460);
+# Each start:
+# 1. deletes the runner's user's home and shared memory. systemd already
+#    killed everything the last job left in this service's cgroup, its
+#    containers included, and gave this start a /tmp of its own, so a job
+#    can't plant anything a later job would run (#460);
 # 2. starts a fresh rootless Docker engine for that user, so jobs can start
 #    containers without the docker group, which is root on the host;
 # 3. registers a just-in-time runner, which takes one job and is then removed
@@ -45,36 +47,38 @@ as() {
     "$@"
 }
 
-while :; do
-  pkill -KILL -u "$uid"
+rm -rf "$home" "$run"
+find /dev/shm -user "$uid" -delete 2>/dev/null
+install -d -o "$RUNNER_USER" -g "$RUNNER_USER" -m 700 "$home" "$home/runner" "$run"
+as tar -xzf "$lib/runner.tar.gz" -C "$home/runner"
+
+as dockerd-rootless.sh --data-root "$home/.docker" >"$log/$name-dockerd.log" 2>&1 &
+for _ in $(seq 60); do
+  as docker info >/dev/null 2>&1 && break
   sleep 1
-  rm -rf "$home" "$run"
-  install -d -o "$RUNNER_USER" -g "$RUNNER_USER" -m 700 "$home" "$home/runner" "$run"
-  as tar -xzf "$lib/runner.tar.gz" -C "$home/runner"
-
-  as dockerd-rootless.sh --data-root "$home/.docker" >"$log/$name-dockerd.log" 2>&1 &
-  for _ in $(seq 60); do
-    as docker info >/dev/null 2>&1 && break
-    sleep 1
-  done
-  if ! as docker info >/dev/null 2>&1; then
-    echo "rootless Docker did not start; see $log/$name-dockerd.log" >&2
-    sleep 30
-    continue
-  fi
-
-  # One registration per job. The token file holds a fine-grained token with
-  # Administration: write on the repository and nothing else.
-  body=$(jq -n --arg name "$name-$(date +%s)" --arg labels "$LABELS" \
-    '{name: $name, runner_group_id: 1, labels: ($labels | split(",")), work_folder: "_work"}')
-  jit=$(curl -fsS -X POST -H "Authorization: Bearer $(cat /etc/oryxa-runner/token)" \
-    -H "Accept: application/vnd.github+json" -d "$body" \
-    "https://api.github.com/repos/$REPOSITORY/actions/runners/generate-jitconfig" |
-    jq -r '.encoded_jit_config // empty')
-  if [ -z "$jit" ]; then
-    echo "could not register a runner for $REPOSITORY" >&2
-    sleep 30
-    continue
-  fi
-  (cd "$home/runner" && as ./run.sh --jitconfig "$jit")
 done
+if ! as docker info >/dev/null 2>&1; then
+  echo "rootless Docker did not start; see $log/$name-dockerd.log" >&2
+  sleep 30
+  exit 1
+fi
+
+# One registration per job. The token file holds a fine-grained token with
+# Administration: write on the repository and nothing else. It and the
+# runner's config stay off command lines, which any local user can read.
+body=$(jq -n --arg name "$name-$(date +%s)" --arg labels "$LABELS" \
+  '{name: $name, runner_group_id: 1, labels: ($labels | split(",")), work_folder: "_work"}')
+jit=$(printf 'header = "Authorization: Bearer %s"\n' "$(cat /etc/oryxa-runner/token)" |
+  curl -fsS -K - -X POST -H "Accept: application/vnd.github+json" -d "$body" \
+    "https://api.github.com/repos/$REPOSITORY/actions/runners/generate-jitconfig" |
+  jq -r '.encoded_jit_config // empty')
+if [ -z "$jit" ]; then
+  echo "could not register a runner for $REPOSITORY" >&2
+  sleep 30
+  exit 1
+fi
+(umask 077 && printf '%s' "$jit" >"$home/.jitconfig")
+chown "$RUNNER_USER:" "$home/.jitconfig"
+# The runner reads ACTIONS_RUNNER_INPUT_JITCONFIG as its --jitconfig.
+cd "$home/runner" &&
+  as bash -c 'export ACTIONS_RUNNER_INPUT_JITCONFIG=$(cat ~/.jitconfig) && rm ~/.jitconfig && exec ./run.sh'

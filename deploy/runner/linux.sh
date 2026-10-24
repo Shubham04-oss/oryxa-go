@@ -75,9 +75,11 @@ Wants=network-online.target
 
 [Service]
 ExecStart=$lib/ephemeral.sh %i
+# One job per start; stopping kills everything the job left in this cgroup.
 Restart=always
-RestartSec=10
+RestartSec=2
 KillMode=control-group
+PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target
