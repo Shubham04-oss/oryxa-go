@@ -381,7 +381,8 @@ type responder struct {
 // when trigger addresses nobody real does verdict get a say — and verdict
 // only has a say at all when it is non-nil, which is true for the message a
 // person posted and false for every reply answering it goes on to cause,
-// since nothing judged those.
+// since nothing judged those. Whoever verdict routes to, a person's own agent
+// never answers over them unasked (speaksOverPerson).
 func resolveResponders(seats []Seat, trigger Message, verdict *Verdict) []responder {
 	if handles := addressedHandles(trigger.Body, trigger.AuthorHandle); len(handles) > 0 {
 		if responders, addressed := addressedSeats(seats, handles); addressed {
@@ -399,6 +400,16 @@ func resolveResponders(seats []Seat, trigger Message, verdict *Verdict) []respon
 		// A named seat that is not an agent seat in this room — including
 		// no seat at all — is ignored, not substituted for.
 		return nil
+	}
+	if speaksOverPerson(seats, seat, trigger) {
+		// Routed to somebody's own agent while that person is reading the
+		// room, or is the one asking: it would be answering over them. Jev
+		// routes by role and is not asked to weigh that, so it is a rule
+		// here, and the message goes to the seat Rules would pick instead,
+		// if any is free — told, like any routed seat, that it may pass.
+		if seat, ok = freeAgentSeat(seats, trigger); !ok {
+			return nil
+		}
 	}
 	return excludeAuthor([]responder{{Seat: seat}}, trigger.AuthorHandle)
 }

@@ -749,6 +749,56 @@ func TestTheRelayTellsEachTurnWhyItWasAsked(t *testing.T) {
 	}
 }
 
+// A verdict that routes a message nobody named to somebody's own agent while
+// that person is reading the room, or wrote the message, does not have it
+// answer over them: the seat Rules would pick answers instead, or nobody.
+func TestARoutedAgentNeverAnswersOverItsPresentPerson(t *testing.T) {
+	bob := relayPersonSeat("bob", "user-bob", true)
+	bobAgent := relayAgentSeat("bob-agent", "user-bob", "agent-bob")
+	bobAgent.SpeaksFor = "user-bob"
+	carol := relayPersonSeat("carol", "user-carol", true)
+	carolAgent := relayAgentSeat("krude", "user-carol", "agent-carol")
+	carolAgent.SpeaksFor = "user-carol"
+	dan := relayPersonSeat("dan", "user-dan", false) // away
+	danAgent := relayAgentSeat("krude-2", "user-dan", "agent-dan")
+	danAgent.SpeaksFor = "user-dan"
+	pricing := relayAgentSeat("pricing", "user-carol", "agent-pricing") // a specialist carol contributed
+
+	for _, test := range []struct {
+		name  string
+		seats []Seat
+		route string
+		want  []string
+	}{
+		{"a present person's agent gives way to a specialist", []Seat{bob, carol, carolAgent, dan, danAgent, pricing}, "krude", []string{"pricing"}},
+		{"or to an away person's agent", []Seat{bob, carol, carolAgent, dan, danAgent}, "krude", []string{"krude-2"}},
+		{"or to nobody, when nobody is free", []Seat{bob, carol, carolAgent}, "krude", nil},
+		{"the author's own agent never answers them", []Seat{bob, bobAgent, carol}, "bob-agent", nil},
+		{"an away person's agent answers as routed", []Seat{bob, carol, carolAgent, dan, danAgent, pricing}, "krude-2", []string{"krude-2"}},
+		{"a specialist answers whoever contributed it is here", []Seat{bob, carol, carolAgent, pricing}, "pricing", []string{"pricing"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			speaker := &relayFakeSpeaker{reply: func(Seat, Situation, []Message) (string, error) { return "Here.", nil }}
+			relay := &Relay{Store: &relayFakeStore{}, Speaker: speaker}
+			_, err := relay.Post(context.Background(), Situation{Seats: test.seats},
+				relayMessage("room-1", bob, "what do we charge for this?"), Verdict{Answer: true, Speaker: test.route})
+			if err != nil {
+				t.Fatalf("Post: %v", err)
+			}
+			var got []string
+			for _, call := range speaker.calls {
+				got = append(got, call.seat.Handle)
+				if call.summons != (Summons{}) {
+					t.Errorf("%s was told %+v, want nothing: nobody named it", call.seat.Handle, call.summons)
+				}
+			}
+			if !slices.Equal(got, test.want) {
+				t.Errorf("answered by %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 // The prompt says what the summons says: asked by name, standing in for an
 // away person, or free to pass.
 func TestThePromptFollowsTheSummons(t *testing.T) {
