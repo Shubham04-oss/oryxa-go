@@ -206,7 +206,7 @@ locals {
     # Where the image puts the integrations service's connectors (Dockerfile);
     # nothing reads it while INTEGRATIONS_ENABLED is off.
     # Connectors run as the image's connector user, not the service's (#478).
-    { INTEGRATIONS_CONNECTORS_DIR = "/connectors", INTEGRATIONS_CONNECTOR_UID = "65533" },
+    { INTEGRATIONS_CONNECTORS_DIR = "/connectors", INTEGRATIONS_CONNECTOR_LAUNCHER = "/connector-launch" },
     # The guardrail that grounds every answer to a question asked in Slack
     # (answer_guard.tf). Both variables come together or the service refuses to
     # start, and this is the one place that names either. They are set whatever
@@ -504,10 +504,10 @@ resource "aws_ecs_task_definition" "oryxa" {
         startPeriod = 90
       }
       dependsOn = [{ containerName = "otel", condition = "START" }]
-      # The process runs as nonroot and needs only the capabilities /oryxa
-      # carries as file capabilities to run connectors as their own user
-      # (Dockerfile): KILL, SETGID and SETUID. Every other default one goes, so
-      # nothing else in the container can gain it.
+      # The process runs as nonroot. Running connectors as their own user needs
+      # only the file capabilities the image gives (Dockerfile): SETGID and
+      # SETUID to /connector-launch, KILL to /oryxa. Every other default
+      # capability goes, so nothing in the container can gain it.
       linuxParameters = {
         capabilities = {
           drop = ["AUDIT_WRITE", "CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "MKNOD", "NET_BIND_SERVICE", "NET_RAW", "SETFCAP", "SETPCAP", "SYS_CHROOT"]

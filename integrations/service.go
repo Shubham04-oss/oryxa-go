@@ -104,7 +104,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		platform.Logger.Warn("INTEGRATIONS_SERVICE_CALLERS is not set: every internal call is refused")
 	}
 	server := httpserver.New(verifier, platform.Logger)
-	connectors, err := startConnectors(ctx, platform, config.ConnectorsDir, config.ConnectorUID)
+	connectors, err := startConnectors(ctx, platform, config.ConnectorsDir, config.ConnectorLauncher)
 	if err != nil {
 		return host.Service{}, err
 	}
@@ -130,8 +130,8 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 // startConnectors starts every connector binary in dir, each named by its
 // manifest id. One that does not come up stops the start: a connector that is
 // shipped is meant to run.
-func startConnectors(ctx context.Context, platform host.Platform, dir string, uid uint32) (*connectorhost.Host, error) {
-	connectors, err := connectorhost.New(connectorhost.Config{Logger: platform.Logger, ConnectorUID: uid})
+func startConnectors(ctx context.Context, platform host.Platform, dir, launcher string) (*connectorhost.Host, error) {
+	connectors, err := connectorhost.New(connectorhost.Config{Logger: platform.Logger, Launcher: launcher})
 	if err != nil {
 		return nil, err
 	}

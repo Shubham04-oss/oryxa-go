@@ -2,7 +2,7 @@
 // private Unix socket, supervises it, reads its manifest with Describe and
 // checks every message that crosses the contract against that manifest.
 // Connectors are never trusted: they get a bare environment, egress handles
-// instead of tokens and, with Config.ConnectorUID, a user of their own, so
+// instead of tokens and, with Config.Launcher, a user of their own, so
 // they cannot read the host's memory or environment (and with it the task's
 // AWS credentials) or reach its sockets.
 package host
@@ -17,7 +17,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
 
 	"google.golang.org/grpc"
@@ -50,11 +49,11 @@ type Config struct {
 	// InvokeTimeout, SyncIdle and SyncLimit are the contract's 30 s call deadline,
 	// 60 s silence limit and 30 minute run limit.
 	InvokeTimeout, SyncIdle, SyncLimit time.Duration
-	// ConnectorUID, when set, is the user and group connectors run as. The
-	// host needs CAP_SETUID and CAP_SETGID for it and CAP_KILL to stop them
-	// (the image's /oryxa has the three); without them no connector starts. Zero runs them as the host's
-	// own user, as in local development and tests.
-	ConnectorUID uint32
+	// Launcher, when set, is the launch binary (./launch) every connector is
+	// started through, which runs it as the connector user. The host then
+	// needs CAP_KILL to stop connectors (the image's /oryxa has it). Empty
+	// runs them as the host's own user, as in local development and tests.
+	Launcher string
 }
 
 func (c *Config) defaults() {
@@ -257,15 +256,14 @@ func (c *connector) runOnce(ctx context.Context, up func()) error {
 		return err
 	}
 	cmd := exec.Command(c.spec.Path, c.spec.Args...)
+	if launcher := c.host.cfg.Launcher; launcher != "" {
+		cmd = exec.Command(launcher, append([]string{c.spec.Path}, c.spec.Args...)...)
+	}
 	// A bare environment: connectors never see the host's secrets. The one
 	// variable is the inherited listener's descriptor, fd 3 (ExtraFiles[0]).
 	cmd.Env = []string{gosdk.ListenerFDEnv + "=3"}
 	cmd.ExtraFiles = []*os.File{listener}
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
-	if uid := c.host.cfg.ConnectorUID; uid != 0 {
-		// No supplementary groups: Groups is empty, so they are cleared.
-		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: uid}}
-	}
 	err = cmd.Start()
 	listener.Close()
 	if err != nil {

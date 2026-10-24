@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/Shubham04-oss/oryxa-go/integrations/connectors/fakeapp/app"
 	"github.com/Shubham04-oss/oryxa-go/integrations/gosdk"
@@ -21,6 +22,7 @@ type Report struct {
 	Groups      []int
 	ParentEnv   string // what reading /proc/<parent>/environ gave
 	ParentError string
+	CapEff      string // the effective capabilities, from /proc/self/status
 }
 
 type spy struct{ *app.Server }
@@ -35,6 +37,13 @@ func (s spy) Invoke(ctx context.Context, req *pb.InvokeRequest) (*pb.InvokeRespo
 		r.ParentError = err.Error()
 	} else {
 		r.ParentEnv = string(b)
+	}
+	if b, err := os.ReadFile("/proc/self/status"); err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			if v, ok := strings.CutPrefix(line, "CapEff:"); ok {
+				r.CapEff = strings.TrimSpace(v)
+			}
+		}
 	}
 	report, _ := json.Marshal(r)
 	text, _ := json.Marshal(map[string]string{"text": string(report)})

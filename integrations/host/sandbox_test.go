@@ -21,6 +21,7 @@ type spyReport struct {
 	Groups      []int
 	ParentEnv   string
 	ParentError string
+	CapEff      string
 }
 
 func spyOn(t *testing.T, cfg Config) spyReport {
@@ -82,7 +83,7 @@ func TestConnectorsSeeNoneOfTheHostsSecrets(t *testing.T) {
 
 func TestConnectorsRunAsTheirOwnUser(t *testing.T) {
 	if runtime.GOOS != "linux" || os.Geteuid() != 0 {
-		t.Skip("switching users needs Linux and CAP_SETUID; run as root to cover it")
+		t.Skip("the launcher needs Linux and CAP_SETUID; run as root to cover it")
 	}
 	// The connector user must be able to run the binary from its temp directory.
 	if err := os.Chmod(filepath.Dir(spyBin), 0o755); err != nil {
@@ -90,20 +91,20 @@ func TestConnectorsRunAsTheirOwnUser(t *testing.T) {
 	}
 	t.Setenv("INTEGRATIONS_EGRESS_KEYS", "spy-keys")
 	const uid = 65533
-	r := spyOn(t, Config{ConnectorUID: uid})
-	if r.UID != uid || r.GID != uid || len(r.Groups) != 0 {
-		t.Errorf("connector runs as uid %d gid %d groups %v, want %d with no groups", r.UID, r.GID, r.Groups, uid)
+	r := spyOn(t, Config{Launcher: launchBin})
+	if r.UID != uid || r.GID != uid || len(r.Groups) != 0 || r.CapEff != "0000000000000000" {
+		t.Errorf("connector runs as uid %d gid %d groups %v caps %s, want %d with no groups or capabilities", r.UID, r.GID, r.Groups, r.CapEff, uid)
 	}
 	if r.ParentError == "" || strings.Contains(r.ParentEnv, "spy-keys") {
 		t.Errorf("connector read the host's environ: %q", r.ParentEnv)
 	}
 }
 
-func TestAConnectorUserTheHostCannotSwitchToStopsTheStart(t *testing.T) {
-	if runtime.GOOS != "linux" || os.Geteuid() == 0 {
-		t.Skip("needs Linux without CAP_SETUID")
+func TestALauncherThatCannotSwitchUsersStopsTheStart(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("needs a user without CAP_SETUID")
 	}
-	h, err := New(Config{ConnectorUID: 65533, StartTimeout: 5 * time.Second})
+	h, err := New(Config{Launcher: launchBin, StartTimeout: 5 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}

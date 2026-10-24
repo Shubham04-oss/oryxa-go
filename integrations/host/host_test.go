@@ -20,7 +20,7 @@ import (
 	pb "github.com/Shubham04-oss/oryxa-go/integrations/proto/connectorv1"
 )
 
-var fakeappBin, spyBin string
+var fakeappBin, spyBin, launchBin string
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "fakeapp-bin")
@@ -28,10 +28,11 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	fakeappBin = filepath.Join(dir, "fakeapp")
-	spyBin = filepath.Join(dir, "spy")
+	spyBin, launchBin = filepath.Join(dir, "spy"), filepath.Join(dir, "launch")
 	for bin, pkg := range map[string]string{
 		fakeappBin: "github.com/Shubham04-oss/oryxa-go/integrations/connectors/fakeapp",
 		spyBin:     "./testdata/spy",
+		launchBin:  "./launch",
 	} {
 		if out, err := exec.Command("go", "build", "-o", bin, pkg).CombinedOutput(); err != nil {
 			panic(string(out))
