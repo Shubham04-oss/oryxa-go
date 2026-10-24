@@ -228,14 +228,18 @@ func (store *Store) Sweep(ctx context.Context, limit int) (int, error) {
 	if limit < 1 {
 		return 0, errors.New("sweeping secrets needs a positive limit")
 	}
+	// The batch is chosen once, in a materialized CTE: as an IN subquery
+	// Postgres may run it again mid-delete (a recheck after a concurrent
+	// change), and the delete then removes more than limit rows.
 	tag, err := store.database.Pool.Exec(ctx, `
-		DELETE FROM agents_primary.secret_shares
-		WHERE request_id IN (
+		WITH batch AS MATERIALIZED (
 			SELECT request_id FROM agents_primary.secret_shares
 			WHERE expires_at <= $1
 			ORDER BY expires_at
 			LIMIT $2
-			FOR UPDATE SKIP LOCKED)`, store.now().UTC(), limit)
+			FOR UPDATE SKIP LOCKED)
+		DELETE FROM agents_primary.secret_shares AS share
+		USING batch WHERE share.request_id = batch.request_id`, store.now().UTC(), limit)
 	if err != nil {
 		return 0, fmt.Errorf("sweep expired secrets: %w", err)
 	}
