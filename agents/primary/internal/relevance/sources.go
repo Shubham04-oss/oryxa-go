@@ -159,6 +159,17 @@ var privateSources = map[string]string{
 	// Krude wrote, but it reads back steps earlier runs in the thread wrote,
 	// which can carry what those runs read.
 	"plan": "the thread's todo list, written by earlier runs that may have read private material",
+
+	// Single-agent Krude's own sub-agents (internal/subagents). A sub-agent
+	// reads knowledge, the member's apps, the web and the sandbox as the
+	// member, and each read it makes in a run is recorded on that run; but
+	// what one returns can carry what it read in an earlier run, or in the
+	// files it was handed.
+	"spawn_agent":   "a sub-agent's result, from the member's knowledge, apps, the web or files it was handed",
+	"message_agent": "a sub-agent's result, which can carry what it read in earlier runs",
+	"agent_status":  "the thread's sub-agents' results, which can carry what they read in earlier runs",
+	"stop_agent":    "a sub-agent's record, which can carry its question or result",
+	"ask_parent":    "a sub-agent's question, which can carry what it read",
 }
 
 // privateFamilies are tool families whose every tool reads private material:

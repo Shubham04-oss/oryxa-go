@@ -410,6 +410,14 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 	if run.member.AccessToken != "" {
 		runContext = memberauth.WithAccessToken(runContext, run.member.AccessToken)
 	}
+	// The sub-agents the run sets working stop when it ends: endSubagents
+	// runs as soon as the agent is done, before the run is priced, so that
+	// what they spent is on its usage.
+	endSubagents := func() {}
+	if service.subagents != nil {
+		runContext, endSubagents = service.subagents.Begin(runContext, run.id)
+	}
+	defer endSubagents()
 
 	if err := service.drain.begin(run, cancel); err != nil {
 		// Started just as the process began to stop: it ends at once, as
@@ -442,6 +450,7 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 	send(started)
 
 	failure := endedBy(runContext, run.drive(runContext, send))
+	endSubagents()
 	total := counter.Total()
 	ended := Item{Type: ItemRunCompleted, ID: bracketID(run.id, ItemRunCompleted), RunID: run.id, At: bracketAt(), Usage: &total}
 	if failure != nil {

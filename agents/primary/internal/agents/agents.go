@@ -206,12 +206,16 @@ func Root(router *modelrouter.Router, toolboxes []Toolbox, remembers bool) (agen
 //
 //   - web_search, a search-only agent wrapped as a tool, on the research
 //     role's model (webSearchTool says why it is an agent at all);
-//   - plan, its own todo list for the thread, kept in session state.
+//   - plan, its own todo list for the thread, kept in session state;
+//   - extra, when given: the tools it manages sub-agents of its own with
+//     (internal/subagents' spawn_agent, message_agent, agent_status and
+//     stop_agent). Those sub-agents are not ADK sub-agents of Krude's: each
+//     runs in a session of its own, and Krude reads only their records.
 //
 // Everything else is Root's: the toolbox catalog, the member's details, the
 // screen, artifacts, memory when remembers is true, and the run's source
 // record. Root itself is unchanged, and is what runs while the flag is off.
-func SingleAgentRoot(router *modelrouter.Router, toolboxes []Toolbox, remembers bool) (agent.Agent, error) {
+func SingleAgentRoot(router *modelrouter.Router, toolboxes []Toolbox, remembers bool, extra ...tool.Tool) (agent.Agent, error) {
 	if router == nil {
 		return nil, errors.New("a model router is required")
 	}
@@ -229,11 +233,12 @@ func SingleAgentRoot(router *modelrouter.Router, toolboxes []Toolbox, remembers 
 	if err != nil {
 		return nil, err
 	}
+	tools = append(tools, extra...)
 	return llmagent.New(llmagent.Config{
 		Name:                RootName,
 		Description:         "Krude, a member's assistant.",
 		Model:               router.Answer(modelrouter.RoleChat),
-		InstructionProvider: instructionFrom(singleInstruction, catalog, false),
+		InstructionProvider: instructionWith(singleInstruction, catalog, false, len(extra) > 0),
 		BeforeToolCallbacks: []llmagent.BeforeToolCallback{recordRunSource},
 		// Marks every plan call after the first in one response, for the
 		// plan tool to refuse (planTool says why).
@@ -385,6 +390,13 @@ func buildTools(builders ...func() (tool.Tool, error)) ([]tool.Tool, error) {
 // is loaded brings its usage instructions with it. delivering is whether the
 // run delivers one interaction (DeliveringRoot).
 func instructionFrom(instruction *template.Template, catalog *toolCatalog, delivering bool) func(agent.ReadonlyContext) (string, error) {
+	return instructionWith(instruction, catalog, delivering, false)
+}
+
+// instructionWith is instructionFrom for an instruction that also says how
+// to work with sub-agents, when spawns is true: single-agent Krude's, given
+// the tools that manage them.
+func instructionWith(instruction *template.Template, catalog *toolCatalog, delivering, spawns bool) func(agent.ReadonlyContext) (string, error) {
 	return func(ctx agent.ReadonlyContext) (string, error) {
 		state := ctx.ReadonlyState()
 		var rendered strings.Builder
@@ -394,6 +406,9 @@ func instructionFrom(instruction *template.Template, catalog *toolCatalog, deliv
 			// toolbox it may use is loaded already, and it has no
 			// get_user_details.
 			Delivering bool
+			// Subagents is single-agent Krude given spawn_agent and the
+			// tools beside it.
+			Subagents bool
 		}{
 			UserName:   stateText(state, UserNameKey, "the member you are talking with"),
 			UserAbout:  stateText(state, UserAboutKey, ""),
@@ -401,6 +416,7 @@ func instructionFrom(instruction *template.Template, catalog *toolCatalog, deliv
 			Member:     memberDetails(state),
 			AgentName:  stateText(state, AgentNameKey, "Krude"),
 			Delivering: delivering,
+			Subagents:  spawns,
 		})
 		if err != nil {
 			return "", err

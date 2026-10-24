@@ -122,6 +122,10 @@ type Config struct {
 	Logger     *slog.Logger
 	// Drain is the process's, shared with every engine (threads.Config.Drain).
 	Drain *threads.Drain
+	// Subagents is the process's, shared with every engine
+	// (threads.Config.Subagents); nil unless single-agent Krude starts
+	// sub-agents, which only the primary's agent does.
+	Subagents threads.Subagents
 	// RunTimeout bounds one run of any of these agents, as it bounds the
 	// primary's (threads.Config.RunTimeout). The leases of the work that
 	// starts specialist runs (deliveries, wake-ups, workflows) are sized
@@ -157,6 +161,7 @@ type Service struct {
 	prices     *pricing.Table
 	logger     *slog.Logger
 	drain      *threads.Drain
+	subagents  threads.Subagents
 	runTimeout time.Duration
 }
 
@@ -181,6 +186,7 @@ func New(config Config) (*Service, error) {
 		repository: config.Repository, factory: config.Factory, unattended: config.Unattended, sessions: config.Sessions,
 		artifacts: config.Artifacts, memory: config.Memory, runs: config.Runs,
 		prices: config.Prices, logger: logger, drain: config.Drain, runTimeout: config.RunTimeout,
+		subagents: config.Subagents,
 	}, nil
 }
 
@@ -460,7 +466,7 @@ func (service *Service) engineIn(definition Definition, profile UnattendedProfil
 		AppName: application, Agent: built, Unattended: unattended, UnattendedTools: runprofile.Toolset(profile),
 		Sessions: service.sessions, Artifacts: service.artifacts, Memory: service.memory, Runs: service.runs,
 		Prices: service.prices, Logger: service.logger, Drain: service.drain, RunTimeout: service.runTimeout,
-		InitialState: state,
+		InitialState: state, Subagents: service.subagents,
 	})
 	if err != nil {
 		return nil, err

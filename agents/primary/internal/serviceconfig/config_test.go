@@ -83,6 +83,33 @@ func TestConsentPassagesOnlyIsAnExplicitBooleanOptIn(t *testing.T) {
 	}
 }
 
+func TestSubagentLimits(t *testing.T) {
+	config, err := FromEnv(env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.SubagentTTL != 24*time.Hour || config.SubagentsPerRun != 4 || config.SubagentsPerProcess != 32 {
+		t.Fatalf("sub-agent defaults = %v, %d, %d; want a day, 4 and 32", config.SubagentTTL, config.SubagentsPerRun, config.SubagentsPerProcess)
+	}
+	config, err = FromEnv(env(map[string]string{
+		"AGENTS_PRIMARY_SUBAGENT_TTL_SECONDS":  "7200",
+		"AGENTS_PRIMARY_SUBAGENTS_PER_RUN":     "2",
+		"AGENTS_PRIMARY_SUBAGENTS_PER_PROCESS": "10",
+	}))
+	if err != nil || config.SubagentTTL != 2*time.Hour || config.SubagentsPerRun != 2 || config.SubagentsPerProcess != 10 {
+		t.Fatalf("sub-agent settings = %v, %d, %d, err = %v", config.SubagentTTL, config.SubagentsPerRun, config.SubagentsPerProcess, err)
+	}
+	for key, value := range map[string]string{
+		"AGENTS_PRIMARY_SUBAGENT_TTL_SECONDS":  "60",
+		"AGENTS_PRIMARY_SUBAGENTS_PER_RUN":     "9",
+		"AGENTS_PRIMARY_SUBAGENTS_PER_PROCESS": "0",
+	} {
+		if _, err := FromEnv(env(map[string]string{key: value})); err == nil || !strings.Contains(err.Error(), key) {
+			t.Errorf("%s=%s: err = %v, want it refused", key, value, err)
+		}
+	}
+}
+
 func TestSingleAgentIsAnExplicitBooleanOptIn(t *testing.T) {
 	const key = "AGENTS_PRIMARY_SINGLE_AGENT"
 	for value, want := range map[string]bool{"": false, "false": false, "0": false, "true": true, " TRUE ": true, "1": true} {

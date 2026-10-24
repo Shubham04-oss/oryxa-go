@@ -188,6 +188,26 @@ type Config struct {
 	// stopping the process lets every run in it finish, or interrupts it. Nil
 	// tracks nothing, and a stopping process cuts its runs short.
 	Drain *Drain
+	// Subagents runs the sub-agents single-agent Krude starts
+	// (internal/subagents): each run opens its scope on it, which stops the
+	// ones it set working when it ends, and a thread deleted or forgotten
+	// takes its sub-agents with it. Nil, as it is unless
+	// AGENTS_PRIMARY_SINGLE_AGENT is on, changes nothing.
+	Subagents Subagents
+}
+
+// Subagents is what a run and a thread need of the sub-agents Krude starts.
+// subagents.Manager implements it.
+type Subagents interface {
+	// Begin opens a run's scope on ctx; end stops every sub-agent the run
+	// set working that is still at it, and returns once they have recorded
+	// that they stopped (or a bounded wait ran out).
+	Begin(ctx context.Context, runID string) (scoped context.Context, end func())
+	// ForgetThread removes a thread's sub-agents and their transcripts.
+	ForgetThread(ctx context.Context, organizationID, userID, app, threadID string) error
+	// Forget removes a member's sub-agents in an organization, or every
+	// member's when userID is empty.
+	Forget(ctx context.Context, organizationID, userID string) error
 }
 
 // Service is the run API.
@@ -207,6 +227,7 @@ type Service struct {
 	lease           time.Duration
 	initialState    map[string]any
 	drain           *Drain
+	subagents       Subagents
 }
 
 // New returns the service.
@@ -248,6 +269,7 @@ func New(config Config) (*Service, error) {
 		lease:           cmp.Or(config.Lease, defaultLease),
 		initialState:    cloneState(config.InitialState),
 		drain:           config.Drain,
+		subagents:       config.Subagents,
 	}, nil
 }
 
@@ -497,6 +519,11 @@ func (service *Service) Delete(ctx context.Context, member Member, threadID stri
 		return fmt.Errorf("delete thread: %w", err)
 	}
 	service.deleteArtifacts(ctx, member, threadID)
+	if service.subagents != nil {
+		if err := service.subagents.ForgetThread(ctx, member.OrganizationID, member.UserID, service.appName, threadID); err != nil {
+			service.logger.WarnContext(ctx, "remove a deleted thread's sub-agents", "thread_id", threadID, "error", err)
+		}
+	}
 	return nil
 }
 
@@ -518,6 +545,11 @@ func (service *Service) Forget(ctx context.Context, organizationID, userID strin
 	if service.memory != nil {
 		if err := service.memory.Forget(ctx, organizationID, userID); err != nil {
 			failures = append(failures, err)
+		}
+	}
+	if service.subagents != nil {
+		if err := service.subagents.Forget(ctx, organizationID, userID); err != nil {
+			failures = append(failures, fmt.Errorf("forget sub-agents: %w", err))
 		}
 	}
 	listed, err := service.sessions.List(ctx, &session.ListRequest{AppName: service.appName, UserID: userID})

@@ -173,6 +173,17 @@ type Config struct {
 	// Unattended, room and delivering runs, and specialists, are the same
 	// either way.
 	SingleAgent bool
+	// SubagentTTL is how long a sub-agent single-agent Krude started is
+	// kept after its last activity, with its transcript, for Krude to ask it
+	// a follow-up (AGENTS_PRIMARY_SUBAGENT_TTL_SECONDS, a day unless set).
+	// SubagentsPerRun and SubagentsPerProcess bound how many run at once in
+	// one run of Krude's and in the whole process
+	// (AGENTS_PRIMARY_SUBAGENTS_PER_RUN, 4, and
+	// AGENTS_PRIMARY_SUBAGENTS_PER_PROCESS, 32). All three matter only with
+	// SingleAgent on (internal/subagents).
+	SubagentTTL         time.Duration
+	SubagentsPerRun     int
+	SubagentsPerProcess int
 	// ModelPrices overrides the price table used for run costs, as JSON of
 	// per-million USD rates by model.
 	ModelPrices string
@@ -348,6 +359,18 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	subagentTTL, err := secondsValue(getenv, "AGENTS_PRIMARY_SUBAGENT_TTL_SECONDS", 24*time.Hour, time.Hour, 7*24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	subagentsPerRun, err := intValue(getenv, "AGENTS_PRIMARY_SUBAGENTS_PER_RUN", 4, 1, 8)
+	if err != nil {
+		return Config{}, err
+	}
+	subagentsPerProcess, err := intValue(getenv, "AGENTS_PRIMARY_SUBAGENTS_PER_PROCESS", 32, 1, 256)
+	if err != nil {
+		return Config{}, err
+	}
 	slackConsent, slackTicketKey, err := slackConsentSettings(getenv)
 	if err != nil {
 		return Config{}, err
@@ -502,6 +525,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		ConsentGuardrailVersion:    consentGuardrailVersion,
 		ConsentPassagesOnly:        consentKnowledgePassagesOnly,
 		SingleAgent:                singleAgent,
+		SubagentTTL:                subagentTTL,
+		SubagentsPerRun:            subagentsPerRun,
+		SubagentsPerProcess:        subagentsPerProcess,
 		ModelPrices:                modelPrices,
 		AppsURL:                    strings.TrimSpace(getenv("APPS_URL")),
 		RagURL:                     strings.TrimSpace(getenv("RAG_URL")),
