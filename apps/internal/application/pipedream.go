@@ -49,7 +49,7 @@ func (s *Service) ConnectPipedream(ctx context.Context, credentials authclient.C
 	if err != nil {
 		return domain.Connection{}, "", err
 	}
-	state, stateHash, err := newState()
+	state, stateHash, err := connectState(input)
 	if err != nil {
 		return domain.Connection{}, "", err
 	}
@@ -58,7 +58,7 @@ func (s *Service) ConnectPipedream(ctx context.Context, credentials authclient.C
 	// The account is made under the user the tools run it as, by the one rule
 	// both take it from.
 	connection.ComposioUserID = pipedreamUserID(connection)
-	callback := s.publicBaseURL + pipedreamCallbackPath + "?state=" + url.QueryEscape(state)
+	callback := s.callbackBase(input.Host) + pipedreamCallbackPath + "?state=" + url.QueryEscape(state)
 	token, err := s.pipedream.CreateConnectToken(ctx, PipedreamTokenRequest{
 		ExternalUserID: connection.ComposioUserID, App: start.toolkit,
 		// The error redirect says so itself: Pipedream adds nothing to either.
@@ -86,13 +86,15 @@ func (s *Service) ConnectPipedream(ctx context.Context, credentials authclient.C
 }
 
 // CompletePipedreamConnection finishes the Pipedream connection a callback's
-// state names. The redirect proves nothing, since anyone holding the state
-// could make it, so the account is read back: the newest of the member's
+// state names, once the browser proves it is the one that started it
+// (checkBrowser). The redirect proves nothing else, so the account is read
+// back: the newest of the member's
 // accounts of the app made since the connect began that no connection
 // already records. Pipedream may redirect a moment before it lists the
 // account, so it is looked for a few times before the connection is left
 // pending, for the sweep to fail if it never turns up.
-func (s *Service) CompletePipedreamConnection(ctx context.Context, state, reportedStatus string) (Completion, error) {
+func (s *Service) CompletePipedreamConnection(ctx context.Context, callback ConnectCallback) (Completion, error) {
+	state, reportedStatus := callback.State, callback.Status
 	if state == "" {
 		return Completion{}, fmt.Errorf("the callback carries no state: %w", domain.ErrInvalid)
 	}
@@ -102,6 +104,9 @@ func (s *Service) CompletePipedreamConnection(ctx context.Context, state, report
 	}
 	if !connection.Pipedream() || s.pipedream == nil {
 		return Completion{}, domain.ErrNotFound
+	}
+	if err := s.checkBrowser(ctx, connection, callback); err != nil {
+		return Completion{}, err
 	}
 	if reportedStatus == "failed" {
 		if err := s.fail(ctx, connection, "the member did not finish connecting", appsv1.FailedDeniedAtProvider); err != nil {
