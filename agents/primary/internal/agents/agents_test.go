@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"unicode/utf8"
 
@@ -467,6 +468,50 @@ func TestKrudeSpawnsTemporaryHelpersTogether(t *testing.T) {
 	}
 	results := functionResponse(llm.requestsFor(RootName)[1], "spawn_helper")
 	for _, want := range []string{"Draft ready.", "Facts listed.", "helper_drafter_", "helper_fact_checker_"} {
+		if !strings.Contains(results, want) {
+			t.Fatalf("spawn_helper results %s are missing %q", results, want)
+		}
+	}
+}
+
+// ADK v2.6 shares one run between RunNode calls with the same WithRunID and
+// replays a finished one. spawn_helper passes no run ID and names every
+// helper apart, so two identical helpers in one turn each run, and spawning
+// the same helper in a later turn of the same thread runs it again.
+func TestIdenticalHelpersEachRun(t *testing.T) {
+	var helperRuns, calls atomic.Int64
+	llm := newTreeModel(func(agentName string, request *model.LLMRequest) *genai.Content {
+		switch {
+		case agentName == "helper":
+			return genai.NewContentFromText(fmt.Sprintf("Run %d.", helperRuns.Add(1)), genai.RoleModel)
+		case hasFunctionResponse(request) && request.Contents[len(request.Contents)-1].Parts[0].FunctionResponse != nil:
+			return genai.NewContentFromText("Done.", genai.RoleModel)
+		default:
+			same := map[string]any{"name": "drafter", "instruction": "You draft.", "task": "Draft it."}
+			return functionCalls(
+				&genai.FunctionCall{ID: fmt.Sprintf("call_%d", calls.Add(1)), Name: "spawn_helper", Args: same},
+				&genai.FunctionCall{ID: fmt.Sprintf("call_%d", calls.Add(1)), Name: "spawn_helper", Args: same},
+			)
+		}
+	})
+	h := newHarness(t, llm)
+	ctx := context.Background()
+	created, err := h.sessions.Create(ctx, &session.CreateRequest{AppName: RootName, UserID: "member_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for turn := 1; turn <= 2; turn++ {
+		for _, err := range h.turns.Run(ctx, "member_1", created.Session.ID(), genai.NewContentFromText("Draft it twice.", genai.RoleUser), agent.RunConfig{}) {
+			if err != nil {
+				t.Fatalf("turn %d: %v", turn, err)
+			}
+		}
+		if got := helperRuns.Load(); got != int64(2*turn) {
+			t.Fatalf("after turn %d the helpers ran %d times, want %d", turn, got, 2*turn)
+		}
+	}
+	results := functionResponse(llm.requestsFor(RootName)[len(llm.requestsFor(RootName))-1], "spawn_helper")
+	for _, want := range []string{"helper_drafter_1", "helper_drafter_2", "helper_drafter_3", "helper_drafter_4"} {
 		if !strings.Contains(results, want) {
 			t.Fatalf("spawn_helper results %s are missing %q", results, want)
 		}
