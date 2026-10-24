@@ -31,7 +31,12 @@ func newLimiter(budget int, window time.Duration, now func() time.Time) *limiter
 }
 
 // allow spends one token for key, and says whether it was there to spend.
-func (limiter *limiter) allow(key string) bool {
+func (limiter *limiter) allow(key string) bool { return limiter.take(key, true) }
+
+// has says whether key has a token to spend, without spending it.
+func (limiter *limiter) has(key string) bool { return limiter.take(key, false) }
+
+func (limiter *limiter) take(key string, spend bool) bool {
 	now := limiter.now()
 	limiter.mu.Lock()
 	defer limiter.mu.Unlock()
@@ -48,7 +53,10 @@ func (limiter *limiter) allow(key string) bool {
 		limiter.buckets[key], limiter.last[key] = tokens, now
 		return false
 	}
-	limiter.buckets[key], limiter.last[key] = tokens-1, now
+	if spend {
+		tokens--
+	}
+	limiter.buckets[key], limiter.last[key] = tokens, now
 	return true
 }
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -49,6 +50,16 @@ func (h ingress) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		defer cancel()
 	}
 
+	// 0. A client that keeps sending what fails verification is turned away
+	// before anything is looked up or checked for it.
+	ip := clientIP(request)
+	if !s.refusals.has(ip) {
+		s.logger.WarnContext(ctx, "webhook client over its refusals")
+		writer.Header().Set("Retry-After", "1")
+		writeError(writer, http.StatusTooManyRequests, "rate_limited", "too many requests; retry")
+		return
+	}
+
 	// 1. The endpoint, by the id in the path, or a surface's by its toolkit.
 	// An unknown one is refused before its body is read.
 	endpoint, ok := h.lookup(ctx, writer, request, now)
@@ -77,12 +88,14 @@ func (h ingress) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 
 	// 4. The signature or token.
 	if err := s.verify(ctx, endpoint, d, now); err != nil {
+		s.refusedFrom(ip, err)
 		refused(ctx, writer, log, err)
 		return
 	}
 
 	// 5. The timestamp, against the scheme's tolerance.
 	if err := checkTolerance(endpoint.Scheme.Verify, d, now); err != nil {
+		s.refusedFrom(ip, err)
 		refused(ctx, writer, log, err)
 		return
 	}
@@ -570,6 +583,28 @@ func refused(ctx context.Context, writer http.ResponseWriter, log *slog.Logger, 
 		return
 	}
 	failed(ctx, writer, log, err)
+}
+
+// refusedFrom spends one of ip's refusals for a delivery that failed
+// verification, not for one that could not be checked.
+func (s *Service) refusedFrom(ip string, err error) {
+	if errors.Is(err, ErrUnverified) {
+		s.refusals.allow(ip)
+	}
+}
+
+// clientIP is the address a request came from. Production is reached only
+// through Cloudflare's tunnel, which sets CF-Connecting-IP and does not let a
+// client set it; anywhere else it is the peer's own.
+func clientIP(request *http.Request) string {
+	if ip := net.ParseIP(strings.TrimSpace(request.Header.Get("CF-Connecting-IP"))); ip != nil {
+		return ip.String()
+	}
+	host, _, err := net.SplitHostPort(request.RemoteAddr)
+	if err != nil {
+		return request.RemoteAddr
+	}
+	return host
 }
 
 // failed answers a delivery Oryxa could not handle, so the app delivers it

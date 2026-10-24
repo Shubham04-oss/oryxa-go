@@ -121,26 +121,39 @@ func TestEachEndpointIsRateLimitedOnItsOwn(t *testing.T) {
 
 // Unsigned junk is refused before it spends the endpoint's rate, so a flood
 // of it at Slack's public URL, which every org shares, cannot starve Slack's
-// own deliveries (#475).
+// own deliveries (#475). The flooding address is turned away on its own.
 func TestAnUnsignedFloodDoesNotRateLimitSignedSlackDeliveries(t *testing.T) {
 	h, surface := surfaceHarness(t)
 	junk := mentionBody("EvJunk")
-	forged := slackDelivery("not-the-signing-secret-0123456789", h.clock.Now(), junk)
 	for i := range 10 * RatePerSecond {
-		header := forged
+		header := http.Header{}
 		if i%2 == 0 {
-			header = nil
+			header = slackDelivery("not-the-signing-secret-0123456789", h.clock.Now(), junk)
 		}
-		if response := h.post(eventsPath, header, junk); response.Code != http.StatusUnauthorized {
-			t.Fatalf("junk %d = %d, want 401", i+1, response.Code)
+		header.Set("CF-Connecting-IP", "203.0.113.7")
+		want := http.StatusUnauthorized
+		if i >= RefusalsPerSecond {
+			want = http.StatusTooManyRequests
+		}
+		if response := h.post(eventsPath, header, junk); response.Code != want {
+			t.Fatalf("junk %d = %d, want %d", i+1, response.Code, want)
 		}
 	}
-	body := mentionBody("EvReal")
-	if response := h.post(eventsPath, slackDelivery(surfaceSecret, h.clock.Now(), body), body); response.Code != http.StatusOK {
-		t.Fatalf("a signed delivery after the flood = %d %s, want 200", response.Code, response.Body)
+	for i := range RatePerSecond {
+		body := mentionBody(fmt.Sprintf("EvReal%d", i))
+		header := slackDelivery(surfaceSecret, h.clock.Now(), body)
+		header.Set("CF-Connecting-IP", "198.51.100.1")
+		if response := h.post(eventsPath, header, body); response.Code != http.StatusOK {
+			t.Fatalf("signed delivery %d during the flood = %d %s, want 200", i+1, response.Code, response.Body)
+		}
 	}
-	if len(surface.deliveries()) != 1 {
-		t.Fatalf("the surface was handed %d deliveries, want 1", len(surface.deliveries()))
+	if len(surface.deliveries()) != RatePerSecond {
+		t.Fatalf("the surface was handed %d deliveries, want %d", len(surface.deliveries()), RatePerSecond)
+	}
+	// A second later the flooding address may try again.
+	h.clock.Advance(time.Second)
+	if response := h.post(eventsPath, http.Header{"Cf-Connecting-Ip": {"203.0.113.7"}}, junk); response.Code != http.StatusUnauthorized {
+		t.Fatalf("junk a second later = %d, want 401", response.Code)
 	}
 }
 
