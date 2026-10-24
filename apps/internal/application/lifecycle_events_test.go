@@ -93,7 +93,7 @@ func TestAConnectionThatNeverCompletesAnnouncesWhy(t *testing.T) {
 			testCase.arrange(h)
 			state := h.startedConnection(t)
 
-			_, err := h.service.CompleteConnection(context.Background(), state, "success", "ca_new")
+			_, err := h.service.CompleteConnection(context.Background(), ConnectCallback{State: state, CookieState: state, Status: "success", AccountID: "ca_new"})
 			if testCase.forbidden && !errors.Is(err, domain.ErrForbidden) {
 				t.Fatalf("CompleteConnection() = %v, want forbidden", err)
 			}

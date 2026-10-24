@@ -2,6 +2,8 @@ package httpserver
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,7 +43,9 @@ type fakeService struct {
 	// pipedreamInput is what ConnectPipedream was asked, and pipedreamCallback
 	// the state and status CompletePipedreamConnection was.
 	pipedreamInput    application.ConnectInput
-	pipedreamCallback [2]string
+	pipedreamCallback application.ConnectCallback
+	// callback is what CompleteConnection was given.
+	callback application.ConnectCallback
 
 	connection domain.Connection
 	targets    []application.Target
@@ -114,16 +118,16 @@ func (fake *fakeService) ConnectPipedream(_ context.Context, credentials authcli
 	return fake.connection, fake.redirect, nil
 }
 
-func (fake *fakeService) CompletePipedreamConnection(_ context.Context, state, status string) (application.Completion, error) {
-	fake.pipedreamCallback = [2]string{state, status}
+func (fake *fakeService) CompletePipedreamConnection(_ context.Context, callback application.ConnectCallback) (application.Completion, error) {
+	fake.pipedreamCallback = callback
 	if fake.err != nil {
 		return application.Completion{}, fake.err
 	}
 	return fake.completion, nil
 }
 
-func (fake *fakeService) CompleteConnection(_ context.Context, state, status, accountID string) (application.Completion, error) {
-	fake.connectInput = application.ConnectInput{Toolkit: state, ReturnTo: status, Alias: accountID}
+func (fake *fakeService) CompleteConnection(_ context.Context, callback application.ConnectCallback) (application.Completion, error) {
+	fake.callback = callback
 	if fake.err != nil {
 		return application.Completion{}, fake.err
 	}
@@ -468,8 +472,8 @@ func TestConnectCallbackSendsTheBrowserBack(t *testing.T) {
 		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body)
 	}
 	// The callback's own query is passed on as a hint, not trusted.
-	if fake.connectInput.Toolkit != "opaque" || fake.connectInput.ReturnTo != "success" || fake.connectInput.Alias != "ca_1" {
-		t.Fatalf("callback arguments = %+v", fake.connectInput)
+	if fake.callback != (application.ConnectCallback{State: "opaque", Status: "success", AccountID: "ca_1"}) {
+		t.Fatalf("callback arguments = %+v", fake.callback)
 	}
 	target, err := url.Parse(recorder.Header().Get("Location"))
 	if err != nil {
@@ -498,8 +502,8 @@ func TestPipedreamCallbackSendsTheBrowserBack(t *testing.T) {
 	if recorder.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body)
 	}
-	if fake.pipedreamCallback != [2]string{"opaque", "failed"} || fake.connectInput.Toolkit != "" {
-		t.Fatalf("callback arguments = %v, Composio's = %+v", fake.pipedreamCallback, fake.connectInput)
+	if fake.pipedreamCallback != (application.ConnectCallback{State: "opaque", Status: "failed"}) || fake.callback.State != "" {
+		t.Fatalf("callback arguments = %+v, Composio's = %+v", fake.pipedreamCallback, fake.callback)
 	}
 	target, err := url.Parse(recorder.Header().Get("Location"))
 	if err != nil {
@@ -515,6 +519,53 @@ func TestPipedreamCallbackSendsTheBrowserBack(t *testing.T) {
 	recorder = call(server, http.MethodGet, "/v1/apps/connect/pipedream/callback?state=stale", "")
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("stale = %d: %s", recorder.Code, recorder.Body)
+	}
+}
+
+// A connect keeps its nonce in the starting browser, HttpOnly and on its
+// callback's path alone, and the callback hands that cookie and the
+// browser's session to the service, which decides (#476).
+func TestConnectBindsTheCallbackToTheBrowser(t *testing.T) {
+	t.Parallel()
+	fake := &fakeService{redirect: "https://connect.composio.dev/link/lt_1"}
+	server := newServer(t, fake)
+
+	recorder := call(server, http.MethodPost, "/v1/organizations/org_1/apps/connections", `{"toolkit":"github"}`,
+		"Authorization", "Bearer member")
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body)
+	}
+	nonce := fake.connectInput.BrowserNonce
+	cookies := recorder.Result().Cookies()
+	if len(nonce) < 40 || len(cookies) != 1 || cookies[0].Value != nonce || cookies[0].Path != "/v1/apps/connect/" ||
+		!cookies[0].HttpOnly || !cookies[0].Secure || cookies[0].SameSite != http.SameSiteLaxMode || cookies[0].MaxAge <= 0 ||
+		!strings.HasPrefix(cookies[0].Name, "oryxa_apps_connect_") || fake.connectInput.Host != "example.com" {
+		t.Fatalf("nonce %q, input %+v, cookies %+v", nonce, fake.connectInput, cookies)
+	}
+
+	recorder = call(server, http.MethodGet, "/v1/apps/connect/callback?state="+url.QueryEscape(nonce), "",
+		"Cookie", cookies[0].Name+"="+nonce+"; oryxa_access=session-1")
+	if fake.callback != (application.ConnectCallback{State: nonce, CookieState: nonce, AccessCookie: "session-1"}) {
+		t.Fatalf("callback = %+v", fake.callback)
+	}
+	// Another browser brings neither.
+	call(server, http.MethodGet, "/v1/apps/connect/pipedream/callback?state="+url.QueryEscape(nonce), "")
+	if fake.pipedreamCallback != (application.ConnectCallback{State: nonce}) {
+		t.Fatalf("pipedream callback = %+v", fake.pipedreamCallback)
+	}
+
+	// A native connect's cookie is for the integrations callback, named as
+	// it looks it up: by the nonce's hash.
+	fake.broker = domain.BrokerNative
+	recorder = call(server, http.MethodPost, "/v1/organizations/org_1/apps/connections", `{"toolkit":"github"}`,
+		"Authorization", "Bearer member")
+	nonce = fake.connectInput.BrowserNonce
+	sum := sha256.Sum256([]byte(nonce))
+	cookies = recorder.Result().Cookies()
+	if recorder.Code != http.StatusCreated || len(cookies) != 1 || cookies[0].Value != nonce ||
+		cookies[0].Name != "oryxa_integrations_signin_"+hex.EncodeToString(sum[:])[:16] ||
+		cookies[0].Path != "/v1/integrations/oauth/callback" || !cookies[0].HttpOnly || !cookies[0].Secure {
+		t.Fatalf("native = %d, cookies %+v", recorder.Code, cookies)
 	}
 }
 
