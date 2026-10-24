@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/mail"
 	"net/url"
 	"regexp"
@@ -31,6 +32,8 @@ type Service struct {
 	emailVerificationBase string
 	passwordResetBase     string
 	now                   func() time.Time
+	relationships         Relationships
+	logger                *slog.Logger
 }
 
 type Config struct {
@@ -81,6 +84,26 @@ func NewWithConfig(store Store, config Config) *Service {
 		emailVerificationBase: strings.TrimRight(config.EmailVerificationURL, "/"),
 		passwordResetBase:     strings.TrimRight(config.PasswordResetURL, "/"),
 		now:                   time.Now,
+	}
+}
+
+// WithRelationships writes org roles to SpiceDB as each change commits.
+func (service *Service) WithRelationships(relationships Relationships, logger *slog.Logger) *Service {
+	service.relationships, service.logger = relationships, logger
+	return service
+}
+
+// wrote writes a committed change's relationships. It runs after the commit,
+// not before: the store's transaction can still refuse (the last owner, a
+// member limit), and a revoke written first would then leave a member
+// without access they kept. A failed write is logged and the change stands;
+// the projector follows from its event.
+func (service *Service) wrote(ctx context.Context, what string, write func(Relationships) error) {
+	if service.relationships == nil {
+		return
+	}
+	if err := write(service.relationships); err != nil {
+		service.logger.WarnContext(ctx, what+" not written to spicedb; the projector will", "error", err)
 	}
 }
 
@@ -358,6 +381,9 @@ func (service *Service) CreateOrganization(ctx context.Context, actorID string, 
 	if err := service.store.CreateOrganization(ctx, organization, owner, []domain.Event{created, joined}); err != nil {
 		return domain.Organization{}, err
 	}
+	service.wrote(ctx, "organization owner", func(r Relationships) error {
+		return r.MemberJoined(ctx, organization.ID, actorID, domain.RoleOwner)
+	})
 	return organization, nil
 }
 
@@ -458,7 +484,13 @@ func (service *Service) DeleteOrganization(ctx context.Context, actorID, organiz
 			RemovedAt:        now,
 		}, now)
 	}
-	return service.store.DeleteOrganization(ctx, organizationID, deleted, removed)
+	if err := service.store.DeleteOrganization(ctx, organizationID, deleted, removed); err != nil {
+		return err
+	}
+	service.wrote(ctx, "organization deletion", func(r Relationships) error {
+		return r.OrganizationDeleted(ctx, organizationID)
+	})
+	return nil
 }
 
 func (service *Service) Organizations(ctx context.Context, actorID string) ([]domain.Organization, error) {
@@ -682,6 +714,9 @@ func (service *Service) join(ctx context.Context, user domain.User, invitationID
 	if err := service.store.AcceptInvitation(ctx, invitationID, user, membership, event); err != nil {
 		return domain.Membership{}, err
 	}
+	service.wrote(ctx, "member joined", func(r Relationships) error {
+		return r.MemberJoined(ctx, organizationID, user.ID, role)
+	})
 	return membership, nil
 }
 
@@ -724,6 +759,9 @@ func (service *Service) ChangeMemberRole(ctx context.Context, actorID, organizat
 	if err := service.store.ChangeMemberRole(ctx, organizationID, userID, target.Role, replacement, event); err != nil {
 		return domain.Membership{}, err
 	}
+	service.wrote(ctx, "member role change", func(r Relationships) error {
+		return r.MemberRoleChanged(ctx, organizationID, userID, replacement)
+	})
 	target.Role = replacement
 	return target, nil
 }
@@ -765,7 +803,13 @@ func (service *Service) RemoveMember(ctx context.Context, actorID, organizationI
 	if err != nil {
 		return err
 	}
-	return service.store.RemoveMember(ctx, organizationID, userID, target.Role, event)
+	if err := service.store.RemoveMember(ctx, organizationID, userID, target.Role, event); err != nil {
+		return err
+	}
+	service.wrote(ctx, "member removal", func(r Relationships) error {
+		return r.MemberRemoved(ctx, organizationID, userID)
+	})
+	return nil
 }
 
 // ApplyBillingEntitlements records the member limit billing set for an
