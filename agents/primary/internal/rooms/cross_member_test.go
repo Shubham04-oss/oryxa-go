@@ -90,7 +90,7 @@ func TestEveryTurnInARoomAnswersFromTheRoom(t *testing.T) {
 		room := Situation{RoomID: "tsp_room", OrganizationID: "org_1", Name: "Launch Council", Seats: []Seat{
 			{Handle: "ada", Kind: SeatPerson, UserID: "user-ada", Present: present}, mira,
 		}}
-		said, err := speaker.Speak(context.Background(), mira, room, []Message{{AuthorHandle: "bo", Body: "@mira what did we agree?"}})
+		said, err := speaker.Speak(context.Background(), mira, room, []Message{{AuthorHandle: "bo", Body: "@mira what did we agree?"}}, Summons{Named: true})
 		if err != nil || said != "Northwind was agreed at 4.50." {
 			t.Fatalf("owner present %t: said %q, %v", present, said, err)
 		}

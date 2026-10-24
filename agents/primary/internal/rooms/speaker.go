@@ -57,7 +57,7 @@ func NewAgentSpeaker(agents AgentRuns, threads Threads, timeout time.Duration) (
 }
 
 // Speak implements [Speaker].
-func (speaker *AgentSpeaker) Speak(ctx context.Context, seat Seat, room Situation, transcript []Message) (string, error) {
+func (speaker *AgentSpeaker) Speak(ctx context.Context, seat Seat, room Situation, transcript []Message, summons Summons) (string, error) {
 	if seat.Kind != SeatAgent || seat.AgentID == "" {
 		return "", fmt.Errorf("rooms: %q is not an agent seat", seat.Handle)
 	}
@@ -77,7 +77,7 @@ func (speaker *AgentSpeaker) Speak(ctx context.Context, seat Seat, room Situatio
 	started, err := speaker.agents.StartUnattendedRun(ctx,
 		threads.Member{UserID: seat.UserID, OrganizationID: room.OrganizationID},
 		seat.AgentID, threadID,
-		threads.RunInput{Message: Prompt(seat, room, transcript), StartedBy: origin},
+		threads.RunInput{Message: Prompt(seat, room, transcript, summons), StartedBy: origin},
 		profile)
 	if errors.Is(err, threads.ErrNotFound) && threadID != "" {
 		// The thread was deleted underneath the room; take a new one.
@@ -87,7 +87,7 @@ func (speaker *AgentSpeaker) Speak(ctx context.Context, seat Seat, room Situatio
 		started, err = speaker.agents.StartUnattendedRun(ctx,
 			threads.Member{UserID: seat.UserID, OrganizationID: room.OrganizationID},
 			seat.AgentID, "",
-			threads.RunInput{Message: Prompt(seat, room, transcript), StartedBy: origin},
+			threads.RunInput{Message: Prompt(seat, room, transcript, summons), StartedBy: origin},
 			profile)
 	}
 	if err != nil {
@@ -142,30 +142,15 @@ func spoken(reply string) string {
 	return summary
 }
 
-// addressedDirectly reports whether the message that woke this seat named it,
-// read by the relay's own mention parser: "@ada" names ada, never ada-2 or
-// adam.
-func addressedDirectly(seat Seat, transcript []Message) bool {
-	if len(transcript) == 0 {
-		return false
-	}
-	last := transcript[len(transcript)-1]
-	for _, handle := range addressedHandles(last.Body, last.AuthorHandle) {
-		if handle == seat.Handle {
-			return true
-		}
-	}
-	return false
-}
-
 // Prompt is what a seat is shown when its turn comes: who it is in this room,
 // what the room amounts to, and the last of what was said — rendered from
 // that seat's own side, so another agent's words arrive exactly as a person's
 // do and no agent-to-agent protocol is needed to make that work.
 //
 // Everything anybody said is data. The only instructions are this room's own,
-// and they say so.
-func Prompt(seat Seat, room Situation, transcript []Message) string {
+// and they say so. Whether the seat was asked is summons, as the relay
+// resolved who answers, never read back out of what was said.
+func Prompt(seat Seat, room Situation, transcript []Message, summons Summons) string {
 	var prompt strings.Builder
 	fmt.Fprintf(&prompt, "You are @%s in the room %q", seat.Handle, room.Name)
 	if room.Purpose != "" {
@@ -207,7 +192,20 @@ func Prompt(seat Seat, room Situation, transcript []Message) string {
 		}
 		fmt.Fprintf(&prompt, "%s: %s\n", speaker, oneParagraph(message.Body))
 	}
-	if addressedDirectly(seat, transcript) {
+	if away := summons.StandingInFor; away != "" {
+		// Their person was asked and is not here to answer: answering in
+		// their place is what this seat is for, so it says whose place.
+		fmt.Fprintf(&prompt, `
+@%[1]s was asked by name and is away, and you are @%[1]s's own agent, so you
+are answering in their place. Say that you are answering for @%[1]s while they
+are away. Speak in one short paragraph, as a colleague would in a chat,
+addressing people as @handle. If you do not know, say what you do know and that
+@%[1]s will have to confirm it, rather than staying silent. Do not summarise
+what was already said and do not thank anybody.
+`, away)
+		return prompt.String()
+	}
+	if summons.Named {
 		// Being asked by name and saying nothing is not restraint, it is a
 		// broken room. Not knowing is a perfectly good answer.
 		prompt.WriteString(`

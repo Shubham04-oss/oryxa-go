@@ -175,7 +175,7 @@ func (decider *serviceFakeDecider) Decide(_ context.Context, room Situation, _ M
 // the room and a test only sees what the member said.
 type serviceSilentSpeaker struct{}
 
-func (serviceSilentSpeaker) Speak(context.Context, Seat, Situation, []Message) (string, error) {
+func (serviceSilentSpeaker) Speak(context.Context, Seat, Situation, []Message, Summons) (string, error) {
 	return Pass, nil
 }
 
@@ -268,7 +268,9 @@ func TestAMembersMentionIsStoredWithTheirMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
-	if len(said) != 1 || !slices.Equal(said[0].AddressedTo, []string{"bo", "ledger"}) {
+	// Bo is away, so his agent stood in for him and, having nothing to add,
+	// said the question waits for him; that line is not what is checked here.
+	if len(said) == 0 || said[0].AuthorHandle != "ada" || !slices.Equal(said[0].AddressedTo, []string{"bo", "ledger"}) {
 		t.Fatalf("said = %+v, want Ada's message addressing bo and ledger", said)
 	}
 	if stored := store.messages[0]; stored.AuthorHandle != "ada" || !slices.Equal(stored.AddressedTo, []string{"bo", "ledger"}) {

@@ -141,6 +141,7 @@ type relaySpeakCall struct {
 	seat       Seat
 	room       Situation
 	transcript []Message
+	summons    Summons
 }
 
 // relayFakeSpeaker is a Speaker whose answer for each call is computed by
@@ -154,9 +155,9 @@ type relayFakeSpeaker struct {
 
 var _ Speaker = (*relayFakeSpeaker)(nil)
 
-func (s *relayFakeSpeaker) Speak(_ context.Context, seat Seat, room Situation, transcript []Message) (string, error) {
+func (s *relayFakeSpeaker) Speak(_ context.Context, seat Seat, room Situation, transcript []Message, summons Summons) (string, error) {
 	s.mu.Lock()
-	s.calls = append(s.calls, relaySpeakCall{seat: seat, room: room, transcript: transcript})
+	s.calls = append(s.calls, relaySpeakCall{seat: seat, room: room, transcript: transcript, summons: summons})
 	s.mu.Unlock()
 	if s.reply == nil {
 		return Pass, nil
@@ -700,23 +701,113 @@ func TestAddressedHandlesMatchWholeTokens(t *testing.T) {
 	}
 }
 
-// A seat is only told it was named when the message named exactly it.
-func TestPromptOnlySaysNamedForAnExactMention(t *testing.T) {
+// A seat is only told it was named when the message named exactly it, or
+// named the away person it stands in for: the relay works that out and the
+// turn is told, rather than the prompt reading it back out of the text.
+func TestTheRelayTellsEachTurnWhyItWasAsked(t *testing.T) {
+	bob := relayPersonSeat("bob", "user-bob", true)
 	ada := relayAgentSeat("ada", "user-ada", "agent-ada")
-	room := Situation{Name: "room", Seats: []Seat{relayPersonSeat("bob", "user-bob", true), ada}}
+	ada2 := relayAgentSeat("ada-2", "user-ada2", "agent-ada2")
+	adam := relayAgentSeat("adam", "user-adam", "agent-adam")
+	dan := relayPersonSeat("dan", "user-dan", false) // away
+	danAgent := relayAgentSeat("krude", "user-dan", "agent-dan")
+	seats := []Seat{bob, ada, ada2, adam, dan, danAgent}
+
 	for _, test := range []struct {
-		body  string
-		named bool
+		name    string
+		body    string
+		verdict Verdict
+		want    map[string]Summons
 	}{
-		{"@ada can you look", true},
-		{"@Ada can you look", true},
-		{"@ada-2 can you look", false},
-		{"@adam can you look", false},
-		{"mail ops@ada.com", false},
+		{"named itself", "@ada can you look", Verdict{}, map[string]Summons{"ada": {Named: true}}},
+		{"capitalised", "@Ada can you look", Verdict{}, map[string]Summons{"ada": {Named: true}}},
+		{"a longer handle is not ada", "@ada-2 can you look", Verdict{}, map[string]Summons{"ada-2": {Named: true}}},
+		{"a longer name is not ada", "@adam can you look", Verdict{}, map[string]Summons{"adam": {Named: true}}},
+		{"an away person's agent stands in", "@dan is this ready?", Verdict{}, map[string]Summons{"krude": {Named: true, StandingInFor: "dan"}}},
+		{"named both ways, it is told both", "@krude @dan is this ready?", Verdict{}, map[string]Summons{"krude": {Named: true, StandingInFor: "dan"}}},
+		{"routed by the verdict, nobody named it", "does anyone know?", Verdict{Answer: true, Speaker: "ada"}, map[string]Summons{"ada": {}}},
 	} {
-		prompt := Prompt(ada, room, []Message{{AuthorHandle: "bob", Body: test.body}})
-		if got := strings.Contains(prompt, "You were asked by name"); got != test.named {
-			t.Errorf("Prompt for %q says named = %v, want %v", test.body, got, test.named)
-		}
+		t.Run(test.name, func(t *testing.T) {
+			speaker := &relayFakeSpeaker{reply: func(Seat, Situation, []Message) (string, error) { return "Here.", nil }}
+			relay := &Relay{Store: &relayFakeStore{}, Speaker: speaker}
+			if _, err := relay.Post(context.Background(), Situation{Seats: seats}, relayMessage("room-1", bob, test.body), test.verdict); err != nil {
+				t.Fatalf("Post: %v", err)
+			}
+			got := map[string]Summons{}
+			for _, call := range speaker.calls {
+				got[call.seat.Handle] = call.summons
+			}
+			if len(got) != len(test.want) {
+				t.Fatalf("turns taken = %+v, want %+v", got, test.want)
+			}
+			for handle, want := range test.want {
+				if got[handle] != want {
+					t.Errorf("%s was told %+v, want %+v", handle, got[handle], want)
+				}
+			}
+		})
+	}
+}
+
+// The prompt says what the summons says: asked by name, standing in for an
+// away person, or free to pass.
+func TestThePromptFollowsTheSummons(t *testing.T) {
+	krude := relayAgentSeat("krude", "user-dan", "agent-dan")
+	room := Situation{Name: "room", Seats: []Seat{relayPersonSeat("dan", "user-dan", false), krude}}
+	transcript := []Message{{AuthorHandle: "bob", Body: "@dan is this ready?"}}
+
+	standIn := Prompt(krude, room, transcript, Summons{Named: true, StandingInFor: "dan"})
+	if !strings.Contains(standIn, "answering in their place") || !strings.Contains(standIn, "answering for @dan") {
+		t.Errorf("a stand-in's prompt does not say whose place it answers in:\n%s", standIn)
+	}
+	if strings.Contains(standIn, "Nobody named you") || strings.Contains(standIn, Pass) {
+		t.Errorf("a stand-in is told it may pass:\n%s", standIn)
+	}
+
+	named := Prompt(krude, room, []Message{{AuthorHandle: "bob", Body: "@krude is this ready?"}}, Summons{Named: true})
+	if !strings.Contains(named, "You were asked by name") || strings.Contains(named, "Nobody named you") {
+		t.Errorf("a named seat's prompt does not say it was asked:\n%s", named)
+	}
+
+	// What was said does not change what the seat is told: only the summons.
+	routed := Prompt(krude, room, []Message{{AuthorHandle: "bob", Body: "@krude is this ready?"}}, Summons{})
+	if !strings.Contains(routed, "Nobody named you") || !strings.Contains(routed, Pass) {
+		t.Errorf("a routed seat's prompt does not let it pass:\n%s", routed)
+	}
+}
+
+// An away person's agent asked in their place that has nothing to say does
+// not leave the person who asked with silence: the room hears that the
+// question waits for the person they named. A seat named itself that passes
+// is still not recorded.
+func TestAStandInThatPassesSaysTheQuestionWaits(t *testing.T) {
+	bob := relayPersonSeat("bob", "user-bob", true)
+	dan := relayPersonSeat("dan", "user-dan", false) // away
+	krude := relayAgentSeat("krude", "user-dan", "agent-dan")
+	store := &relayFakeStore{}
+	relay := &Relay{Store: store, Speaker: &relayFakeSpeaker{}} // every seat passes
+	room := Situation{Seats: []Seat{bob, dan, krude}}
+
+	results, err := relay.Post(context.Background(), room, relayMessage("room-1", bob, "@dan is this ready?"), Verdict{})
+	if err != nil {
+		t.Fatalf("Post: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("got %+v, want the post and a line saying it waits for dan", results)
+	}
+	line := results[1]
+	if line.AuthorHandle != "krude" || line.Body != passedFor(krude, "dan") || line.InReplyToSeq != results[0].Seq {
+		t.Errorf("line = %+v, want krude saying %q in reply to the post", line, passedFor(krude, "dan"))
+	}
+	if !slices.Equal(line.AddressedTo, []string{"dan"}) {
+		t.Errorf("line addresses %v, want dan, so dan hears they were asked", line.AddressedTo)
+	}
+
+	results, err = relay.Post(context.Background(), room, relayMessage("room-1", bob, "@krude anything to add?"), Verdict{})
+	if err != nil {
+		t.Fatalf("Post: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("got %+v, want only the post: a seat named itself may pass", results)
 	}
 }

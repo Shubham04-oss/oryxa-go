@@ -199,8 +199,24 @@ type Compactor interface {
 //
 // An agent with nothing to add answers [Pass], which is how a relay ends
 // quietly instead of on a turn limit.
+//
+// summons says why the seat is taking this turn, as the relay worked it out:
+// a speaker never re-derives it from the text of what was said.
 type Speaker interface {
-	Speak(ctx context.Context, seat Seat, room Situation, transcript []Message) (string, error)
+	Speak(ctx context.Context, seat Seat, room Situation, transcript []Message, summons Summons) (string, error)
+}
+
+// Summons is why a seat is taking its turn, as the relay resolved who answers
+// the message that woke it.
+type Summons struct {
+	// Named says the message named this seat, or named the away person it
+	// stands in for: it was asked, so it answers. False when the seat was
+	// routed to a message that named nobody, and may pass.
+	Named bool
+	// StandingInFor is the handle of the away person whose name brought this
+	// seat in: their own agent, answering in their place. Empty when the seat
+	// was named itself, or nobody was.
+	StandingInFor string
 }
 
 // Pass is what an agent says when it has nothing worth adding. Agents
