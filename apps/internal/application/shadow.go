@@ -58,6 +58,28 @@ func (s *Service) decide(ctx context.Context, caller domain.OrgMembership, conne
 	}
 }
 
+// decideMany is decide for a list of connections the code allows, with one
+// round trip to SpiceDB for all of them: it answers which the caller gets.
+func (s *Service) decideMany(ctx context.Context, caller domain.OrgMembership, connections []domain.Connection, action string) ([]bool, error) {
+	asks, allowed := make([]access.Ask, len(connections)), make([]bool, len(connections))
+	for i, connection := range connections {
+		asks[i], allowed[i] = ask(caller, connection, action), true
+	}
+	if s.engine == nil {
+		if s.shadow != nil {
+			for _, ask := range asks {
+				s.shadow.Compare(ctx, ask, true)
+			}
+		}
+		return allowed, nil
+	}
+	allowed, err := s.engine.DecideMany(ctx, asks, allowed)
+	if err != nil {
+		return nil, fmt.Errorf("decide access to %d connections: %w", len(asks), err)
+	}
+	return allowed, nil
+}
+
 // ask is a decision on a connection in the terms SpiceDB is asked about it.
 func ask(caller domain.OrgMembership, connection domain.Connection, action string) access.Ask {
 	actor := access.Actor{Role: access.Role(caller.Role), Agent: caller.Agent, AgentRole: caller.AgentRole}

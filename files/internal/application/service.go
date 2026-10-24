@@ -284,14 +284,21 @@ func (s *Service) List(ctx context.Context, credentials authclient.Credentials, 
 	if err != nil {
 		return nil, err
 	}
+	// canSee for every file, with SpiceDB asked once for the page.
+	codes := make([]error, len(objects))
+	for i, object := range objects {
+		codes[i] = s.see(org, teams, object)
+	}
+	if codes, err = s.decideMany(ctx, org, objects, access.ActionRead, codes); err != nil {
+		return nil, err
+	}
 	visible := objects[:0]
-	for _, object := range objects {
-		err := s.canSee(ctx, org, teams, object)
-		if errors.Is(err, domain.ErrNotFound) {
+	for i, object := range objects {
+		if errors.Is(codes[i], domain.ErrNotFound) {
 			continue
 		}
-		if err != nil {
-			return nil, err
+		if codes[i] != nil {
+			return nil, codes[i]
 		}
 		visible = append(visible, object)
 	}
@@ -617,9 +624,6 @@ func (s *Service) mayDelete(org domain.OrgMembership, teams teamLookup, object d
 // org agent) or the code decided nothing (teams unreachable, a team check
 // with no file behind it) the code's answer stands. A SpiceDB failure refuses.
 // Every difference is recorded by Decide.
-//
-// ponytail: a list still comes from SQL filtered by the code, so SpiceDB can
-// only narrow it; LookupResources replaces that once lists flip.
 func (s *Service) decide(ctx context.Context, org domain.OrgMembership, object domain.Object, action string, code error) error {
 	decided := code == nil || errors.Is(code, domain.ErrNotFound) || errors.Is(code, domain.ErrForbidden)
 	if s.engine == nil || object.ID == "" || !decided {
@@ -641,6 +645,40 @@ func (s *Service) decide(ctx context.Context, org domain.OrgMembership, object d
 	default:
 		return domain.ErrNotFound
 	}
+}
+
+// decideMany is decide for a list, with one round trip to SpiceDB for all of
+// it: codes are the code's answers, and each comes back as decide would
+// answer it. The list still comes from SQL filtered by the code: while SpiceDB
+// may only narrow, LookupResources could show nothing more.
+func (s *Service) decideMany(ctx context.Context, org domain.OrgMembership, objects []domain.Object, action string, codes []error) ([]error, error) {
+	if s.engine == nil {
+		for i, object := range objects {
+			codes[i] = s.decide(ctx, org, object, action, codes[i])
+		}
+		return codes, nil
+	}
+	var (
+		asks    []access.Ask
+		allowed []bool
+		rows    []int
+	)
+	for i, object := range objects {
+		decided := codes[i] == nil || errors.Is(codes[i], domain.ErrNotFound) || errors.Is(codes[i], domain.ErrForbidden)
+		if decided && object.ID != "" {
+			asks, allowed, rows = append(asks, s.ask(org, object, action)), append(allowed, codes[i] == nil), append(rows, i)
+		}
+	}
+	allowed, err := s.engine.DecideMany(ctx, asks, allowed)
+	if err != nil {
+		return nil, fmt.Errorf("decide access to %d files: %w", len(asks), err)
+	}
+	for j, i := range rows {
+		if codes[i] == nil && !allowed[j] {
+			codes[i] = domain.ErrNotFound
+		}
+	}
+	return codes, nil
 }
 
 // ask is a decision on object in the terms SpiceDB is asked about it.
