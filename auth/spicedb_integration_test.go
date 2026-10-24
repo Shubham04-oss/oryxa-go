@@ -22,11 +22,11 @@ import (
 // TestOrgRolesReachSpiceDBAsTheyChange writes through projector.OpenWriter to
 // a real SpiceDB and checks each change is decided at once. Point
 // SPICEDB_ENDPOINT at `spicedb serve-testing` (SPICEDB_INSECURE=true) and
-// SPICEDB_TEST_DATABASE_URL at a throwaway PostgreSQL for the ZedTokens.
+// AUTH_TEST_DATABASE_URL at a PostgreSQL; it touches only access.spicedb_tokens.
 func TestOrgRolesReachSpiceDBAsTheyChange(t *testing.T) {
-	databaseURL := os.Getenv("SPICEDB_TEST_DATABASE_URL")
+	databaseURL := os.Getenv("AUTH_TEST_DATABASE_URL")
 	if os.Getenv("SPICEDB_ENDPOINT") == "" || databaseURL == "" {
-		t.Skip("SPICEDB_ENDPOINT and SPICEDB_TEST_DATABASE_URL are not both set")
+		t.Skip("SPICEDB_ENDPOINT and AUTH_TEST_DATABASE_URL are not both set")
 	}
 	ctx := context.Background()
 	random := make([]byte, 8)

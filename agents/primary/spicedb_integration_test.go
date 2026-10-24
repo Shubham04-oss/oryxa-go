@@ -13,6 +13,7 @@ import (
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/interactions"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
@@ -26,8 +27,8 @@ import (
 // TestGrantsReachSpiceDBAsTheyChange writes agents through the store and
 // projector.OpenWriter to a real SpiceDB. Point SPICEDB_ENDPOINT at `spicedb
 // serve-testing` (SPICEDB_INSECURE=true) and AGENTS_PRIMARY_TEST_DATABASE_URL
-// at a throwaway PostgreSQL: it adds empty apps and files tables when they are
-// missing, since an agent's grants are read from them too.
+// at a PostgreSQL. An agent's grants are read from apps' and files' tables too,
+// so it puts empty ones in a schema of its own and drops it after.
 func TestGrantsReachSpiceDBAsTheyChange(t *testing.T) {
 	databaseURL := os.Getenv("AGENTS_PRIMARY_TEST_DATABASE_URL")
 	if os.Getenv("SPICEDB_ENDPOINT") == "" || databaseURL == "" {
@@ -56,7 +57,19 @@ func TestGrantsReachSpiceDBAsTheyChange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	database, err := postgreskit.Open(ctx, postgreskit.Config{URL: databaseURL, ApplicationName: "oryxa-agents-spicedb-test", Schema: "public"})
+	shared, err := postgreskit.Open(ctx, postgreskit.Config{URL: databaseURL, ApplicationName: "oryxa-agents-spicedb-test", Schema: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shared.Close()
+	// The stand-in apps and files tables live in a schema of the test's own,
+	// dropped after, so they never shadow those services' real tables.
+	stand := "spicedb_grants_" + hex.EncodeToString(random)
+	if _, err := shared.Pool.Exec(ctx, `CREATE SCHEMA `+stand); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = shared.Pool.Exec(context.Background(), `DROP SCHEMA `+stand+` CASCADE`) }()
+	database, err := shared.WithSchema(ctx, stand, "oryxa-agents-spicedb-test", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,12 +80,16 @@ func TestGrantsReachSpiceDBAsTheyChange(t *testing.T) {
 	if err := managedagents.NewStore(database).Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// The projector reads an agent's requests with its grants.
+	if err := interactions.NewStore(database).Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if err := tokens.Migrate(ctx, database); err != nil {
 		t.Fatal(err)
 	}
 	for _, table := range []string{
-		`CREATE TABLE IF NOT EXISTS apps_connections (id text, organization_id text, member_id text, toolkit text)`,
-		`CREATE TABLE IF NOT EXISTS files_objects (id text, organization_id text, scope text, team_id text, member_id text, access text, created_by text)`,
+		`CREATE TABLE ` + stand + `.apps_connections (id text, organization_id text, member_id text, toolkit text)`,
+		`CREATE TABLE ` + stand + `.files_objects (id text, organization_id text, scope text, team_id text, member_id text, access text, created_by text)`,
 	} {
 		if _, err := database.Pool.Exec(ctx, table); err != nil {
 			t.Fatal(err)
