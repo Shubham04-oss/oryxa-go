@@ -3,6 +3,8 @@ package shadow
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +17,39 @@ type checker func(context.Context) (bool, error)
 
 func (check checker) Check(ctx context.Context, _ string, _ []spicedb.Check) (bool, error) {
 	return check(ctx)
+}
+
+func (check checker) CheckEach(ctx context.Context, _ string, checks []spicedb.Check) ([]bool, error) {
+	answer, err := check(ctx)
+	if err != nil {
+		return nil, err
+	}
+	answers := make([]bool, len(checks))
+	for i := range answers {
+		answers[i] = answer
+	}
+	return answers, nil
+}
+
+// bulk answers each check by its resource, and counts its calls.
+type bulk struct {
+	allow map[string]bool
+	calls int
+	asked int
+}
+
+func (b *bulk) Check(context.Context, string, []spicedb.Check) (bool, error) {
+	return false, errors.New("a list asks CheckEach")
+}
+
+func (b *bulk) CheckEach(_ context.Context, _ string, checks []spicedb.Check) ([]bool, error) {
+	b.calls++
+	b.asked += len(checks)
+	answers := make([]bool, len(checks))
+	for i, check := range checks {
+		answers[i] = b.allow[check.Resource.ID]
+	}
+	return answers, nil
 }
 
 type recorder chan access.Disagreement
@@ -200,5 +235,64 @@ func TestDecideRefusesWithoutAnAnswer(t *testing.T) {
 	var off *Shadow
 	if _, err := off.Decide(context.Background(), ask, true); !errors.Is(err, access.ErrNoAnswer) {
 		t.Fatalf("nil shadow: %v, want ErrNoAnswer", err)
+	}
+}
+
+func file(id string) access.Ask {
+	file := ask
+	file.ResourceID = id
+	return file
+}
+
+// A list is one round trip: SpiceDB only narrows each answer, an unmapped
+// ask keeps the code's, and every difference is recorded.
+func TestDecideManyIsOneNarrowingCall(t *testing.T) {
+	checker := &bulk{allow: map[string]bool{"file_1": true, "file_3": true}}
+	disagreements := make(recorder, 8)
+	shadow := New(checker, disagreements, nil)
+	t.Cleanup(shadow.Close)
+	shadow.checks = func(_ access.Actor, userID, _, action string, resource spicedb.Object, _ bool) ([]spicedb.Check, bool) {
+		if resource.ID == "file_4" {
+			return nil, false
+		}
+		return []spicedb.Check{{Resource: resource, Permission: action, Subject: spicedb.Object{Type: "member", ID: userID}}}, true
+	}
+	asks := []access.Ask{file("file_1"), file("file_2"), file("file_3"), file("file_4")}
+	allowed, err := shadow.DecideMany(context.Background(), asks, []bool{true, true, false, true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []bool{true, false, false, true}; !slices.Equal(allowed, want) {
+		t.Fatalf("DecideMany = %v, want %v", allowed, want)
+	}
+	if checker.calls != 1 || checker.asked != 3 {
+		t.Fatalf("SpiceDB was called %d times for %d checks, want once for 3", checker.calls, checker.asked)
+	}
+	var got []string
+	for len(disagreements) > 0 {
+		disagreement := <-disagreements
+		got = append(got, fmt.Sprintf("%s code=%v spicedb=%v", disagreement.ResourceID, disagreement.Code, disagreement.SpiceDB))
+	}
+	if want := []string{"file_2 code=true spicedb=false", "file_3 code=false spicedb=true"}; !slices.Equal(got, want) {
+		t.Fatalf("disagreements = %v, want %v", got, want)
+	}
+}
+
+func TestDecideManyFailsClosed(t *testing.T) {
+	shadow, _ := started(t, func(context.Context) (bool, error) { return true, errors.New("unavailable") })
+	if allowed, err := shadow.DecideMany(context.Background(), []access.Ask{ask, ask}, []bool{true, true}); err == nil || allowed != nil {
+		t.Fatalf("DecideMany = %v, %v; want an error and no answers", allowed, err)
+	}
+	other := ask
+	other.OrganizationID = "org_2"
+	if _, err := shadow.DecideMany(context.Background(), []access.Ask{ask, other}, []bool{true, true}); err == nil {
+		t.Fatal("asked about two organizations at once")
+	}
+	if _, err := shadow.DecideMany(context.Background(), []access.Ask{ask}, nil); err == nil {
+		t.Fatal("answered asks without the code's answers")
+	}
+	var off *Shadow
+	if allowed, err := off.DecideMany(context.Background(), []access.Ask{ask, ask}, []bool{true, false}); err != nil || !slices.Equal(allowed, []bool{true, false}) {
+		t.Fatalf("nil shadow = %v, %v; want the code's answers", allowed, err)
 	}
 }

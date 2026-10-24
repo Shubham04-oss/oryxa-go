@@ -92,11 +92,20 @@ func (reads *reads) team(ctx context.Context, organizationID, teamID string) (do
 // it refuses reads as missing and is left out; any other failure, such as
 // teams being unreachable, fails the listing rather than quietly shortening
 // it.
+//
+// SpiceDB is asked about the whole listing in one round trip.
 func (reads *reads) readable(ctx context.Context, corpora []domain.Corpus) ([]domain.Corpus, error) {
+	codes := make([]error, len(corpora))
+	for i, corpus := range corpora {
+		_, codes[i] = reads.decide(ctx, corpus)
+	}
+	codes, err := reads.service.decideMany(ctx, reads.member, corpora, access.ActionRead, codes)
+	if err != nil {
+		return nil, err
+	}
 	kept := corpora[:0]
-	for _, corpus := range corpora {
-		_, err := reads.mayRead(ctx, corpus)
-		switch {
+	for i, corpus := range corpora {
+		switch err := codes[i]; {
 		case err == nil:
 			kept = append(kept, corpus)
 		case errors.Is(err, domain.ErrNotFound):

@@ -16,11 +16,29 @@ type decider struct {
 	answer bool
 	err    error
 	code   []bool
+	// singles and batches count Decide and DecideMany calls.
+	singles, batches int
 }
 
 func (d *decider) Decide(_ context.Context, _ access.Ask, codeAllowed bool) (bool, error) {
+	d.singles++
 	d.code = append(d.code, codeAllowed)
 	return d.answer, d.err
+}
+
+// DecideMany answers as *shadow.Shadow does: answer narrows the code's, no
+// answer leaves the code's, and any other error fails the batch.
+func (d *decider) DecideMany(_ context.Context, asks []access.Ask, codeAllowed []bool) ([]bool, error) {
+	d.batches++
+	d.code = append(d.code, codeAllowed...)
+	if d.err != nil && !errors.Is(d.err, access.ErrNoAnswer) {
+		return nil, d.err
+	}
+	allowed := make([]bool, len(asks))
+	for i := range asks {
+		allowed[i] = codeAllowed[i] && (d.answer || d.err != nil)
+	}
+	return allowed, nil
 }
 
 type written struct {
@@ -104,5 +122,37 @@ func TestRelationshipsFollowTheSource(t *testing.T) {
 	}
 	if _, err := service.Source(ctx, engineCreds, "org_1", source.ID); err != nil {
 		t.Fatalf("the creator can't read their removed source: %v", err)
+	}
+}
+
+// A listing asks the engine once, for every source on it: SpiceDB narrows it
+// and its failure fails it rather than quietly shortening it.
+func TestAListingIsDecidedInOneCall(t *testing.T) {
+	ctx := context.Background()
+	store := engineStore()
+	store.sources["src_2"] = domain.Source{
+		ID: "src_2", OrganizationID: "org_1", Provider: "files", Scope: domain.ScopeOrganization,
+		CreatedBy: "user-1", Status: domain.StatusActive,
+	}
+	list := func(engine *decider) ([]domain.Source, error) {
+		service := registrar(t, store, member())
+		service.engine = engine
+		return service.Sources(ctx, engineCreds, "org_1", domain.SourceQuery{})
+	}
+	allow := &decider{answer: true}
+	if listed, err := list(allow); err != nil || len(listed) != 2 {
+		t.Fatalf("Sources = %d, %v; want 2", len(listed), err)
+	}
+	if allow.batches != 1 || allow.singles != 0 {
+		t.Fatalf("engine asked %d batches and %d singles; want 1 batch", allow.batches, allow.singles)
+	}
+	if listed, err := list(&decider{answer: false}); err != nil || len(listed) != 0 {
+		t.Fatalf("SpiceDB refused every source, but Sources = %d, %v", len(listed), err)
+	}
+	if listed, err := list(&decider{err: access.ErrNoAnswer}); err != nil || len(listed) != 2 {
+		t.Fatalf("with no answer the code's listing should stand: %d, %v", len(listed), err)
+	}
+	if _, err := list(&decider{answer: true, err: errors.New("spicedb unavailable")}); err == nil {
+		t.Fatal("a SpiceDB failure listed sources")
 	}
 }

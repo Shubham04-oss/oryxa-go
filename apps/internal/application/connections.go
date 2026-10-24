@@ -419,14 +419,15 @@ func (s *Service) Connections(ctx context.Context, credentials authclient.Creden
 		return nil, err
 	}
 	// The query already kept the caller to what the code lets them see; the
-	// engine may only narrow that.
+	// engine may only narrow that, asked once for the whole list.
+	allowed, err := s.decideMany(ctx, caller, connections, access.ActionRead)
+	if err != nil {
+		return nil, err
+	}
 	visible := connections[:0]
-	for _, connection := range connections {
-		switch err := s.decide(ctx, caller, connection, access.ActionRead, true); {
-		case err == nil:
+	for i, connection := range connections {
+		if allowed[i] {
 			visible = append(visible, connection)
-		case !errors.Is(err, domain.ErrNotFound):
-			return nil, err
 		}
 	}
 	return visible, nil
