@@ -343,8 +343,9 @@ resource "aws_cloudwatch_metric_alarm" "spicedb_running" {
 locals {
   spicedb_queue = "${local.name}-spicedb-events"
 
-  # projector.Subscriptions(), by source. Keep it in step with the Go: an event
-  # it maps but this leaves out is never projected, only reconciled at night.
+  # projector.Subscriptions(), by source; TestRuleMatchesSubscriptions fails
+  # when they drift. An event it maps but this leaves out is never projected,
+  # only reconciled at night.
   spicedb_subscriptions = {
     "oryxa.agents" = ["agents.agent.created.v1", "agents.agent.deleted.v1", "agents.agent.updated.v1", "agents.interaction.requested.v1"]
     "oryxa.apps"   = ["apps.connection.connected.v1", "apps.connection.initiated.v1", "apps.connection.removed.v1"]
