@@ -390,7 +390,13 @@ func TestJevDecide(t *testing.T) {
 // own role and who they speak for, plus nobody — and nothing internal (a
 // user or agent id) leaks into it.
 func TestJevSpeakerQuestionOffersEachSeatsOwnRole(t *testing.T) {
+	// ada is Ada Lovelace's own agent: it speaks for her, not for itself.
 	sales := decideAgentSeat("ada", "user-ada-secret", "agent-ada-secret", "sales")
+	sales.DisplayName = "Krude"
+	sales.SpeaksFor = "user-ada-secret"
+	adaPerson := decidePersonSeat("ada-lovelace", "user-ada-secret", false)
+	adaPerson.DisplayName = "Ada Lovelace"
+	pricing := decideAgentSeat("pricing", "user-bob", "agent-pricing", "pricing")
 	bob := decidePersonSeat("bob", "user-bob", true)
 	answers := map[string]any{
 		qAnswer:  choiceAnswer("needs_an_agent", 0.9, map[string]float64{"needs_an_agent": 0.9, "between_people": 0.06, "small_talk": 0.04}),
@@ -406,7 +412,7 @@ func TestJevSpeakerQuestionOffersEachSeatsOwnRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	decider := Jev{Ask: client.Ask, Fallback: Rules{}}
-	room := Situation{Name: "launch-room", Seats: []Seat{bob, sales}}
+	room := Situation{Name: "launch-room", Seats: []Seat{bob, adaPerson, sales, pricing}}
 	message := Message{Body: "can someone send the sales deck?"}
 
 	if _, err := decider.Decide(context.Background(), room, message); err != nil {
@@ -418,8 +424,11 @@ func TestJevSpeakerQuestionOffersEachSeatsOwnRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	sent := string(raw)
-	if !strings.Contains(sent, `"role":"sales"`) || !strings.Contains(sent, `"speaks_for":"ada"`) {
-		t.Fatalf("request sent = %s, want the sales seat's role and who it speaks for", sent)
+	if !strings.Contains(sent, `"ada":{"role":"sales","speaks_for":"Ada Lovelace"}`) {
+		t.Fatalf("request sent = %s, want the sales seat's role and the person it speaks for", sent)
+	}
+	if want := `"pricing":{"role":"pricing","speaks_for":"` + speaksForTeam + `"}`; !strings.Contains(sent, want) {
+		t.Fatalf("request sent = %s, want the specialist described as speaking for the team (%s)", sent, want)
 	}
 	if strings.Contains(sent, "user-ada-secret") || strings.Contains(sent, "agent-ada-secret") {
 		t.Fatalf("request sent = %s, an internal id leaked into what Jev is shown", sent)
