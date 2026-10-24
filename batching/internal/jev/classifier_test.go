@@ -33,7 +33,7 @@ func testClassifier(t *testing.T, handle http.HandlerFunc) *Classifier {
 
 func TestClassifierAsksBothQuestionsAndReturnsAnImmediateDecision(t *testing.T) {
 	classifier := testClassifier(t, func(writer http.ResponseWriter, incoming *http.Request) {
-		if incoming.URL.Path != systemOnePath || incoming.Header.Get("Authorization") != "Bearer secret" {
+		if incoming.URL.Path != "/v1/systemone" || incoming.Header.Get("Authorization") != "Bearer secret" {
 			t.Fatalf("request = %s, authorization = %q", incoming.URL.Path, incoming.Header.Get("Authorization"))
 		}
 		body, _ := io.ReadAll(incoming.Body)

@@ -222,6 +222,10 @@ locals {
     # agentcore_memory_enabled is on (agentcore_memory.tf); nothing otherwise,
     # which is Memory Bank as memory_agent_engine has it.
     local.agentcore_memory_environment,
+    # Where Jev's judgments go: TypeSafe when empty, or Cloudflare's Clef,
+    # which serves the same System One API, at its Workers AI run endpoint
+    # (jev_base_url). TYPESAFE_API_KEY is then a Cloudflare API token.
+    var.jev_base_url == "" ? {} : { TYPESAFE_BASE_URL = var.jev_base_url },
   )
 
   app_secrets = merge(
