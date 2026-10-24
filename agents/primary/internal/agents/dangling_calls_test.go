@@ -7,6 +7,7 @@ import (
 	"iter"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"google.golang.org/genai"
@@ -295,35 +296,47 @@ func (m refusesDanglingCalls) GenerateContent(ctx context.Context, req *model.LL
 	return m.LLM.GenerateContent(ctx, req, stream)
 }
 
-// A run cut off between a model turn's function call and its response leaves
-// the thread ending in a call. The member's next message must still get an
-// answer, through ADK's own history handling, which keeps such a call as it is.
-func TestAThreadStillAnswersAfterARunWasInterruptedMidCall(t *testing.T) {
+// tappedModel records the contents of every request ADK hands it, before the
+// model it wraps sees them: with repairedHistory inside it, what ADK sends
+// before any repair of ours.
+type tappedModel struct {
+	model.LLM
+	mu       sync.Mutex
+	requests [][]*genai.Content
+}
+
+func (m *tappedModel) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	m.mu.Lock()
+	m.requests = append(m.requests, slices.Clone(req.Contents))
+	m.mu.Unlock()
+	return m.LLM.GenerateContent(ctx, req, stream)
+}
+
+// storedTurn is one event already in a thread's history.
+type storedTurn struct {
+	author  string
+	content *genai.Content
+}
+
+// answerAfter stores history in a new thread, sends the member's message to
+// Krude running on llm, and returns Krude's answer.
+func answerAfter(t *testing.T, llm model.LLM, history []storedTurn, message string) string {
+	t.Helper()
 	ctx := context.Background()
-	tree := newTreeModel(func(string, *model.LLMRequest) *genai.Content {
-		return genai.NewContentFromText("Yes, I am here.", genai.RoleModel)
-	})
-	h := newHarness(t, repairedHistory{refusesDanglingCalls{tree}})
+	h := newHarness(t, llm)
 	created, err := h.sessions.Create(ctx, &session.CreateRequest{AppName: RootName, UserID: "member_1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, stored := range []struct {
-		author  string
-		content *genai.Content
-	}{
-		{"user", genai.NewContentFromText("Send Sam the notes.", genai.RoleUser)},
-		{RootName, functionCalls(&genai.FunctionCall{ID: "adk-1", Name: "list_tools"})},
-	} {
+	for _, stored := range history {
 		event := session.NewEvent(ctx, "interrupted-run")
 		event.Author, event.Content = stored.author, stored.content
 		if err := h.sessions.AppendEvent(ctx, created.Session, event); err != nil {
 			t.Fatal(err)
 		}
 	}
-
 	var answer strings.Builder
-	for event, err := range h.turns.Run(ctx, "member_1", created.Session.ID(), genai.NewContentFromText("Are you there?", genai.RoleUser), agent.RunConfig{}) {
+	for event, err := range h.turns.Run(ctx, "member_1", created.Session.ID(), genai.NewContentFromText(message, genai.RoleUser), agent.RunConfig{}) {
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}
@@ -331,9 +344,87 @@ func TestAThreadStillAnswersAfterARunWasInterruptedMidCall(t *testing.T) {
 			answer.WriteString(text(event.Content))
 		}
 	}
+	return answer.String()
+}
 
-	if answer.String() != "Yes, I am here." {
-		t.Fatalf("answer = %q", answer.String())
+// hereModel answers every request the same way, through repairedHistory and
+// a model that refuses dangling calls as Vertex does, and taps what ADK sent.
+func hereModel() (*tappedModel, *treeModel) {
+	tree := newTreeModel(func(string, *model.LLMRequest) *genai.Content {
+		return genai.NewContentFromText("Yes, I am here.", genai.RoleModel)
+	})
+	return &tappedModel{LLM: repairedHistory{refusesDanglingCalls{tree}}}, tree
+}
+
+// A run cut off between a model turn's function call and its response leaves
+// the thread ending in a call. Since ADK v2.5 (adk-go #1669) ADK drops such a
+// call from the request itself, as the call has an ID, which every call ADK
+// stores from a model is given: answerDanglingCalls finds nothing to do, and
+// the model is not told the call was interrupted.
+func TestADKDropsACallARunWasInterruptedBefore(t *testing.T) {
+	tap, tree := hereModel()
+	answer := answerAfter(t, tap, []storedTurn{
+		{"user", genai.NewContentFromText("Send Sam the notes.", genai.RoleUser)},
+		{RootName, functionCalls(&genai.FunctionCall{ID: "adk-1", Name: "list_tools"})},
+	}, "Are you there?")
+
+	if answer != "Yes, I am here." {
+		t.Fatalf("answer = %q", answer)
+	}
+	fromADK := tap.requests[0]
+	if len(fromADK) != 2 || text(fromADK[0]) != "Send Sam the notes." || text(fromADK[1]) != "Are you there?" {
+		t.Fatalf("ADK sent %s, want the two member messages and no call", snapshot(t, fromADK))
+	}
+	if sent := tree.requestsFor(RootName)[0].Contents; snapshot(t, sent) != snapshot(t, fromADK) {
+		t.Fatalf("the repair changed what ADK sent:\n%s\nto\n%s", snapshot(t, fromADK), snapshot(t, sent))
+	}
+}
+
+// A turn of calls only some of which were answered: ADK drops the calls with
+// no response, so the turn after holds a response for each call left.
+func TestADKDropsTheUnansweredCallsOfAPartlyAnsweredTurn(t *testing.T) {
+	tap, tree := hereModel()
+	answer := answerAfter(t, tap, []storedTurn{
+		{"user", genai.NewContentFromText("Check both.", genai.RoleUser)},
+		{RootName, functionCalls(
+			&genai.FunctionCall{ID: "adk-1", Name: "list_tools"},
+			&genai.FunctionCall{ID: "adk-2", Name: "list_helpers"},
+		)},
+		{RootName, functionResults(&genai.FunctionResponse{ID: "adk-1", Name: "list_tools", Response: map[string]any{"toolboxes": []any{}}})},
+	}, "Are you there?")
+
+	if answer != "Yes, I am here." {
+		t.Fatalf("answer = %q", answer)
+	}
+	fromADK := tap.requests[0]
+	if len(fromADK) != 4 {
+		t.Fatalf("ADK sent %s, want the message, the call, its response and the new message", snapshot(t, fromADK))
+	}
+	calls, responses := callParts(fromADK[1].Parts), responseParts(fromADK[2].Parts)
+	if len(calls) != 1 || calls[0].FunctionCall.Name != "list_tools" || len(responses) != 1 || responses[0].FunctionResponse.Name != "list_tools" {
+		t.Fatalf("ADK sent %s, want only the answered call and its response", snapshot(t, fromADK))
+	}
+	if sent := tree.requestsFor(RootName)[0].Contents; snapshot(t, sent) != snapshot(t, fromADK) {
+		t.Fatalf("the repair changed what ADK sent:\n%s\nto\n%s", snapshot(t, fromADK), snapshot(t, sent))
+	}
+}
+
+// ADK keeps a call with no ID, having no ID to match a response against, so
+// such a call still reaches the model unanswered and the repair still
+// answers it: the one case it is still needed for, and one ADK never stores
+// from a model itself.
+func TestAThreadStillAnswersAfterAnInterruptedCallWithNoID(t *testing.T) {
+	tap, tree := hereModel()
+	answer := answerAfter(t, tap, []storedTurn{
+		{"user", genai.NewContentFromText("Send Sam the notes.", genai.RoleUser)},
+		{RootName, functionCalls(&genai.FunctionCall{Name: "list_tools"})},
+	}, "Are you there?")
+
+	if answer != "Yes, I am here." {
+		t.Fatalf("answer = %q", answer)
+	}
+	if fromADK := tap.requests[0]; len(fromADK) != 3 || len(callParts(fromADK[1].Parts)) != 1 {
+		t.Fatalf("ADK sent %s, want the call kept and unanswered", snapshot(t, fromADK))
 	}
 	contents := tree.requestsFor(RootName)[0].Contents
 	if len(contents) != 4 {
