@@ -7,3 +7,26 @@ allowBuilds:
   unrs-resolver: true
   msw: false
   workerd: true
+
+# Don't install releases younger than 3 days (minutes)
+minimumReleaseAge: 4320
+
+overrides:
+  seroval: ">=1.6.3"
+  "@modelcontextprotocol/sdk": ">=1.32.0"
+  "@modelcontextprotocol/client": ">=2.3.0"
+  "@modelcontextprotocol/server": ">=2.3.0"
+  body-parser: ">=2.4.0"
+  source-map-js: ">=1.2.2"
+  "undici@<8": ">=7.30.1 <8"
+  "undici@>=8": ">=8.12.2"
+  vite: ">=8.3.3"
+  zod: ">=4.6.6"
+  fast-uri: ">=3.1.9"
+  hono: ">=4.13.11"
+  ip-address: ">=10.7.4"
+  uuid: ">=11.1.1"
+
+# Security fix (GHSA body-parser >=2.4.0) published 2026-10-22; drop once 3 days old
+minimumReleaseAgeExclude:
+  - body-parser

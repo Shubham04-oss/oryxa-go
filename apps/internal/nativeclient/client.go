@@ -127,6 +127,9 @@ type ConnectRequest struct {
 	App      string `json:"app"`
 	Level    string `json:"level"`
 	ReturnTo string `json:"return_to"`
+	// BrowserHash is the hex SHA-256 of the nonce in the member's browser
+	// cookie; the integrations callback asks for that cookie back.
+	BrowserHash string `json:"browser_hash"`
 }
 
 // Connect starts a sign-in and answers the URL the member's browser goes to.

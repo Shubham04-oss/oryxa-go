@@ -589,7 +589,12 @@ type fakeDirectory struct {
 }
 
 func (directory *fakeDirectory) Membership(_ context.Context, organizationID string, credentials authclient.Credentials) (domain.OrgMembership, error) {
-	member, ok := directory.members[credentials.Authorization]
+	key := credentials.Authorization
+	if key == "" {
+		// An access cookie "member" is the session of "Bearer member".
+		key = "Bearer " + credentials.AccessCookie
+	}
+	member, ok := directory.members[key]
 	if !ok {
 		return domain.OrgMembership{}, domain.ErrUnauthorized
 	}

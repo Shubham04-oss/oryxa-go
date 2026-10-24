@@ -1,7 +1,7 @@
 # The build stage runs on the builder's own platform and cross-compiles for
 # the one asked for (linux/arm64 for Fargate), so an amd64 machine building
 # the arm64 image does not run the Go toolchain under emulation.
-FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine AS build
 ARG TARGETOS
 ARG TARGETARCH
 # The release, the image's tag, that logs and traces carry as service_version.

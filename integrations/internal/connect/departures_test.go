@@ -15,7 +15,7 @@ import (
 // signedIn signs member in at level and answers the connection's id.
 func (r *rig) signedIn(t *testing.T, member, level string) string {
 	t.Helper()
-	raw, err := r.Start(context.Background(), StartRequest{Org: r.org, Member: member, App: "google", Level: level})
+	raw, err := r.Start(context.Background(), StartRequest{BrowserHash: testBrowserHash, Org: r.org, Member: member, App: "google", Level: level})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func (r *rig) signedIn(t *testing.T, member, level string) string {
 	r.app.mu.Lock()
 	r.app.challenge = authorize.Query().Get("code_challenge")
 	r.app.mu.Unlock()
-	done, err := r.Complete(context.Background(), Callback{State: authorize.Query().Get("state"), Code: "code-1"})
+	done, err := r.Complete(context.Background(), Callback{Cookie: testCookie, State: authorize.Query().Get("state"), Code: "code-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestMemberRemovedRevokesOnlyTheirPersonalConnectionsInThatOrg(t *testing.T)
 		t.Fatalf("another organization's removed events = %v", got)
 	}
 	// The unfinished sign-in cannot finish.
-	if _, err := r.Complete(ctx, Callback{State: pending, Code: "code-1"}); !errors.Is(err, ErrBadState) {
+	if _, err := r.Complete(ctx, Callback{Cookie: testCookie, State: pending, Code: "code-1"}); !errors.Is(err, ErrBadState) {
 		t.Fatalf("a departed member's sign-in completed: %v", err)
 	}
 }
@@ -152,7 +152,7 @@ func TestOrganizationDeletedRevokesAll(t *testing.T) {
 	if got := r.removedEvents(t); !slices.Equal(got, sorted(ids...)) {
 		t.Fatalf("removed events = %v, want %v", got, sorted(ids...))
 	}
-	if _, err := r.Complete(ctx, Callback{State: pending, Code: "code-1"}); !errors.Is(err, ErrBadState) {
+	if _, err := r.Complete(ctx, Callback{Cookie: testCookie, State: pending, Code: "code-1"}); !errors.Is(err, ErrBadState) {
 		t.Fatalf("a deleted organization's sign-in completed: %v", err)
 	}
 }
@@ -207,7 +207,7 @@ func TestALateRemovalSparesWhatTheMemberConnectedSince(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.wantStatus(t, after, "ok")
-	if _, err := r.Complete(ctx, Callback{State: pending, Code: "code-1"}); err != nil {
+	if _, err := r.Complete(ctx, Callback{Cookie: testCookie, State: pending, Code: "code-1"}); err != nil {
 		t.Fatalf("a sign-in started after the removal was spent: %v", err)
 	}
 }

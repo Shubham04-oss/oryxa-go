@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -156,7 +157,7 @@ func TestConnectPipedreamRecordsAPendingConnectionAndAnswersTheLink(t *testing.T
 	if request.ExternalUserID != memberUser || request.App != "linear" || request.ExpiresIn != 900*time.Second {
 		t.Fatalf("token request = %+v", request)
 	}
-	callback := "https://apps.oryxa.test/v1/apps/connect/pipedream/callback?state=" + url.QueryEscape(state)
+	callback := "https://app.oryxa.test/v1/apps/connect/pipedream/callback?state=" + url.QueryEscape(state)
 	if request.SuccessRedirectURI != callback || request.ErrorRedirectURI != callback+"&status=failed" {
 		t.Fatalf("redirects = %q, %q", request.SuccessRedirectURI, request.ErrorRedirectURI)
 	}
@@ -199,7 +200,7 @@ func TestPipedreamCallbackReadsTheAccountBack(t *testing.T) {
 	// Pipedream lists it only on the third read.
 	fake.visibleFrom = 3
 
-	completion, err := h.service.CompletePipedreamConnection(context.Background(), state, "")
+	completion, err := h.service.CompletePipedreamConnection(context.Background(), ConnectCallback{State: state, CookieState: state})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +216,7 @@ func TestPipedreamCallbackReadsTheAccountBack(t *testing.T) {
 		t.Fatalf("connected = %+v", connected)
 	}
 	// The state is spent.
-	if _, err := h.service.CompletePipedreamConnection(context.Background(), state, ""); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := h.service.CompletePipedreamConnection(context.Background(), ConnectCallback{State: state, CookieState: state}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("replay = %v, want not found", err)
 	}
 }
@@ -227,7 +228,7 @@ func TestPipedreamCallbackLeavesAConnectionPendingUntilTheAccountTurnsUp(t *test
 	waits := 0
 	h.service.wait = func(context.Context, time.Duration) error { waits++; return nil }
 
-	completion, err := h.service.CompletePipedreamConnection(context.Background(), state, "")
+	completion, err := h.service.CompletePipedreamConnection(context.Background(), ConnectCallback{State: state, CookieState: state})
 	if err != nil || completion.Connection.Status != domain.ConnectionPending {
 		t.Fatalf("completion = %+v, %v", completion, err)
 	}
@@ -244,7 +245,7 @@ func TestPipedreamCallbackRecordsAnUnfinishedConnect(t *testing.T) {
 	t.Parallel()
 	h, fake := pipedreamHarness(t)
 	connection, state := startPipedream(t, h, fake)
-	completion, err := h.service.CompletePipedreamConnection(context.Background(), state, "failed")
+	completion, err := h.service.CompletePipedreamConnection(context.Background(), ConnectCallback{State: state, CookieState: state, Status: "failed"})
 	if err != nil || completion.Connection.Status != domain.ConnectionFailed {
 		t.Fatalf("completion = %+v, %v", completion, err)
 	}
@@ -263,7 +264,7 @@ func TestPipedreamCallbackFinishesOnlyPipedreamConnects(t *testing.T) {
 		t.Fatal(err)
 	}
 	for state, want := range map[string]error{"composio-state": domain.ErrNotFound, "nobody": domain.ErrNotFound, "": domain.ErrInvalid} {
-		if _, err := h.service.CompletePipedreamConnection(context.Background(), state, ""); !errors.Is(err, want) {
+		if _, err := h.service.CompletePipedreamConnection(context.Background(), ConnectCallback{State: state, CookieState: state}); !errors.Is(err, want) {
 			t.Errorf("state %q = %v, want %v", state, err, want)
 		}
 	}
@@ -497,11 +498,33 @@ func TestPipedreamCallbackToleratesClockSkew(t *testing.T) {
 		{ID: "apn_skewed", ExternalUserID: memberUser, App: "linear", Name: "ada@acme.test", CreatedAt: testClock.Add(-5 * time.Second)},
 	}
 
-	completion, err := h.service.CompletePipedreamConnection(context.Background(), state, "")
+	completion, err := h.service.CompletePipedreamConnection(context.Background(), ConnectCallback{State: state, CookieState: state})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := completion.Connection; got.ID != connection.ID || got.PipedreamAccountID != "apn_skewed" {
 		t.Fatalf("connection = %+v", got)
+	}
+}
+
+// A forwarded Pipedream link is refused as a Composio one is, and the
+// account Pipedream made under the member's user goes with it (#476).
+func TestPipedreamCallbackFromAnotherBrowser(t *testing.T) {
+	t.Parallel()
+	h, fake := pipedreamHarness(t)
+	connection, state := startPipedream(t, h, fake)
+	fake.accounts = []PipedreamAccount{{ID: "apn_victim", ExternalUserID: memberUser, App: "linear", CreatedAt: testClock.Add(time.Minute)}}
+
+	if _, err := h.service.CompletePipedreamConnection(context.Background(), ConnectCallback{State: state}); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("forwarded = %v, want forbidden", err)
+	}
+	if stored := h.store.connections[connection.ID]; stored.Status != domain.ConnectionRemoved {
+		t.Fatalf("connection = %s", stored.Status)
+	}
+	if !slices.Contains(fake.deletedAccounts, "apn_victim") {
+		t.Fatalf("deleted at Pipedream = %v", fake.deletedAccounts)
+	}
+	if _, err := h.service.CompletePipedreamConnection(context.Background(), ConnectCallback{State: state, CookieState: state}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("replayed = %v, want not found", err)
 	}
 }

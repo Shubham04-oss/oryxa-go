@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
@@ -56,7 +57,7 @@ func TestConnectSetsUpTheAppAndRecordsItPending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if callback.Scheme+"://"+callback.Host+callback.Path != "https://apps.oryxa.test"+callbackPath {
+	if callback.Scheme+"://"+callback.Host+callback.Path != "https://app.oryxa.test"+callbackPath {
 		t.Fatalf("callback = %q", link.CallbackURL)
 	}
 	state := callback.Query().Get("state")
@@ -276,7 +277,7 @@ func TestCompleteConnectionActivatesWhatComposioConfirms(t *testing.T) {
 		account(connection, composio.StatusActive),
 	}
 
-	completion, err := h.service.CompleteConnection(context.Background(), state, "success", connection.ComposioAccountID)
+	completion, err := h.service.CompleteConnection(context.Background(), ConnectCallback{State: state, CookieState: state, Status: "success", AccountID: connection.ComposioAccountID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +299,7 @@ func TestCompleteConnectionActivatesWhatComposioConfirms(t *testing.T) {
 	}
 
 	// The state is spent: a replayed callback finds nothing.
-	if _, err := h.service.CompleteConnection(context.Background(), state, "success", ""); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := h.service.CompleteConnection(context.Background(), ConnectCallback{State: state, CookieState: state, Status: "success"}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("replayed callback = %v, want not found", err)
 	}
 	if len(h.store.published(appsv1.ConnectionConnectedDetailType)) != 1 {
@@ -335,7 +336,7 @@ func TestCompleteConnectionRefusesACallbackAboutSomeoneElse(t *testing.T) {
 			reported, answered := prepare(connection)
 			h.composio.accounts[connection.ComposioAccountID] = []composio.ConnectedAccount{answered}
 
-			_, err := h.service.CompleteConnection(context.Background(), state, "success", reported)
+			_, err := h.service.CompleteConnection(context.Background(), ConnectCallback{State: state, CookieState: state, Status: "success", AccountID: reported})
 			if !errors.Is(err, domain.ErrForbidden) {
 				t.Fatalf("error = %v, want forbidden", err)
 			}
@@ -344,7 +345,7 @@ func TestCompleteConnectionRefusesACallbackAboutSomeoneElse(t *testing.T) {
 			if got := h.store.connections[connection.ID]; got.Status != domain.ConnectionFailed {
 				t.Fatalf("status = %q", got.Status)
 			}
-			if _, err := h.service.CompleteConnection(context.Background(), state, "success", reported); !errors.Is(err, domain.ErrNotFound) {
+			if _, err := h.service.CompleteConnection(context.Background(), ConnectCallback{State: state, CookieState: state, Status: "success", AccountID: reported}); !errors.Is(err, domain.ErrNotFound) {
 				t.Fatalf("second attempt = %v, want not found", err)
 			}
 			if len(h.store.published(appsv1.ConnectionConnectedDetailType)) != 0 {
@@ -373,7 +374,7 @@ func TestCompleteConnectionFailsWhatDidNotFinish(t *testing.T) {
 			connection, state := h.pending(t, "github")
 			h.composio.accounts[connection.ComposioAccountID] = []composio.ConnectedAccount{account(connection, testCase.status)}
 
-			completion, err := h.service.CompleteConnection(context.Background(), state, testCase.reportedStatus, "")
+			completion, err := h.service.CompleteConnection(context.Background(), ConnectCallback{State: state, CookieState: state, Status: testCase.reportedStatus})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -388,7 +389,7 @@ func TestCompleteConnectionFailsWhatDidNotFinish(t *testing.T) {
 			}
 			// A connection still pending can be finished later; a failed one
 			// cannot be resumed.
-			_, err = h.service.CompleteConnection(context.Background(), state, testCase.reportedStatus, "")
+			_, err = h.service.CompleteConnection(context.Background(), ConnectCallback{State: state, CookieState: state, Status: testCase.reportedStatus})
 			if testCase.want == domain.ConnectionPending {
 				if err != nil {
 					t.Fatalf("second callback = %v", err)
@@ -403,10 +404,10 @@ func TestCompleteConnectionFailsWhatDidNotFinish(t *testing.T) {
 func TestCompleteConnectionNeedsAState(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	if _, err := h.service.CompleteConnection(context.Background(), "", "success", ""); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := h.service.CompleteConnection(context.Background(), ConnectCallback{Status: "success"}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("no state = %v, want invalid", err)
 	}
-	if _, err := h.service.CompleteConnection(context.Background(), "made-up", "success", ""); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := h.service.CompleteConnection(context.Background(), ConnectCallback{State: "made-up", CookieState: "made-up", Status: "success"}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("unknown state = %v, want not found", err)
 	}
 }
@@ -557,5 +558,80 @@ func TestRemoveConnectionChecksWhoIsAsking(t *testing.T) {
 	}
 	if got := h.store.connections[theirs.ID]; got.StatusReason != appsv1.RemovedByAdmin {
 		t.Fatalf("reason = %q", got.StatusReason)
+	}
+}
+
+// A connect link finished in a browser that did not start it, as a forwarded
+// link is, is refused, and the connection and the account Composio made
+// for it are removed (#476). The member's own browser finishes it with the
+// cookie, or, started from the CLI, by being signed in as them.
+func TestCompleteConnectionOnlyFromTheStartingBrowser(t *testing.T) {
+	t.Parallel()
+	for name, test := range map[string]struct {
+		cookie, session string
+		want            error
+	}{
+		"no cookie, no session":           {want: domain.ErrForbidden},
+		"another cookie":                  {cookie: "forged", want: domain.ErrForbidden},
+		"the cookie, another member":      {cookie: "same", session: "other", want: domain.ErrForbidden},
+		"no cookie, another member":       {session: "other", want: domain.ErrForbidden},
+		"no cookie, an agent's session":   {session: "agent", want: domain.ErrForbidden},
+		"the cookie, a dead session":      {cookie: "same", session: "expired"},
+		"the cookie alone":                {cookie: "same"},
+		"no cookie, the member signed in": {session: "member"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			connection, state := h.pending(t, "github")
+			h.composio.accounts[connection.ComposioAccountID] = []composio.ConnectedAccount{account(connection, composio.StatusActive)}
+			cookie := test.cookie
+			if cookie == "same" {
+				cookie = state
+			}
+			completion, err := h.service.CompleteConnection(context.Background(), ConnectCallback{
+				State: state, CookieState: cookie, AccessCookie: test.session, Status: "success",
+			})
+			if test.want == nil {
+				if err != nil || completion.Connection.Status != domain.ConnectionActive {
+					t.Fatalf("CompleteConnection = %+v, %v", completion.Connection, err)
+				}
+				return
+			}
+			if !errors.Is(err, test.want) {
+				t.Fatalf("CompleteConnection = %v, want %v", err, test.want)
+			}
+			stored := h.store.connections[connection.ID]
+			if stored.Status != domain.ConnectionRemoved || stored.StatusReason != RemovedWrongBrowser {
+				t.Fatalf("connection = %s %q", stored.Status, stored.StatusReason)
+			}
+			if !slices.Contains(h.composio.deleted, connection.ComposioAccountID) {
+				t.Fatalf("Composio deleted %v, want the account", h.composio.deleted)
+			}
+			// The state is spent: the starting browser cannot finish it now.
+			if _, err := h.service.CompleteConnection(context.Background(), ConnectCallback{State: state, CookieState: state}); !errors.Is(err, domain.ErrNotFound) {
+				t.Fatalf("after refusal = %v, want not found", err)
+			}
+		})
+	}
+}
+
+// The state is the browser's nonce, and the callback goes back to the host
+// the connect was sent to, which is where that cookie lives.
+func TestConnectUsesTheBrowsersNonceAndHost(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.composio.toolkits["github"] = composio.Toolkit{Slug: "github", AuthSchemes: []string{"OAUTH2"}, ComposioManagedAuthSchemes: []string{"OAUTH2"}}
+	connection, _, err := h.service.Connect(context.Background(), memberToken, "org_1", ConnectInput{
+		Toolkit: "github", BrowserNonce: "nonce-1", Host: "APP.oryxa.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := h.composio.links[0].CallbackURL; got != "https://app.oryxa.test"+callbackPath+"?state=nonce-1" {
+		t.Fatalf("callback = %q", got)
+	}
+	if pending, err := h.store.PendingConnection(context.Background(), hashState("nonce-1")); err != nil || pending.ID != connection.ID {
+		t.Fatalf("pending = %+v, %v", pending, err)
 	}
 }

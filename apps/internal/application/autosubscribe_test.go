@@ -78,7 +78,7 @@ func TestCompletingAConnectionWakesTheSubscriber(t *testing.T) {
 	connection, state := h.pending(t, "github")
 	h.composio.accounts[connection.ComposioAccountID] = []composio.ConnectedAccount{account(connection, composio.StatusActive)}
 
-	if _, err := h.service.CompleteConnection(context.Background(), state, "success", connection.ComposioAccountID); err != nil {
+	if _, err := h.service.CompleteConnection(context.Background(), ConnectCallback{State: state, CookieState: state, Status: "success", AccountID: connection.ComposioAccountID}); err != nil {
 		t.Fatal(err)
 	}
 	select {
