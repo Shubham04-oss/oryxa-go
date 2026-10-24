@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"google.golang.org/adk/v2/agent"
-	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
@@ -104,9 +103,9 @@ func (c *toolCatalog) toolboxFor(name string) (Toolbox, bool) {
 }
 
 // loaded returns the native ADK toolset of every toolbox loaded in this
-// session. Its Tools method handles toolboxes loaded before an invocation;
-// ProcessRequest also makes a toolbox loaded during an invocation available
-// on the next model step. A loaded toolbox whose tools cannot be listed right
+// session. ADK asks a toolset for its tools before every model step, so a
+// toolbox load_tools loads during an invocation is there on the next step.
+// A loaded toolbox whose tools cannot be listed right
 // now, such as a member-authenticated one after the member withdrew their
 // grant, is left out rather than failing the turn; load_tools says why.
 func (c *toolCatalog) loaded() tool.Toolset {
@@ -140,30 +139,6 @@ func (l loadedToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error) {
 		tools = append(tools, boxTools...)
 	}
 	return tools, nil
-}
-
-// ProcessRequest participates in ADK's native toolset preprocessing. ADK
-// resolves Tools once at the start of an invocation, but preprocesses the
-// registered toolsets before every model step. Packing tools that appeared in
-// state since that first resolution lets load_tools take effect immediately.
-func (l loadedToolset) ProcessRequest(ctx agent.Context, req *model.LLMRequest) error {
-	tools, err := l.Tools(ctx)
-	if err != nil {
-		return err
-	}
-	for _, loadedTool := range tools {
-		if _, alreadyPacked := req.Tools[loadedTool.Name()]; alreadyPacked {
-			continue
-		}
-		declarative, ok := loadedTool.(toolutils.Tool)
-		if !ok {
-			return fmt.Errorf("tool %q cannot be dynamically loaded", loadedTool.Name())
-		}
-		if err := toolutils.PackTool(req, declarative); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // LoadToolboxes is the state change that loads the named toolboxes in a

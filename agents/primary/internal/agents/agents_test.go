@@ -320,6 +320,58 @@ func TestKrudeLoadsToolboxesWhenATaskNeedsThem(t *testing.T) {
 	}
 }
 
+// ADK asks a toolset for its tools again before every model step (adk-go
+// #785, in v2.5), so the loaded toolset has no ProcessRequest of its own to
+// pack what load_tools loaded mid-invocation: the test above passes on
+// ADK's re-evaluation alone.
+func TestTheLoadedToolsetLeavesPackingToADK(t *testing.T) {
+	catalog, err := newToolCatalog(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, packs := catalog.loaded().(interface {
+		ProcessRequest(agent.Context, *model.LLMRequest) error
+	}); packs {
+		t.Fatal("the loaded toolset packs its own tools; ADK re-evaluates Tools before every step")
+	}
+}
+
+// A toolbox loaded mid-invocation stays callable on every later step of that
+// invocation, not only the one right after load_tools.
+func TestALoadedToolboxStaysCallableForTheRestOfTheTurn(t *testing.T) {
+	notes := Toolbox{Name: "notes", Description: "Notes.", Toolset: staticToolset{echoTool(t, "notes_add"), echoTool(t, "notes_read")}}
+	llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
+		switch {
+		case functionResponse(request, "notes_read") != "":
+			return genai.NewContentFromText("Done.", genai.RoleModel)
+		case functionResponse(request, "notes_add") != "":
+			return functionCalls(&genai.FunctionCall{ID: "call_read", Name: "notes_read", Args: map[string]any{"text": "read back"}})
+		case functionResponse(request, "load_tools") != "":
+			return functionCalls(&genai.FunctionCall{ID: "call_add", Name: "notes_add", Args: map[string]any{"text": "buy milk"}})
+		default:
+			return functionCalls(&genai.FunctionCall{ID: "call_load", Name: "load_tools", Args: map[string]any{"names": []any{"notes"}}})
+		}
+	})
+	h := newHarness(t, llm, notes)
+	if answer := h.turn("member_1", nil, "Add a note and read it back."); answer != "Done." {
+		t.Fatalf("answer = %q", answer)
+	}
+
+	krude := llm.requestsFor(RootName)
+	if len(krude) != 4 {
+		t.Fatalf("Krude made %d model calls, want 4", len(krude))
+	}
+	for step, request := range krude[1:] {
+		declared := declaredFunctions(request)
+		if countName(declared, "notes_add") != 1 || countName(declared, "notes_read") != 1 {
+			t.Fatalf("step %d declared %v, want each notes tool once", step+2, declared)
+		}
+	}
+	if read := functionResponse(krude[3], "notes_read"); !strings.Contains(read, "read back") {
+		t.Fatalf("the second loaded tool did not run, got %q", read)
+	}
+}
+
 func TestKrudeUsesAToolboxLoadedBeforeTheTurn(t *testing.T) {
 	notes := Toolbox{Name: "notes", Description: "Notes.", Toolset: staticToolset{echoTool(t, "notes_add")}}
 	llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
