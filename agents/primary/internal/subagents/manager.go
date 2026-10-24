@@ -87,6 +87,8 @@ type Manager struct {
 	logger     *slog.Logger
 	tracer     trace.Tracer
 	now        func() time.Time
+	// minute is how long a budget's minute lasts: a minute, but for tests.
+	minute time.Duration
 
 	// mu guards running, every scope's children and closed, and every
 	// child's pending, exiting and question.
@@ -121,6 +123,7 @@ func New(config Config) (*Manager, error) {
 		logger:     logger,
 		tracer:     otel.Tracer("github.com/Shubham04-oss/oryxa-go/agents/primary/internal/subagents"),
 		now:        time.Now,
+		minute:     time.Minute,
 		running:    map[string]*child{},
 	}, nil
 }
@@ -301,7 +304,7 @@ func (m *Manager) work(c *child, record Record, content *genai.Content) {
 // turn runs one assignment, and returns the record as it ended: done,
 // waiting on Krude, failed or stopped, with what it spent added.
 func (m *Manager) turn(c *child, record *Record, content *genai.Content) Record {
-	budget := time.Duration(record.BudgetMinutes) * time.Minute
+	budget := time.Duration(record.BudgetMinutes) * m.minute
 	ctx, cancel := context.WithTimeoutCause(c.ctx, budget, errBudgetTime)
 	defer cancel()
 	ctx, span := m.tracer.Start(ctx, "subagent.turn", trace.WithAttributes(
