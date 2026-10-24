@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -182,6 +183,9 @@ func (service *Service) Update(ctx context.Context, scope Scope, id string, inpu
 	if err := service.validate(ctx, scope, prospective); err != nil {
 		return Workflow{}, err
 	}
+	// touched records what was done to the external schedule, so a failed
+	// row update undoes exactly that and nothing else.
+	var touched scheduleChange
 	if !schedulesEqual(current.Schedule, prospective.Schedule) || current.Status != prospective.Status {
 		if service.scheduler == nil && (current.Schedule != nil || prospective.Schedule != nil) {
 			return Workflow{}, fmt.Errorf("%w: EventBridge Scheduler is not configured", ErrUnavailable)
@@ -191,24 +195,50 @@ func (service *Service) Update(ctx context.Context, scope Scope, id string, inpu
 				if err := service.scheduler.Delete(ctx, current); err != nil {
 					return Workflow{}, fmt.Errorf("delete workflow schedule: %w", err)
 				}
+				touched = scheduleDeleted
 			}
-		} else if err := service.scheduler.Upsert(ctx, prospective); err != nil {
-			return Workflow{}, fmt.Errorf("update workflow schedule: %w", err)
+		} else {
+			if err := service.scheduler.Upsert(ctx, prospective); err != nil {
+				return Workflow{}, fmt.Errorf("update workflow schedule: %w", err)
+			}
+			touched = scheduleUpserted
 		}
 	}
 	updated, err := service.repository.Update(ctx, scope, id, input)
 	if err != nil {
-		// Restore the previous external schedule as a best-effort compensation.
-		if service.scheduler != nil {
-			if current.Schedule == nil {
-				_ = service.scheduler.Delete(context.WithoutCancel(ctx), prospective)
-			} else {
-				_ = service.scheduler.Upsert(context.WithoutCancel(ctx), current)
-			}
-		}
+		service.restoreSchedule(context.WithoutCancel(ctx), touched, current, prospective)
 		return Workflow{}, err
 	}
 	return updated, nil
+}
+
+// scheduleChange is what Update did to a workflow's external schedule.
+type scheduleChange int
+
+const (
+	scheduleUntouched scheduleChange = iota
+	scheduleDeleted
+	scheduleUpserted
+)
+
+// restoreSchedule is Update's best-effort compensation when the row update
+// fails after the external schedule changed: it puts back the schedule as
+// it was, and leaves it alone when nothing was changed.
+func (service *Service) restoreSchedule(ctx context.Context, touched scheduleChange, current, prospective Workflow) {
+	var err error
+	switch {
+	case touched == scheduleUntouched:
+		return
+	case current.Schedule == nil:
+		// The update created a schedule the workflow never had.
+		err = service.scheduler.Delete(ctx, prospective)
+	default:
+		// The update deleted or replaced the workflow's schedule.
+		err = service.scheduler.Upsert(ctx, current)
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "restore a workflow schedule after a failed update", "workflow_id", current.ID, "error", err)
+	}
 }
 
 func (service *Service) Delete(ctx context.Context, scope Scope, id string) error {
