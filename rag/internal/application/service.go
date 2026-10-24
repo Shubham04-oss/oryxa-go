@@ -130,8 +130,13 @@ type Service struct {
 	// nothing. See decisions.go.
 	decisions Recorder
 	shadow    access.Comparer
-	logger    *slog.Logger
-	now       func() time.Time
+	// engine, when set, decides corpus access from SpiceDB
+	// (ACCESS_ENGINE_RAG=spicedb), and relationships writes a corpus's place
+	// in it as the corpus is created or deleted (decisions.go).
+	engine        access.Decider
+	relationships Relationships
+	logger        *slog.Logger
+	now           func() time.Time
 }
 
 // Defaults are what a corpus gets when its creator does not choose. They come
@@ -298,6 +303,7 @@ func (service *Service) CreateCorpus(ctx context.Context, credentials authclient
 		}
 		return domain.Corpus{}, err
 	}
+	service.corpusCreated(ctx, corpus)
 	return corpus, nil
 }
 
@@ -385,6 +391,7 @@ func (service *Service) DeleteCorpus(ctx context.Context, credentials authclient
 	if err := service.store.DeleteCorpus(ctx, organizationID, corpusID, event); err != nil {
 		return err
 	}
+	service.corpusDeleted(ctx, organizationID, corpusID)
 	service.record(ctx, member, corpus, access.ActionDelete, resourceCorpus, corpus.ID, rule)
 	return nil
 }
@@ -790,8 +797,10 @@ func (service *Service) lookup(ctx context.Context, organizationID, reference st
 // It answers the rule that allowed the write (see granted).
 func (service *Service) mayWrite(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, corpus domain.Corpus) (string, error) {
 	rule, err := service.decideWrite(ctx, credentials, member, corpus)
-	service.compare(ctx, member, corpus, access.ActionWrite, err)
-	return rule, err
+	if err = service.decide(ctx, member, corpus, access.ActionWrite, err); err != nil {
+		return "", err
+	}
+	return rule, nil
 }
 
 func (service *Service) decideWrite(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, corpus domain.Corpus) (string, error) {
@@ -827,8 +836,10 @@ func (service *Service) decideWrite(ctx context.Context, credentials authclient.
 // granted).
 func (service *Service) mayDelete(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, corpus domain.Corpus) (string, error) {
 	rule, err := service.decideDelete(ctx, credentials, member, corpus)
-	service.compare(ctx, member, corpus, access.ActionDelete, err)
-	return rule, err
+	if err = service.decide(ctx, member, corpus, access.ActionDelete, err); err != nil {
+		return "", err
+	}
+	return rule, nil
 }
 
 func (service *Service) decideDelete(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, corpus domain.Corpus) (string, error) {

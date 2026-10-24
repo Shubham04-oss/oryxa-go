@@ -41,8 +41,10 @@ func (service *Service) reads(credentials authclient.Credentials, member domain.
 // read records and a listing ignores.
 func (reads *reads) mayRead(ctx context.Context, corpus domain.Corpus) (string, error) {
 	rule, err := reads.decide(ctx, corpus)
-	reads.service.compare(ctx, reads.member, corpus, access.ActionRead, err)
-	return rule, err
+	if err = reads.service.decide(ctx, reads.member, corpus, access.ActionRead, err); err != nil {
+		return "", err
+	}
+	return rule, nil
 }
 
 func (reads *reads) decide(ctx context.Context, corpus domain.Corpus) (string, error) {

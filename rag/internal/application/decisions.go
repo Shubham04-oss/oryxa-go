@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/access"
 
@@ -30,16 +31,72 @@ func (service *Service) WithShadow(shadow access.Comparer) *Service {
 	return service
 }
 
-// compare asks SpiceDB in shadow what mayRead, mayWrite or mayDelete just
-// decided about a corpus; their answer stands. A failure that decided
-// nothing, such as teams being unreachable, isn't compared.
-func (service *Service) compare(ctx context.Context, member domain.OrgMembership, corpus domain.Corpus, action string, err error) {
-	if service.shadow == nil {
+// Relationships keeps a corpus's relationships in SpiceDB as the corpus comes
+// and goes. The projector also writes them from the corpus's events; this
+// only makes them there sooner, so a corpus can be read the moment it exists.
+type Relationships interface {
+	CorpusCreated(ctx context.Context, corpus domain.Corpus) error
+	CorpusDeleted(ctx context.Context, organizationID, corpusID string) error
+}
+
+// WithEngine makes SpiceDB decide corpus access, and writes each corpus's
+// relationships as it is created or deleted.
+func (service *Service) WithEngine(engine access.Decider, relationships Relationships) *Service {
+	service.engine, service.relationships = engine, relationships
+	return service
+}
+
+func (service *Service) corpusCreated(ctx context.Context, corpus domain.Corpus) {
+	if service.relationships == nil {
 		return
 	}
-	if err != nil && !errors.Is(err, domain.ErrNotFound) && !errors.Is(err, domain.ErrForbidden) {
+	// The corpus stands either way: its event brings the projector here too.
+	if err := service.relationships.CorpusCreated(ctx, corpus); err != nil {
+		service.logger.WarnContext(ctx, "corpus relationships not written to spicedb; the projector will", "corpus_id", corpus.ID, "error", err)
+	}
+}
+
+func (service *Service) corpusDeleted(ctx context.Context, organizationID, corpusID string) {
+	if service.relationships == nil {
 		return
 	}
+	if err := service.relationships.CorpusDeleted(ctx, organizationID, corpusID); err != nil {
+		service.logger.WarnContext(ctx, "corpus relationships not deleted from spicedb; the projector will", "corpus_id", corpusID, "error", err)
+	}
+}
+
+// decide returns what the caller gets for action on a corpus, given the
+// code's answer, as files does. With no engine the code's answer stands and
+// SpiceDB is asked in shadow. With one, SpiceDB decides but may only narrow:
+// a revoke reaches SpiceDB a moment after the code sees it, so the caller gets
+// in only when both allow. Where SpiceDB has no answer (the org agent) or the
+// code decided nothing (teams unreachable) the code's answer stands, and a
+// SpiceDB failure refuses. Decide records every difference.
+func (service *Service) decide(ctx context.Context, member domain.OrgMembership, corpus domain.Corpus, action string, code error) error {
+	decided := code == nil || errors.Is(code, domain.ErrNotFound) || errors.Is(code, domain.ErrForbidden)
+	if service.engine == nil || !decided {
+		if decided && service.shadow != nil {
+			service.shadow.Compare(ctx, ask(member, corpus, action), code == nil)
+		}
+		return code
+	}
+	allowed, err := service.engine.Decide(ctx, ask(member, corpus, action), code == nil)
+	switch {
+	case errors.Is(err, access.ErrNoAnswer):
+		return code
+	case err != nil:
+		return fmt.Errorf("decide access to corpus %s: %w", corpus.ID, err)
+	case code != nil:
+		return code
+	case allowed:
+		return nil
+	default:
+		return domain.ErrNotFound
+	}
+}
+
+// ask is a decision on a corpus in the terms SpiceDB is asked about it.
+func ask(member domain.OrgMembership, corpus domain.Corpus, action string) access.Ask {
 	ask := access.Ask{
 		OrganizationID: corpus.OrganizationID, Service: "rag", Action: action,
 		ResourceKind: resourceCorpus, ResourceID: corpus.ID, UserID: member.UserID,
@@ -49,7 +106,7 @@ func (service *Service) compare(ctx context.Context, member domain.OrgMembership
 	if member.Agent {
 		ask.AgentID = member.AgentID
 	}
-	service.shadow.Compare(ctx, ask, err == nil)
+	return ask
 }
 
 // Resource kinds in the decision log.
