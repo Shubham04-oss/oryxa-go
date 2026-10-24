@@ -38,7 +38,7 @@ type turn struct {
 //
 // It runs in a goroutine of the relay's own, where nothing else would
 // recover a panic, so a panic is that turn's failure and not the process's.
-func (relay *Relay) takeTurn(ctx context.Context, seat Seat, room Situation, transcript []Message) (taken turn) {
+func (relay *Relay) takeTurn(ctx context.Context, seat Seat, room Situation, transcript []Message, summons Summons) (taken turn) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			relay.logger().ErrorContext(ctx, "rooms: relay: a seat's turn panicked",
@@ -50,7 +50,7 @@ func (relay *Relay) takeTurn(ctx context.Context, seat Seat, room Situation, tra
 	own, cancel := context.WithTimeout(ctx, relay.perTurn())
 	defer cancel()
 	for {
-		reply, err := relay.Speaker.Speak(own, seat, room, transcript)
+		reply, err := relay.Speaker.Speak(own, seat, room, transcript, summons)
 		slow := errors.Is(own.Err(), context.DeadlineExceeded)
 		if !errors.Is(err, threads.ErrRunInProgress) {
 			return turn{reply: reply, err: err, slow: slow}
@@ -80,6 +80,13 @@ func unanswered(seat Seat, taken turn) string {
 	default:
 		return fmt.Sprintf("@%s couldn't answer right now.", seat.Handle)
 	}
+}
+
+// passedFor is the line for seat, standing in for the away person whose handle
+// is away, when it had nothing to say in their place: they were asked, so the
+// room is told the question waits for them rather than hearing nothing.
+func passedFor(seat Seat, away string) string {
+	return fmt.Sprintf("@%s is away, and @%s has nothing to add for them, so this waits for @%s.", away, seat.Handle, away)
 }
 
 // noTurn is the line for a seat a person named that the turns one message

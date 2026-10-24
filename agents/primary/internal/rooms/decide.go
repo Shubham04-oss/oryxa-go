@@ -52,18 +52,21 @@ func (r Rules) Decide(_ context.Context, room Situation, message Message) (Verdi
 	switch {
 	case isAcknowledgement(body):
 		verdict.Why = "acknowledgement: never answered"
-	case strings.Contains(body, "?") && freeAgentSeat(room.Seats):
-		verdict.Answer = true
-		verdict.Why = "asks something, and an agent seat is free to take it"
 	case strings.Contains(body, "?"):
-		verdict.Why = "asks something, but no agent seat is free"
+		seat, ok := freeAgentSeat(room.Seats, message)
+		if !ok {
+			verdict.Why = "asks something, but no agent seat is free"
+			break
+		}
+		// Answering with nobody to answer is not answering: the relay only
+		// runs a seat it is given. Which seat is not judged here, it is the
+		// first free one in a fixed order (see freeAgentSeat), and the seat
+		// is told nobody named it, so it may still pass.
+		verdict.Answer, verdict.Speaker = true, seat.Handle
+		verdict.Why = "asks something, and an agent seat is free to take it"
 	default:
 		verdict.Why = "not a question"
 	}
-
-	// Rules leaves Speaker empty even when Answer is true: choosing which of
-	// several seats should take a message is a judgment, and a rule that
-	// guessed at it would not be honest about being a rule.
 
 	if kind, ok := ruleKeep(body); ok {
 		verdict.Keep, verdict.Kind = true, kind
@@ -140,17 +143,43 @@ func ruleKeep(body string) (kind string, ok bool) {
 	return "", false
 }
 
-// freeAgentSeat reports whether some agent seat's own person is not
-// currently reading the room. A present person answers for themselves; an
-// agent whose person is right here is not free to answer over them, which
-// is the same fact [AgentSpeaker.Speak] already reads presentOwner for.
-func freeAgentSeat(seats []Seat) bool {
-	for _, seat := range seats {
-		if seat.Kind == SeatAgent && !presentOwner(seats, seat.UserID) {
-			return true
+// freeAgentSeat is the agent seat free to take a message that named nobody,
+// if any is: one that would not be answering over the person it speaks for.
+// A present person answers for themselves, and the author of message is
+// doing the talking, so neither one's own agent is free; a contributed
+// specialist speaks for nobody and is free whoever is reading. The order is
+// fixed rather than judged: specialists first, since they were contributed to
+// serve the team, then the own agents of people who are away, each in seating
+// order. This is the same presence [AgentSpeaker.Speak] reads presentOwner
+// for, and what the relay falls back on when a routed seat is not free.
+func freeAgentSeat(seats []Seat, message Message) (Seat, bool) {
+	var standIn *Seat
+	for index, seat := range seats {
+		if seat.Kind != SeatAgent || seat.Handle == message.AuthorHandle {
+			continue
+		}
+		if seat.SpeaksFor == "" {
+			return seat, true
+		}
+		if standIn == nil && !speaksOverPerson(seats, seat, message) {
+			standIn = &seats[index]
 		}
 	}
-	return false
+	if standIn == nil {
+		return Seat{}, false
+	}
+	return *standIn, true
+}
+
+// speaksOverPerson reports whether seat, somebody's own agent, would be
+// talking over the person it speaks for if it took message unasked: that
+// person is reading the room, or wrote message. A contributed specialist
+// speaks for nobody, so it never does.
+func speaksOverPerson(seats []Seat, seat Seat, message Message) bool {
+	if seat.SpeaksFor == "" {
+		return false
+	}
+	return seat.SpeaksFor == message.AuthorUserID || presentOwner(seats, seat.SpeaksFor)
 }
 
 // ---------------------------------------------------------------------
@@ -253,7 +282,7 @@ func (j Jev) Decide(ctx context.Context, room Situation, message Message) (Verdi
 	if len(agentSeats) > 0 {
 		// Nothing to route to without an agent seat in the room; asking
 		// would only spend a question on a single forced option.
-		request.Questions[qSpeaker] = speakerQuestion(agentSeats)
+		request.Questions[qSpeaker] = speakerQuestion(room.Seats, agentSeats)
 	}
 
 	timeout := j.Timeout
@@ -412,9 +441,10 @@ type seatOption struct {
 
 // speakerQuestion asks which agent seat should answer, built fresh from
 // this room's own seats every time: the options are exactly the agent seats
-// present, by their role and who they speak for, plus nobody. Only called
-// when at least one agent seat exists.
-func speakerQuestion(agentSeats []Seat) jev.Question {
+// present, by their role and who they speak for, plus nobody. seats is the
+// whole seating, which is where the person an agent speaks for is named.
+// Only called when at least one agent seat exists.
+func speakerQuestion(seats, agentSeats []Seat) jev.Question {
 	criteria := map[string]any{
 		optionNobody: "No seat here fits the new message: it is not any agent's stated role, or a person should answer it instead.",
 	}
@@ -423,13 +453,32 @@ func speakerQuestion(agentSeats []Seat) jev.Question {
 		if role == "" {
 			role = "no stated role"
 		}
-		criteria[seat.Handle] = seatOption{Role: role, SpeaksFor: seat.DisplayName}
+		criteria[seat.Handle] = seatOption{Role: role, SpeaksFor: speaksForName(seats, seat)}
 	}
 	return jev.Question{
 		Type:         jev.TypeChoice,
 		Instructions: "Given the seats' own roles and who each speaks for, which one should answer the new message? Choose nobody if none fits — for instance, a request for a sales document is for the seat whose role is sales.",
 		Criteria:     criteria,
 	}
+}
+
+// speaksForTeam is who a contributed specialist speaks for, as Jev is told:
+// it is nobody's own agent.
+const speaksForTeam = "the whole team: a specialist contributed to the room, nobody's own agent"
+
+// speaksForName is who seat speaks for, by name, as Jev is shown it: the
+// person whose own agent it is, never the agent's own name, which is what
+// routing to "the agent of whoever handles pricing" turns on.
+func speaksForName(seats []Seat, seat Seat) string {
+	if seat.SpeaksFor == "" {
+		return speaksForTeam
+	}
+	for _, other := range seats {
+		if other.Kind == SeatPerson && other.UserID == seat.SpeaksFor {
+			return other.DisplayName
+		}
+	}
+	return "a member of the team"
 }
 
 // keepQuestion asks whether the new message changed what the organization

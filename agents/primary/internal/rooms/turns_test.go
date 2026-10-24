@@ -205,7 +205,7 @@ type turnsScriptedSpeaker struct {
 	asked map[string]int
 }
 
-func (speaker *turnsScriptedSpeaker) Speak(ctx context.Context, seat Seat, _ Situation, _ []Message) (string, error) {
+func (speaker *turnsScriptedSpeaker) Speak(ctx context.Context, seat Seat, _ Situation, _ []Message, _ Summons) (string, error) {
 	speaker.mu.Lock()
 	if speaker.asked == nil {
 		speaker.asked = map[string]int{}
