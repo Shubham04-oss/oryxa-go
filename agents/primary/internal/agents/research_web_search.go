@@ -53,7 +53,10 @@ func webSearchTool(llm model.LLM) (tool.Tool, error) {
 		Name:        webSearchName,
 		Description: "Answers a question from the live web with Google Search, reading any link the question names, and returns the answer with its sources. For current public facts only, never for the member's private data.",
 		Model:       llm,
-		Mode:        llmagent.ModeSingleTurn,
+		// No Mode: the agent tool runs it as the root of a runner of its own,
+		// which ADK refuses for a single-turn agent. As the root, with no
+		// function tools and no agent to transfer to, one model turn is the
+		// whole call, as it would be single-turn.
 		// A provider returns the instruction as written, so nothing in it is
 		// read as a session state placeholder.
 		InstructionProvider:      func(agent.ReadonlyContext) (string, error) { return webSearchInstruction, nil },

@@ -55,6 +55,8 @@ func (m *treeModel) GenerateContent(_ context.Context, request *model.LLMRequest
 		name = plannerName
 	case strings.Contains(instruction, "You are the researcher sub-agent"):
 		name = researcherName
+	case strings.Contains(instruction, "You answer one question from the live web"):
+		name = webSearchName
 	}
 	m.mu.Lock()
 	m.requests[name] = append(m.requests[name], request)
