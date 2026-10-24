@@ -80,8 +80,14 @@ type Dependencies struct {
 	// Shadow compares who may reach a connection with SpiceDB. Nil
 	// compares nothing.
 	Shadow access.Comparer
-	Logger *slog.Logger
-	Clock  func() time.Time
+	// Engine, when set, decides who may reach a connection from SpiceDB
+	// (ACCESS_ENGINE_APPS=spicedb), and Relationships writes a connection's
+	// place in it as the connection starts. Nil for both keeps the code
+	// deciding.
+	Engine        access.Decider
+	Relationships Relationships
+	Logger        *slog.Logger
+	Clock         func() time.Time
 }
 
 // PolicySource reads the organization's last applied workspace file.
@@ -100,6 +106,8 @@ type Service struct {
 	native         Native
 	nativeToolkits []string
 	shadow         access.Comparer
+	engine         access.Decider
+	relationships  Relationships
 	logger         *slog.Logger
 	now            func() time.Time
 	publicBaseURL  string
@@ -157,6 +165,8 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		pipedream:      dependencies.Pipedream,
 		policy:         dependencies.Policy,
 		shadow:         dependencies.Shadow,
+		engine:         dependencies.Engine,
+		relationships:  dependencies.Relationships,
 		toolkitBrokers: config.ToolkitBrokers,
 		logger:         dependencies.Logger,
 		now:            dependencies.Clock,

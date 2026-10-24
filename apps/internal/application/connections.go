@@ -196,6 +196,7 @@ func (s *Service) recordPending(ctx context.Context, connection domain.Connectio
 	if err := s.store.CreateConnection(ctx, connection, stateHash, event); err != nil {
 		return domain.Connection{}, err
 	}
+	s.connectionStarted(ctx, connection)
 	s.logger.InfoContext(ctx, "app connection started", "connection_id", id,
 		"organization_id", connection.OrganizationID, "toolkit", connection.Toolkit)
 	return connection, nil
@@ -417,10 +418,18 @@ func (s *Service) Connections(ctx context.Context, credentials authclient.Creden
 	if err != nil {
 		return nil, err
 	}
+	// The query already kept the caller to what the code lets them see; the
+	// engine may only narrow that.
+	visible := connections[:0]
 	for _, connection := range connections {
-		s.compare(ctx, caller, connection, access.ActionRead, true)
+		switch err := s.decide(ctx, caller, connection, access.ActionRead, true); {
+		case err == nil:
+			visible = append(visible, connection)
+		case !errors.Is(err, domain.ErrNotFound):
+			return nil, err
+		}
 	}
-	return connections, nil
+	return visible, nil
 }
 
 // Connection reads one connection, for the member it belongs to or an org
@@ -435,9 +444,8 @@ func (s *Service) Connection(ctx context.Context, credentials authclient.Credent
 		return domain.Connection{}, err
 	}
 	allowed := connection.MemberID == caller.UserID || caller.ActsAsAdmin()
-	s.compare(ctx, caller, connection, access.ActionRead, allowed)
-	if !allowed {
-		return domain.Connection{}, domain.ErrNotFound
+	if err := s.decide(ctx, caller, connection, access.ActionRead, allowed); err != nil {
+		return domain.Connection{}, err
 	}
 	return connection, nil
 }
@@ -457,7 +465,9 @@ func (s *Service) RemoveConnection(ctx context.Context, credentials authclient.C
 	if err != nil {
 		return err
 	}
-	s.compare(ctx, caller, connection, access.ActionDelete, connection.MemberID == caller.UserID || caller.Role.IsOrgAdmin())
+	if err := s.decide(ctx, caller, connection, access.ActionDelete, connection.MemberID == caller.UserID || caller.Role.IsOrgAdmin()); err != nil {
+		return err
+	}
 	reason := appsv1.RemovedByMember
 	if connection.MemberID != caller.UserID {
 		if !caller.Role.IsOrgAdmin() {

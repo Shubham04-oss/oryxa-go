@@ -231,10 +231,13 @@ func Deleted(resourceType, org, id string) (Change, error) {
 
 // ConnectionOwned is an apps connection started or connected.
 func ConnectionOwned(org, connection, member string) (Change, error) {
-	if connection == "" || member == "" {
-		return Change{}, fmt.Errorf("connection: id %q, member %q", connection, member)
+	if org == "" || connection == "" || member == "" {
+		return Change{}, fmt.Errorf("connection: organization %q, id %q, member %q", org, connection, member)
 	}
-	return Change{Organization: org, Touch: []Rel{rel("connection", connection, "owner", "member", member)}}, nil
+	return Change{Organization: org, Touch: []Rel{
+		rel("connection", connection, "org", "org", org),
+		rel("connection", connection, "owner", "member", member),
+	}}, nil
 }
 
 // AgentChanged is a primary or specialist created or updated. Its grant is

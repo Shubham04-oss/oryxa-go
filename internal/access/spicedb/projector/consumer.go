@@ -101,8 +101,11 @@ var mappers = map[string]map[string]mapper{
 		appsv1.ConnectionConnectedDetailType: decode(func(event appsv1.ConnectionConnected) (Change, error) {
 			return ConnectionOwned(event.OrganizationID, event.ConnectionID, event.MemberID)
 		}),
+		// A removed connection keeps its relationships: apps still shows it,
+		// marked removed, to its member and admins, and acting through it is
+		// refused by its status, not by SpiceDB.
 		appsv1.ConnectionRemovedDetailType: decode(func(event appsv1.ConnectionRemoved) (Change, error) {
-			return Deleted("connection", event.OrganizationID, event.ConnectionID)
+			return Change{Organization: event.OrganizationID}, nil
 		}),
 	},
 	agentsv1.Source: {

@@ -166,10 +166,15 @@ func (c caller) source(creator string) bool {
 // apps: a member's own connections, and MayReach/MayRun for a specialist
 // (apps/internal/domain/domain.go).
 func (c caller) connection(owner, action string) bool {
-	if action == access.ActionWrite {
+	switch action {
+	case access.ActionWrite:
 		return owner == c.user && (!c.v.limited || c.v.grantedWrite)
+	case access.ActionUse:
+		return owner == c.user && c.reach()
 	}
-	return owner == c.user && c.reach()
+	// Connection and Connections: its member or an org admin's own session,
+	// whatever a specialist's grant says (apps/internal/application).
+	return owner == c.user || c.admin()
 }
 
 // teams: CanSeeTeam and CanManageTeam (teams/internal/domain/control.go),
@@ -214,7 +219,7 @@ func replayCases() []replayCase {
 				}
 			}
 			for id, owner := range connections {
-				for _, action := range []string{access.ActionRead, access.ActionWrite} {
+				for _, action := range []string{access.ActionRead, access.ActionWrite, access.ActionUse} {
 					add("apps", c, action, Object{"connection", id}, c.connection(owner, action))
 				}
 			}
@@ -275,6 +280,7 @@ func world() []string {
 		rel("source:%s#created_by@member:%s", id, creator)
 	}
 	for id, owner := range connections {
+		rel("connection:%s#org@org:acme", id)
 		rel("connection:%s#owner@member:%s", id, owner)
 	}
 	// grants name every resource for the variants that have them

@@ -84,7 +84,7 @@ var sourceQueries = map[string]func(context.Context, *pgxpool.Pool, string, *Wor
 	},
 	"apps": func(ctx context.Context, pool *pgxpool.Pool, org string, world *World) error {
 		return scan(ctx, pool, `SELECT id, organization_id, member_id, toolkit
-			FROM apps_connections WHERE status <> 'removed' AND ($1 = '' OR organization_id = $1)`, org, func(rows pgx.Rows) error {
+			FROM apps_connections WHERE ($1 = '' OR organization_id = $1)`, org, func(rows pgx.Rows) error {
 			var row Connection
 			err := rows.Scan(&row.ID, &row.Org, &row.Member, &row.Toolkit)
 			world.Connections = append(world.Connections, row)

@@ -58,6 +58,7 @@ relationships: |-
 
   agent:agt_sam#acts_for@member:sam
   agent:agt_sam_research#acts_for@member:sam
+  connection:con_sam_gmail#org@org:acme
   connection:con_sam_gmail#owner@member:sam
   connection:con_sam_gmail#granted@agent:agt_sam_research
 
@@ -90,6 +91,10 @@ assertions:
     - corpus:cor_sam#granted@agent:agt_sam_research
     - connection:con_sam_gmail#granted@agent:agt_sam_research
     - connection:con_sam_gmail#use@member:sam
+    # An admin's own session sees and removes a member's connection
+    - connection:con_sam_gmail#read@member:maya
+    - connection:con_sam_gmail#delete@member:maya
+    - connection:con_sam_gmail#read_member_reach@member:sam
     # Requests
     - request:int_1#read@agent:agt_lee
     - request:int_1#decide@member:sam
@@ -127,6 +132,11 @@ assertions:
     # A grant names one agent, not its sibling
     - corpus:cor_sam#granted@agent:agt_sam
     - connection:con_sam_gmail#use@agent:agt_sam_research
+    # but never acts through it, and an agent acting for the admin doesn't
+    # see it either
+    - connection:con_sam_gmail#use@member:maya
+    - connection:con_sam_gmail#read_member_reach@member:maya
+    - connection:con_sam_gmail#read@member:lee
     # Requests: the requester reads but does not decide
     - request:int_1#decide@agent:agt_lee
     - request:int_1#read@member:lee

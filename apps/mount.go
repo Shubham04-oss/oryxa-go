@@ -25,6 +25,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/signin"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/slackbot"
+	"github.com/Shubham04-oss/oryxa-go/internal/access/spicedb/projector"
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
@@ -127,6 +128,13 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Shadow:    platform.Shadow,
 		Logger:    logger,
 	}
+	engine, err := projector.OpenEngine(platform, Name)
+	if err != nil {
+		return host.Service{}, err
+	}
+	if engine != nil {
+		dependencies.Engine, dependencies.Relationships = engine.Decider, relationships{engine}
+	}
 	nativeToolkits := config.NativeToolkits
 	if native != nil {
 		dependencies.Native = native
@@ -167,6 +175,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		NativeToolkits:       nativeToolkits,
 	})
 	if err != nil {
+		engine.Close()
 		return host.Service{}, err
 	}
 
@@ -194,6 +203,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		// anything else Oryxa serves; a write must not be cut off halfway.
 		Timeouts: host.Timeouts{Read: 15 * time.Second, Write: 120 * time.Second},
 		Workers:  workers,
+		Close:    engine.Close,
 	}, nil
 }
 

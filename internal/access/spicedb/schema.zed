@@ -95,9 +95,16 @@ definition file {
 }
 
 definition connection {
+    relation org: org
     relation owner: member
     relation granted: agent
     relation granted_write: agent
+    // seeing it and removing it: its member, or an org admin's own session
+    permission read_member_reach = owner
+    permission read = read_member_reach + org->administer
+    permission delete_member_reach = owner
+    permission delete = delete_member_reach + org->administer
+    // acting through its credential: its member only, never an admin
     permission use = owner
 }
 
