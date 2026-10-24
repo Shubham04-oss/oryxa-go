@@ -35,7 +35,7 @@
     "ENVIRONMENT": "production",
     "EDGE_PUBLIC_URL": "https://edge.oryxa.in",
     // Previews' own registrable domain (#474; edge/DEPLOY.md, "Previews' origin").
-    "EDGE_PREVIEW_URL": "https://oryxa-preview.net",
+    "EDGE_PREVIEW_URL": "https://preview.oryxa.uk",
     "SANDBOX_INSTANCE": "standard-1",
     // Calls (integration-2, B1–B5). Production shares staging's RealtimeKit
     // app for now. Secrets: REALTIMEKIT_API_TOKEN (calls answer 503 without
@@ -52,7 +52,7 @@
   },
   "routes": [
     { "pattern": "edge.oryxa.in", "custom_domain": true },
-    { "pattern": "oryxa-preview.net", "custom_domain": true }
+    { "pattern": "preview.oryxa.uk", "custom_domain": true }
   ],
   "env": {
     "staging": {
@@ -79,7 +79,7 @@
       "vars": {
         "ENVIRONMENT": "staging",
         "EDGE_PUBLIC_URL": "https://edge-staging.oryxa.in",
-        "EDGE_PREVIEW_URL": "https://staging.oryxa-preview.net",
+        "EDGE_PREVIEW_URL": "https://staging-preview.oryxa.uk",
         "SANDBOX_INSTANCE": "standard-1",
         // The test key (edge/DEPLOY.md's check) and the staging agents key
         // (alias/oryxa-staging-agents-primary in ap-south-1, the a1 dev stack). Never in production.
@@ -92,7 +92,7 @@
       },
       "routes": [
         { "pattern": "edge-staging.oryxa.in", "custom_domain": true },
-        { "pattern": "staging.oryxa-preview.net", "custom_domain": true }
+        { "pattern": "staging-preview.oryxa.uk", "custom_domain": true }
       ]
     }
   }

@@ -1,13 +1,15 @@
 # Sandbox previews' own registrable domain (#474). A preview serves pages a
 # sandbox made; on a host under oryxa.in, their script could set cookies that
 # app. and api. trust. The edge Worker serves previews only at
-# EDGE_PREVIEW_URL (edge/wrangler.jsonc): oryxa-preview.net for production,
-# staging.oryxa-preview.net for staging. Wrangler makes those custom domains
-# and their DNS records on deploy, as it does edge.oryxa.in's, so this file
-# holds only the zone they need. It is made once the domain is registered:
-# see edge/DEPLOY.md, "Previews' origin".
+# EDGE_PREVIEW_URL (edge/wrangler.jsonc): preview.oryxa.uk for production,
+# staging-preview.oryxa.uk for staging. oryxa.uk is already a zone in the
+# same Cloudflare account, so preview_domain stays empty and no zone is made
+# here; wrangler makes the custom domains and their DNS records on deploy, as
+# it does edge.oryxa.in's. Nothing that signs people in may ever live under
+# oryxa.uk: previews can set its cookies. See edge/DEPLOY.md, "Previews'
+# origin".
 variable "preview_domain" {
-  description = "Sandbox previews' registrable domain, once registered (oryxa-preview.net). Empty makes no zone (deploy/production/preview.tf)."
+  description = "A preview domain to make a zone for. Empty (the default) makes none: oryxa.uk, which previews use, is already a zone."
   type        = string
   default     = ""
 
