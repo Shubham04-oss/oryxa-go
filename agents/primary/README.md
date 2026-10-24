@@ -2162,7 +2162,9 @@ with nobody reading it.
 Vertex AI Memory Bank keeps the memories, behind the seam every backend comes
 through, `internal/adkmemory`. Without `AGENTS_PRIMARY_MEMORY_AGENT_ENGINE`
 there is no backend, the runner is built without a memory service, and Krude
-remembers nothing between threads.
+remembers nothing between threads. Bedrock AgentCore Memory is the backend it
+is moving to, behind `AGENTS_PRIMARY_MEMORY_BACKEND` (see
+[AgentCore Memory](#agentcore-memory)); unset, nothing about this changes.
 
 **Memory is scoped to an organization, not just a member.** ADK addresses
 memory by app name and user alone: `memory.SearchRequest` carries nothing
@@ -2287,6 +2289,138 @@ afterwards:
 GOOGLE_CLOUD_PROJECT=oryxa GOOGLE_CLOUD_LOCATION=us-central1 \
   AGENTS_PRIMARY_TEST_MEMORY_AGENT_ENGINE=1234567890 \
   go test ./agents/primary/internal/adkmemory/ -run TestMemoryBankRoundTrip
+```
+
+### AgentCore Memory
+
+Bedrock AgentCore Memory is the backend memory is moving to
+(`adkmemory.AgentCoreMemory`, docs/design/agent-runtime.md section 7). It is
+off unless `AGENTS_PRIMARY_MEMORY_BACKEND` says otherwise, and everything
+above `adkmemory` is the same whichever backend answers.
+
+**Layout.** Each scope is one actor, and each thread one session:
+
+| | Value |
+|---|---|
+| actor id | `<organization>/<member>/<agent>`, with `primary` for the member's primary agent (a specialist cannot be named `primary`) |
+| session id | the thread id, or `t-` and a digest of it when AgentCore would refuse it |
+| long-term namespace | `/m/<actor id>/`, from the semantic strategy's template `/m/{actorId}/` |
+
+`agentCoreActor`, `agentCoreNamespace` and `agentCoreForgetting` are the only
+places this is decided. An organization, member or agent id may hold only
+letters, digits, `_` and `-`, as the base64url ids auth makes do: a `/` would
+add a segment and let one scope's address reach into another's, so a scope with
+one is refused, not escaped.
+
+- **Write:** one `CreateEvent` per run with the run's spoken turns (the same
+  turns Memory Bank is sent: text only, no thoughts, no tool calls), the
+  member's as `USER` and everything else as `ASSISTANT`. A run in which the
+  member said nothing writes nothing. More than 100 turns go as several
+  events, a message is cut at 90,000 bytes (AgentCore takes 100 KB), and each
+  event's client token is a digest of the actor, session, first turn's time
+  and part, so a retried write is ignored rather than recorded twice.
+  Extraction is asynchronous and takes a minute or more.
+- **Search:** `RetrieveMemoryRecords` on the actor's exact namespace, never a
+  prefix, with `AGENTS_PRIMARY_MEMORY_RECALLED` as its top-k.
+- **Forget:** `ListMemoryRecords` under `/m/<organization>/` (or
+  `/m/<organization>/<member>/`), matched again here before anything is
+  deleted, then `BatchDeleteMemoryRecords` 100 at a time, retrying failed
+  records once. Then the short-term events, which hold the conversation
+  itself for their 7 days: every actor under the same prefix (`ListActors`
+  takes no filter, so all are read), their sessions and events, deleted at 15
+  a second (DeleteEvent allows 20). One deadline covers both; what is left
+  when it passes is said in the error, as Memory Bank's Forget does, and the
+  next Forget finds only that. Events go a session at a time, listed then
+  deleted, so a Forget cut short has removed whole sessions and the next one
+  starts on what is left. The deadline is two minutes (about 1,800 events),
+  inside the five the cleanup queue gives one delivery for every forgetter; a
+  busier organization takes a few deliveries. Something already gone is
+  forgotten, and so is
+  an id the layout refuses (logged, not an error): Write refuses it too, so
+  nothing was ever kept under it, and an error would only be redelivered.
+
+**Unverified: does a `/` in the actor id make namespace segments?** The layout
+assumes that a record extracted into `/m/org_a/usr_1/primary/` is listed by
+`namespacePath=/m/org_a/`, which is what forgetting a whole organization
+needs. `TestAgentCoreMemoryRoundTrip` checks exactly this against a real
+memory and fails with "the layout needs its fallback" if it does not hold.
+Searches read the exact namespace and are unaffected either way, and Forget
+matches every listed record's namespace against the prefix itself, so a
+listing that answered more widely could not delete another organization's
+memory; one that answered less widely would leave it behind, which is the
+failure the test is for. The fallback, if it fails: the template becomes
+`/m/{actorId}/` with each segment a lowercase-hex encoding of the id, and
+Forget of an organization lists every actor (`ListActors`, as event deletion
+already does) and deletes each actor's exact namespace. Only the three
+functions above change.
+
+**Settings.**
+
+| Variable | Meaning |
+|---|---|
+| `AGENTS_PRIMARY_MEMORY_BACKEND` | `vertex` (the default, and what unset means: Memory Bank as `AGENTS_PRIMARY_MEMORY_AGENT_ENGINE` has it, exactly as before), `agentcore`, `vertex+agentcore` (Memory Bank answers; AgentCore is written and forgotten beside it) or `agentcore+vertex` (the reverse) |
+| `AGENTS_PRIMARY_MEMORY_ID` | The AgentCore memory's id. Required whenever AgentCore is involved, ignored otherwise; the pairs also require `AGENTS_PRIMARY_MEMORY_AGENT_ENGINE` |
+
+The AWS region and credentials are the service's own (`AWS_REGION`, the task
+role). In a pair (`adkmemory.Shadow`), only the first answers searches; both
+are written, and a write the second missed is logged, never returned. Forget
+is different: both are always asked, and a Forget either could not finish fails
+the call, so the cleanup queue retries it. Forgetting a member is owed wherever
+their memory is, and repeating it removes nothing more.
+
+**Rollout.**
+
+1. The owner applies the infrastructure (below) with `agentcore_memory_enabled
+   = true`. The default backend for that is `vertex+agentcore`: Memory Bank
+   still answers, and AgentCore fills up beside it.
+2. Run the round trip against the production memory once (it uses
+   organizations of its own) to settle the namespace question above.
+3. After a shadow period long enough to compare answers, set
+   `agentcore_memory_backend = "agentcore+vertex"`: AgentCore answers, Memory
+   Bank is still written, so moving back is one apply.
+4. Migrate what Memory Bank held before the shadow began: during a short write
+   freeze, export its memories by scope and import them with
+   `BatchCreateMemoryRecords` into each actor's namespace (no re-extraction).
+   Not built yet.
+5. Set `agentcore_memory_backend = "agentcore"`, then remove the Vertex agent
+   engine, `memory_agent_engine` and the workload's Memory Bank grant.
+
+**Rolling back** at any step before 5's removal: set
+`agentcore_memory_backend = "vertex"` and apply. The task goes back to Memory
+Bank alone (`AGENTS_PRIMARY_MEMORY_BACKEND=vertex`, no memory id), while the
+AgentCore memory, its key and the task's grant stay, so going forward again is
+one apply. What AgentCore was told meanwhile stays in it, unread. A member or
+organization forgotten while on `vertex` is forgotten only in Memory Bank, so
+rerun those cleanups before moving forward again. Turning
+`agentcore_memory_enabled` off instead is not a rollback: tofu refuses it while
+the memory's key has `prevent_destroy`, and past that it would delete the
+memory and everything in it.
+
+**Infrastructure** (`deploy/production/agentcore_memory.tf`; the owner
+applies it, CD never does). With `agentcore_memory_enabled = true` it creates
+the memory (`<name>_krude`, events expiring after 7 days, the minimum), one
+`SEMANTIC` strategy with the namespace template `/m/{actorId}/`, a KMS key for
+the memory, and a task-role policy for the data-plane calls above on that
+memory and for the key through AgentCore only; and it gives the task
+`AGENTS_PRIMARY_MEMORY_BACKEND` (`agentcore_memory_backend`) and
+`AGENTS_PRIMARY_MEMORY_ID`. False, the default, changes nothing.
+
+```sh
+cd deploy/production
+tofu plan -var agentcore_memory_enabled=true   # memory, strategy, key, alias, policy; the task definition gains two variables
+tofu apply -var agentcore_memory_enabled=true  # or set it in a *.auto.tfvars.json so every checkout applies the same
+tofu output agentcore_memory_id
+```
+
+Whoever applies it needs `kms:CreateGrant`, `kms:DescribeKey`,
+`kms:GenerateDataKey` and `kms:Decrypt` on the new key through
+`bedrock-agentcore.<region>.amazonaws.com`, which an administrator has.
+
+The round trip runs against a real memory when one is named:
+
+```sh
+AWS_REGION=ap-south-1 AGENTS_PRIMARY_TEST_AGENTCORE_MEMORY_ID=oryxa_production_krude-abc123 \
+  go test ./agents/primary/internal/adkmemory/ -run TestAgentCoreMemoryRoundTrip -v -timeout 10m
 ```
 
 ## Events
@@ -2538,6 +2672,8 @@ The compose service has no secret of its own to fall back on, and binds `127.0.0
 | `AGENTS_PRIMARY_ARTIFACT_ACCESS_KEY_ID`, `AGENTS_PRIMARY_ARTIFACT_SECRET_ACCESS_KEY` | unset | R2 API token credentials for that bucket; required with the endpoint |
 | `AGENTS_PRIMARY_MEMORY_AGENT_ENGINE` | unset | Vertex AI agent engine whose memory bank holds what Krude remembers across a member's threads, scoped to their organization. Its bank needs similarity search configured. Without it Krude remembers nothing between threads (see [Memory](#memory)) |
 | `AGENTS_PRIMARY_MEMORY_RECALLED` | `0` (10) | How many memories one search returns. Memory Bank caps it at 100 |
+| `AGENTS_PRIMARY_MEMORY_BACKEND` | `vertex` | Where memory is kept: `vertex` (Memory Bank, as `AGENTS_PRIMARY_MEMORY_AGENT_ENGINE` has it), `agentcore`, or `vertex+agentcore` / `agentcore+vertex`, which answer from the first and also write to the second (see [AgentCore Memory](#agentcore-memory)) |
+| `AGENTS_PRIMARY_MEMORY_ID` | unset | The AgentCore memory's id; required whenever `AGENTS_PRIMARY_MEMORY_BACKEND` involves AgentCore |
 | `AGENTS_PRIMARY_MEMORY_LOCATION` | `GOOGLE_CLOUD_LOCATION` | Region the memory agent engine is in, such as `us-west1`; never `global` |
 | `EVENT_BUS_NAME` | `default` | EventBridge bus events publish on |
 | `EVENTBRIDGE_ENDPOINT` | unset | EventBridge endpoint override for the LocalStack emulator |

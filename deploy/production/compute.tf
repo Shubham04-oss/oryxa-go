@@ -218,6 +218,10 @@ locals {
     var.realtime_purge ? { REALTIME_WORKER_URL = local.app_url } : {},
     # Where SpiceDB answers, once it runs (spicedb.tf); nothing otherwise.
     local.spicedb_environment,
+    # Which backend keeps Krude's memory and the AgentCore memory's id, once
+    # agentcore_memory_enabled is on (agentcore_memory.tf); nothing otherwise,
+    # which is Memory Bank as memory_agent_engine has it.
+    local.agentcore_memory_environment,
   )
 
   app_secrets = merge(

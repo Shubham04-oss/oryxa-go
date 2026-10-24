@@ -124,9 +124,10 @@ func main() {
 	// than one scoped per run, so there is nothing here to scope it to. Left
 	// set, it would open a memory bank this process never reads and give
 	// Krude a load_memory that fails every call.
-	if settings.MemoryAgentEngine != "" {
-		log.Printf("memory: AGENTS_PRIMARY_MEMORY_AGENT_ENGINE ignored, the development UI has no organization to scope memories to")
+	if settings.MemoryAgentEngine != "" || settings.MemoryBackend != serviceconfig.MemoryBackendVertex {
+		log.Printf("memory: AGENTS_PRIMARY_MEMORY_AGENT_ENGINE and AGENTS_PRIMARY_MEMORY_BACKEND ignored, the development UI has no organization to scope memories to")
 		settings.MemoryAgentEngine = ""
+		settings.MemoryBackend, settings.MemoryID = serviceconfig.MemoryBackendVertex, ""
 	}
 
 	krude, err := assembly.Build(ctx, assembly.Options{

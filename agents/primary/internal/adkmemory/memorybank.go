@@ -168,7 +168,7 @@ func (bank *MemoryBank) Write(ctx context.Context, scope Scope, conversation ses
 	if err != nil {
 		return err
 	}
-	said := spoken(conversation)
+	said := spokenTurns(conversation)
 	if !memberSpoke(said) {
 		// A run in which the member said nothing has nothing of theirs to
 		// remember, and Memory Bank refuses one anyway: an empty source, or
@@ -179,7 +179,7 @@ func (bank *MemoryBank) Write(ctx context.Context, scope Scope, conversation ses
 	return bank.api.generate(ctx, &aiplatformpb.GenerateMemoriesRequest{
 		Parent: bank.parent,
 		Source: &aiplatformpb.GenerateMemoriesRequest_DirectContentsSource_{
-			DirectContentsSource: &aiplatformpb.GenerateMemoriesRequest_DirectContentsSource{Events: said},
+			DirectContentsSource: &aiplatformpb.GenerateMemoriesRequest_DirectContentsSource{Events: bankEvents(said)},
 		},
 		Scope: fields,
 	}, bank.wait)
@@ -353,52 +353,20 @@ func scopeFields(scope Scope) (map[string]string, error) {
 	return fields, nil
 }
 
-// spoken is what was said in a conversation, as the turns Memory Bank reads
-// to work out what is worth remembering. Only text is sent: a tool's call and
-// its result are how an answer was reached, not something the member told
-// Krude, and they carry the contents of whatever the tools read.
-func spoken(conversation session.Session) []*aiplatformpb.GenerateMemoriesRequest_DirectContentsSource_Event {
-	if conversation == nil {
-		return nil
-	}
-	var said []*aiplatformpb.GenerateMemoriesRequest_DirectContentsSource_Event
-	for event := range conversation.Events().All() {
-		if event == nil || event.Content == nil {
-			continue
-		}
-		var parts []*aiplatformpb.Part
-		for _, part := range event.Content.Parts {
-			if part == nil || part.Text == "" || part.Thought {
-				continue
-			}
-			parts = append(parts, &aiplatformpb.Part{
-				Data: &aiplatformpb.Part_Text{Text: part.Text},
-			})
-		}
-		if len(parts) == 0 {
-			continue
-		}
-		role := event.Content.Role
-		if role != genai.RoleUser {
-			// Memory Bank takes the roles Gemini does, and anything Krude,
-			// a sub-agent or a tool authored is the model's side of it.
-			role = genai.RoleModel
+// bankEvents renders turns as the events Memory Bank reads. It takes the
+// roles Gemini does, which are the ones [spokenTurns] already uses.
+func bankEvents(turns []turn) []*aiplatformpb.GenerateMemoriesRequest_DirectContentsSource_Event {
+	said := make([]*aiplatformpb.GenerateMemoriesRequest_DirectContentsSource_Event, 0, len(turns))
+	for _, spoke := range turns {
+		parts := make([]*aiplatformpb.Part, 0, len(spoke.texts))
+		for _, text := range spoke.texts {
+			parts = append(parts, &aiplatformpb.Part{Data: &aiplatformpb.Part_Text{Text: text}})
 		}
 		said = append(said, &aiplatformpb.GenerateMemoriesRequest_DirectContentsSource_Event{
-			Content: &aiplatformpb.Content{Role: role, Parts: parts},
+			Content: &aiplatformpb.Content{Role: spoke.role, Parts: parts},
 		})
 	}
 	return said
-}
-
-// memberSpoke reports whether any of turns is the member's.
-func memberSpoke(turns []*aiplatformpb.GenerateMemoriesRequest_DirectContentsSource_Event) bool {
-	for _, turn := range turns {
-		if turn.GetContent().GetRole() == genai.RoleUser {
-			return true
-		}
-	}
-	return false
 }
 
 // bankClient is memoryBankAPI over the generated client.

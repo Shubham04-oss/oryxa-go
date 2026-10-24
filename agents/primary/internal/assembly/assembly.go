@@ -427,31 +427,16 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 
 	// Memory is built before the agents, because whether Krude is given
 	// load_memory depends on there being a memory service to answer it.
-	if settings.MemoryAgentEngine != "" {
-		bank, err := adkmemory.NewMemoryBank(ctx, adkmemory.MemoryBankOptions{
-			ProjectID:   settings.GoogleCloudProject,
-			Location:    settings.MemoryLocation,
-			AgentEngine: settings.MemoryAgentEngine,
-			Recalled:    settings.MemoryRecalled,
-			Credentials: options.Google,
-		})
-		if err != nil {
-			return fail("memory bank", err)
-		}
-		krude.closers = append(krude.closers, func(context.Context) error {
-			if err := bank.Close(); err != nil {
-				return fmt.Errorf("close the memory bank: %w", err)
-			}
-			return nil
-		})
-		remembering, err := adkmemory.New(bank)
+	backend, err := krude.memoryBackend(ctx, settings, options, logger)
+	if err != nil {
+		return nil, errors.Join(err, krude.Close(ctx))
+	}
+	if backend != nil {
+		remembering, err := adkmemory.New(backend)
 		if err != nil {
 			return fail("memory", err)
 		}
 		krude.Memory = remembering
-		logger.InfoContext(ctx, "memories kept in Vertex AI Memory Bank", "agent_engine", settings.MemoryAgentEngine, "location", settings.MemoryLocation)
-	} else {
-		logger.InfoContext(ctx, "Krude remembers nothing between threads; set AGENTS_PRIMARY_MEMORY_AGENT_ENGINE to give it memory")
 	}
 
 	if err := krude.buildAgents(); err != nil {
