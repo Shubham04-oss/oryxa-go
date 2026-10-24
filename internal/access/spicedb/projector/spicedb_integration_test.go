@@ -14,6 +14,7 @@ import (
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/access/spicedb"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/spec"
 )
 
 type memoryTokens map[string]string
@@ -120,17 +121,44 @@ func TestAgainstSpiceDB(t *testing.T) {
 		t.Fatalf("teams were not read, yet the reconcile changed them: %v", got)
 	}
 
+	allowed := func(resourceType, id, permission, user string) bool {
+		t.Helper()
+		check, err := client.CheckPermission(ctx, &v1.CheckPermissionRequest{
+			Consistency: &v1.Consistency{Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true}},
+			Resource:    objectRef(resourceType, id), Permission: permission,
+			Subject: &v1.SubjectReference{Object: objectRef("member", user)},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return check.GetPermissionship() == v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION
+	}
+
 	// A check sees the reconciled owner, at least as fresh as the last write.
 	token, _ := store.Latest(ctx, "acme")
-	check, err := client.CheckPermission(ctx, &v1.CheckPermissionRequest{
-		Consistency: &v1.Consistency{Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true}},
-		Resource:    objectRef("org", "acme"), Permission: "administer",
-		Subject: &v1.SubjectReference{Object: objectRef("member", "olu")},
-	})
-	if err != nil {
+	if !allowed("org", "acme", "administer", "olu") || token.GetToken() == "" {
+		t.Fatalf("olu does not administer acme, token %q", token.GetToken())
+	}
+
+	// #442: the reconcile replaces the chart on per-user member objects with
+	// the org's own chart_person ones.
+	apply(Change{Touch: []Rel{rel("member", "sam", "chart", "org", "acme"), rel("member", "sam", "manager", "member", "olu")}}, nil)
+	world = World{
+		Read: map[string]bool{"auth": true, "workspace": true},
+		Memberships: []Membership{
+			{Org: "acme", User: "olu", Role: "owner", Email: "olu@acme.test"},
+			{Org: "acme", User: "sam", Role: "member", Email: "sam@acme.test"},
+		},
+		Charts: []Chart{{Org: "acme", Chart: spec.OrgChart{Authority: []string{"manages"},
+			Relationships: []spec.Relationship{{From: "olu@acme.test", Relation: "manages", To: "sam@acme.test"}}}}},
+	}
+	if _, _, err := reconciler.fix(ctx, world, Filter{}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if check.GetPermissionship() != v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION || token.GetToken() == "" {
-		t.Fatalf("check = %v, token %q", check.GetPermissionship(), token.GetToken())
+	if got := read(Filter{ResourceType: "member"}); len(got) != 0 {
+		t.Fatalf("the per-user chart outlived the reconcile: %v", got)
+	}
+	if !allowed("chart_person", "acme/sam", "outranked_by", "olu") || allowed("chart_person", "globex/sam", "outranked_by", "olu") {
+		t.Fatal("olu should outrank sam in acme's chart and nowhere else")
 	}
 }

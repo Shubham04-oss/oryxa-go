@@ -2,6 +2,7 @@ package primary
 
 import (
 	"context"
+	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 	"github.com/Shubham04-oss/oryxa-go/internal/access/spicedb/projector"
@@ -17,7 +18,7 @@ func (r agentRelationships) AgentChanged(ctx context.Context, agent managedagent
 	if err != nil {
 		return err
 	}
-	if err := r.engine.Apply(ctx, change); err != nil {
+	if err := r.engine.Apply(ctx, change, time.Now()); err != nil {
 		return err
 	}
 	return r.engine.SyncGrants(ctx, agent.OrganizationID, agent.ID)
@@ -28,5 +29,5 @@ func (r agentRelationships) AgentDeleted(ctx context.Context, organizationID, ag
 	if err != nil {
 		return err
 	}
-	return r.engine.Apply(ctx, change)
+	return r.engine.Apply(ctx, change, time.Now())
 }

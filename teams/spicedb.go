@@ -3,6 +3,7 @@ package teams
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/access/spicedb/projector"
 	"github.com/Shubham04-oss/oryxa-go/teams/internal/domain"
@@ -18,7 +19,7 @@ func (r relationships) apply(ctx context.Context) func(projector.Change, error) 
 		if err != nil {
 			return err
 		}
-		return r.engine.Apply(ctx, change)
+		return r.engine.Apply(ctx, change, time.Now())
 	}
 }
 
