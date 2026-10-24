@@ -52,18 +52,21 @@ func (r Rules) Decide(_ context.Context, room Situation, message Message) (Verdi
 	switch {
 	case isAcknowledgement(body):
 		verdict.Why = "acknowledgement: never answered"
-	case strings.Contains(body, "?") && freeAgentSeat(room.Seats):
-		verdict.Answer = true
-		verdict.Why = "asks something, and an agent seat is free to take it"
 	case strings.Contains(body, "?"):
-		verdict.Why = "asks something, but no agent seat is free"
+		seat, ok := freeAgentSeat(room.Seats, message)
+		if !ok {
+			verdict.Why = "asks something, but no agent seat is free"
+			break
+		}
+		// Answering with nobody to answer is not answering: the relay only
+		// runs a seat it is given. Which seat is not judged here, it is the
+		// first free one in a fixed order (see freeAgentSeat), and the seat
+		// is told nobody named it, so it may still pass.
+		verdict.Answer, verdict.Speaker = true, seat.Handle
+		verdict.Why = "asks something, and an agent seat is free to take it"
 	default:
 		verdict.Why = "not a question"
 	}
-
-	// Rules leaves Speaker empty even when Answer is true: choosing which of
-	// several seats should take a message is a judgment, and a rule that
-	// guessed at it would not be honest about being a rule.
 
 	if kind, ok := ruleKeep(body); ok {
 		verdict.Keep, verdict.Kind = true, kind
@@ -140,17 +143,43 @@ func ruleKeep(body string) (kind string, ok bool) {
 	return "", false
 }
 
-// freeAgentSeat reports whether some agent seat's own person is not
-// currently reading the room. A present person answers for themselves; an
-// agent whose person is right here is not free to answer over them, which
-// is the same fact [AgentSpeaker.Speak] already reads presentOwner for.
-func freeAgentSeat(seats []Seat) bool {
-	for _, seat := range seats {
-		if seat.Kind == SeatAgent && !presentOwner(seats, seat.UserID) {
-			return true
+// freeAgentSeat is the agent seat free to take a message that named nobody,
+// if any is: one that would not be answering over the person it speaks for.
+// A present person answers for themselves, and the author of message is
+// doing the talking, so neither one's own agent is free; a contributed
+// specialist speaks for nobody and is free whoever is reading. The order is
+// fixed rather than judged: specialists first, since they were contributed to
+// serve the team, then the own agents of people who are away, each in seating
+// order. This is the same presence [AgentSpeaker.Speak] reads presentOwner
+// for, and what the relay falls back on when a routed seat is not free.
+func freeAgentSeat(seats []Seat, message Message) (Seat, bool) {
+	var standIn *Seat
+	for index, seat := range seats {
+		if seat.Kind != SeatAgent || seat.Handle == message.AuthorHandle {
+			continue
+		}
+		if seat.SpeaksFor == "" {
+			return seat, true
+		}
+		if standIn == nil && !speaksOverPerson(seats, seat, message) {
+			standIn = &seats[index]
 		}
 	}
-	return false
+	if standIn == nil {
+		return Seat{}, false
+	}
+	return *standIn, true
+}
+
+// speaksOverPerson reports whether seat, somebody's own agent, would be
+// talking over the person it speaks for if it took message unasked: that
+// person is reading the room, or wrote message. A contributed specialist
+// speaks for nobody, so it never does.
+func speaksOverPerson(seats []Seat, seat Seat, message Message) bool {
+	if seat.SpeaksFor == "" {
+		return false
+	}
+	return seat.SpeaksFor == message.AuthorUserID || presentOwner(seats, seat.SpeaksFor)
 }
 
 // ---------------------------------------------------------------------
