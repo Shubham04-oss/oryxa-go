@@ -413,3 +413,54 @@ func TestAReadOnlyAppsToolboxOffersOnlyTheReads(t *testing.T) {
 		t.Fatalf("description = %q", box.Description)
 	}
 }
+
+// ADK's MCP toolset holds its session open until it is closed. The apps
+// toolbox, full or read-only, closes it, and lists nothing once closed.
+func TestAppsToolboxClosesItsMCPSession(t *testing.T) {
+	for _, readOnly := range []bool{false, true} {
+		url, httpClient, _ := newFakeApps(t)
+		config := AppsConfig{URL: url, HTTP: httpClient, Tokens: &fakeAppsTokens{token: "agent-token"}, ReadOnly: readOnly}
+		sessions := session.InMemoryService()
+		created, err := sessions.Create(context.Background(), &session.CreateRequest{
+			AppName: "test", UserID: "user-1", State: map[string]any{OrganizationIDKey: "org-1"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := agent.NewContext(&fakeInvocationContext{base: context.Background(), session: created.Session})
+
+		open, err := AppsToolbox(config)
+		if err != nil {
+			t.Fatalf("AppsToolbox() error = %v", err)
+		}
+		if _, err := open.Toolset.Tools(ctx); err != nil {
+			t.Fatalf("read-only %v: Tools() before Close = %v", readOnly, err)
+		}
+		if err := open.Close(); err != nil {
+			t.Fatalf("read-only %v: Close() = %v", readOnly, err)
+		}
+		if err := open.Close(); err != nil {
+			t.Fatalf("read-only %v: a second Close() = %v", readOnly, err)
+		}
+
+		closed, err := AppsToolbox(config)
+		if err != nil {
+			t.Fatalf("AppsToolbox() error = %v", err)
+		}
+		if err := closed.Close(); err != nil {
+			t.Fatalf("read-only %v: Close() before any use = %v", readOnly, err)
+		}
+		if _, err := closed.Toolset.Tools(ctx); !errors.Is(err, mcp.ErrConnectionClosed) {
+			t.Fatalf("read-only %v: Tools() after Close = %v, want mcp.ErrConnectionClosed", readOnly, err)
+		}
+	}
+}
+
+func TestAToolboxWithoutACloserClosesAsNothing(t *testing.T) {
+	if err := (Toolbox{Name: "plain", Toolset: staticToolset{}}).Close(); err != nil {
+		t.Fatalf("Close() = %v", err)
+	}
+	if err := (Toolbox{Name: "unconnected"}).Close(); err != nil {
+		t.Fatalf("Close() = %v", err)
+	}
+}

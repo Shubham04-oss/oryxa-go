@@ -1,19 +1,115 @@
 package agents
 
 import (
+	"context"
+	"time"
+
 	"google.golang.org/genai"
+
+	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/tool/toolconfirmation"
 )
 
 // interruptedResult is the result given to a function call that nobody
 // answered. Whether its tool ran, and what it did, is not known.
 const interruptedResult = "This call was interrupted before it returned, so there is no result. It may or may not have taken effect; check before repeating it."
 
+// InterruptedCallsInvocation is the invocation ID of every event
+// InterruptedCallEvents makes. It names no run of the agent's.
+const InterruptedCallsInvocation = "interrupted-calls"
+
+// waitingCallNames are the calls ADK makes to wait on the member: a tool's
+// confirmation, and a credential it needs. They are answered by the member,
+// never as interrupted.
+var waitingCallNames = map[string]bool{
+	toolconfirmation.FunctionCallName: true,
+	"adk_request_credential":          true,
+}
+
+// InterruptedCallEvents returns the events that answer, as interrupted, every
+// function call in a thread's events that nothing answers: one event for
+// each event that made such calls, holding a response to each of them, by
+// the same author, on the same branch and in the same isolation scope, so
+// ADK reads it as that agent's tool results.
+//
+// A run cut off after a model turn was stored and before its tools answered,
+// as a deploy cuts one, leaves such calls behind. Since ADK v2.5, ADK drops
+// a call with no response from what it sends the model, so the model would
+// never learn the call was made, and could make it again: a send the member
+// confirmed, sent twice. Stored in the thread before the next run, these
+// responses tell it the call was interrupted and to check before repeating
+// it, once, for every later run alike.
+//
+// A call is left alone when anything in events answers it, when it has no ID
+// to answer it by (answerDanglingCalls answers that one in the request),
+// when it is waiting on the member — a confirmation or credential request,
+// or any call ADK marked long-running — or when a compaction already covers
+// it.
+func InterruptedCallEvents(ctx context.Context, events []*session.Event) []*session.Event {
+	answered := map[string]bool{}
+	var compactedThrough time.Time
+	for _, event := range events {
+		if event == nil {
+			continue
+		}
+		for _, id := range event.LongRunningToolIDs {
+			answered[id] = true
+		}
+		if event.Content != nil {
+			for _, part := range event.Content.Parts {
+				if part != nil && part.FunctionResponse != nil && part.FunctionResponse.ID != "" {
+					answered[part.FunctionResponse.ID] = true
+				}
+			}
+		}
+		if compaction := event.Actions.Compaction; compaction != nil && compaction.EndTimestamp.After(compactedThrough) {
+			compactedThrough = compaction.EndTimestamp
+		}
+	}
+	var repairs []*session.Event
+	for _, event := range events {
+		if event == nil || event.Content == nil || event.Partial || !event.Timestamp.After(compactedThrough) {
+			continue
+		}
+		var responses []*genai.Part
+		for _, part := range event.Content.Parts {
+			if part == nil || part.FunctionCall == nil {
+				continue
+			}
+			call := part.FunctionCall
+			if call.ID == "" || answered[call.ID] || waitingCallNames[call.Name] {
+				continue
+			}
+			responses = append(responses, &genai.Part{FunctionResponse: &genai.FunctionResponse{
+				ID:       call.ID,
+				Name:     call.Name,
+				Response: map[string]any{"error": interruptedResult},
+			}})
+		}
+		if len(responses) == 0 {
+			continue
+		}
+		repair := session.NewEvent(ctx, InterruptedCallsInvocation)
+		repair.Author = event.Author
+		repair.Branch = event.Branch
+		repair.IsolationScope = event.IsolationScope
+		repair.Content = &genai.Content{Role: genai.RoleUser, Parts: responses}
+		repairs = append(repairs, repair)
+	}
+	return repairs
+}
+
 // answerDanglingCalls returns contents with a function response for every
 // function call that has none.
 //
+// It is the fallback to InterruptedCallEvents, which answers such calls in
+// the thread itself: it still answers a call with no ID, which ADK keeps,
+// and any call reaching a model some other way.
+//
 // A run cancelled after a model turn was stored and before its tools
 // answered, as a deploy cancels one, leaves the thread's history ending in
-// calls nobody answered, and ADK sends it as it is. Vertex refuses a
+// calls nobody answered. ADK drops such a call when it has an ID, and sends
+// one without an ID as it is. Vertex refuses a
 // function call turn unless the turn after it holds a response for each
 // call, so it would refuse every later request on the thread the same way.
 // The missing responses say the call was interrupted. They go in a turn of

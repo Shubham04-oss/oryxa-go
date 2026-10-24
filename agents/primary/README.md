@@ -5,7 +5,7 @@ configuration behind every agent interaction. adk-go is its engine and Gemini
 its model. The web Worker's SQLite-backed `ThreadChatAgent` talks to it over HTTP,
 and the supporting services in `secondary` sit beside it.
 
-Status: the engine is in, and members reach it. adk-go v2.4.0 runs Krude, a
+Status: the engine is in, and members reach it. adk-go v2.6.0 runs Krude, a
 Gemini assistant with dedicated sub-agents, dynamic sub-agents, temporary
 helpers and toolboxes that load on demand with their own skills; the AgentCore
 sandbox and browser are wired today. A model router sends planning and bulk

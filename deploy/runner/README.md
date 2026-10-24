@@ -1,15 +1,29 @@
-# The self-hosted runner
+# The self-hosted runners
 
-CI and CD run on a GitHub Actions runner in Docker on the owner's Mac, not on GitHub's machines. GitHub's minutes for this private repository cost money, and the account's budget ran out on 2026-09-30. The Mac is Apple silicon, so the images a release pushes are built natively for Fargate's arm64.
+CI (`ci.yml`) runs on self-hosted runners labelled `self-hosted, oryxa-go`, except for a pull request from a fork, which runs on GitHub's `ubuntu-latest`. The production deploy (`deploy.yml`) always runs on GitHub's machines (`ubuntu-24.04-arm` builds the arm64 image natively), never here: it holds the AWS deploy role, the Cloudflare token and the deploy key that bypasses main's ruleset.
 
-**Where jobs run.** The repository variable `CI_RUNNER` decides:
-- `["self-hosted","oryxa-mac"]` sends every job in `ci.yml` and `deploy.yml` to this runner;
-- deleting the variable sends them back to GitHub's `ubuntu-latest`.
+- **Linux (a1, or a host of its own):** `linux.sh` below. This is how runners should be set up.
+- **The Mac:** `start.sh`, further down. It predates the hardening and gives jobs the Mac's Docker socket; use it only for a private repository.
+
+## Linux runners
 
 ```bash
-gh variable set CI_RUNNER --body '["self-hosted","oryxa-mac"]'   # this runner
-gh variable delete CI_RUNNER                                        # GitHub's machines
+sudo install -d -m 700 /etc/oryxa-runner
+sudo install -m 600 /dev/stdin /etc/oryxa-runner/token   # paste the token, then Ctrl-D
+sudo deploy/runner/linux.sh oryxa-go-1 oryxa-go-2
 ```
+
+- **The token** is a fine-grained personal access token for this repository only, with Administration: write and nothing else. It registers one runner per job; jobs never see it.
+- **One job per runner, then a clean slate** (`ephemeral.sh`). Each job gets a just-in-time registration that GitHub removes after it. Before the next, everything the runner's user runs is killed and its home, work directory, tool cache and Docker data are deleted. Nothing a job plants reaches a later one; the cost is cold caches, so every job downloads its Go modules, pnpm store and images again.
+- **No root.** Each runner runs as `runner-NAME`: no sudo, not in the `docker` group (which is root on the host). Jobs get Docker from a rootless engine running as that user, so `docker run`, service containers and `docker build` work as before.
+- **A gate on the runner** (`job-started.sh`, the runner's job-started hook). It fails a job before any of its code runs if the job is for another repository, a pull request from a fork, `pull_request_target`, or `deploy.yml`. A pull request can edit `ci.yml`, so the routing there is not enough on its own. `job-started-test.sh` checks the gate.
+- **Network.** A runner's user (its containers included) reaches the internet and the host's loopback only. Private ranges, the tailnet except its DNS, and the cloud's metadata service are refused.
+- **Updating:** run `linux.sh` again. It fetches the latest runner, verifies its checksum and restarts the runners, cancelling running jobs.
+- **Removing one:** `sudo systemctl disable --now oryxa-runner@NAME`, then `sudo userdel runner-NAME` and `sudo rm /etc/oryxa-runner/NAME.env`. GitHub removes just-in-time runners itself.
+
+`linux.sh` prints a warning for every other home or runner directory a runner's user can still read. Fix each one (`chmod 700`), or better, give the runners a host of their own.
+
+## The Mac runner
 
 **Start it, or bring it back** after a restart or an image change:
 
@@ -34,7 +48,7 @@ deploy/runner/start.sh
 - **Its first jobs are slower:** its engine and Go caches start empty.
 - **The engine's trust:** it runs privileged, which amounts to the same access as the first runner's Docker socket.
 
-**Trust.** A job can reach the Mac's files through Docker's shared folders. That's acceptable because only the owner and their agents push to this private repository. **Never attach this runner to a public repository,** since there anyone's pull request could run code on the Mac.
+**Trust.** A job here runs as root in a container holding the Mac's Docker socket, so it can reach everything on the Mac. That is acceptable only while just the owner and their agents can run code on it: a private repository, or the Linux runners' gate above. On a public repository use `linux.sh` instead.
 
 **Removing it:**
 1. Run `docker rm -f oryxa-mac-1 && docker volume rm oryxa-mac-1`.

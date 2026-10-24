@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"syscall"
 
 	"google.golang.org/grpc"
@@ -23,16 +24,35 @@ import (
 
 var manifestID = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
 
-// Main serves srv on SocketPath(id) until the process is interrupted.
+// Main serves srv until the process is interrupted: on the listener the host
+// handed it (ListenerFDEnv), else on SocketPath(id).
 func Main(srv pb.ConnectorServer, id string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if fd := os.Getenv(ListenerFDEnv); fd != "" {
+		n, err := strconv.Atoi(fd)
+		if err != nil {
+			return errors.New("invalid " + ListenerFDEnv)
+		}
+		f := os.NewFile(uintptr(n), "listener")
+		lis, err := net.FileListener(f)
+		f.Close()
+		if err != nil {
+			return err
+		}
+		return serve(ctx, srv, lis)
+	}
 	path, err := SocketPath(id)
 	if err != nil {
 		return err
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	return Serve(ctx, srv, path)
 }
+
+// ListenerFDEnv names the file descriptor of a Unix socket the host already
+// listens on. A connector running as another user cannot reach the host's
+// socket directory, so the host binds the socket and passes it down.
+const ListenerFDEnv = "ORYXA_CONNECTOR_LISTENER_FD"
 
 // SocketEnv is the variable through which the host tells a connector where to listen.
 const SocketEnv = "ORYXA_CONNECTOR_SOCKET"
@@ -64,6 +84,10 @@ func Serve(ctx context.Context, srv pb.ConnectorServer, path string) error {
 		lis.Close()
 		return err
 	}
+	return serve(ctx, srv, lis)
+}
+
+func serve(ctx context.Context, srv pb.ConnectorServer, lis net.Listener) error {
 	// ponytail: no TLS; the socket's file mode is the boundary.
 	s := grpc.NewServer()
 	pb.RegisterConnectorServer(s, srv)

@@ -165,6 +165,14 @@ type Config struct {
 	// It changes knowledge grounding to explicit returned passage text, keeps
 	// full capture for copying and other tools, and defaults to false.
 	ConsentPassagesOnly bool
+	// SingleAgent builds Krude, the member's primary agent, as one agent
+	// with tools (AGENTS_PRIMARY_SINGLE_AGENT, false unless set): web_search
+	// and plan in place of the planner, the researcher, helpers and
+	// sub-agents of its own (agents.SingleAgentRoot,
+	// docs/design/agent-runtime.md). Off, Krude is built as it always was.
+	// Unattended, room and delivering runs, and specialists, are the same
+	// either way.
+	SingleAgent bool
 	// ModelPrices overrides the price table used for run costs, as JSON of
 	// per-million USD rates by model.
 	ModelPrices string
@@ -336,6 +344,10 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	singleAgent, err := boolValue(getenv, "AGENTS_PRIMARY_SINGLE_AGENT", false)
+	if err != nil {
+		return Config{}, err
+	}
 	slackConsent, slackTicketKey, err := slackConsentSettings(getenv)
 	if err != nil {
 		return Config{}, err
@@ -489,6 +501,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		ConsentGuardrailIdentifier: consentGuardrailIdentifier,
 		ConsentGuardrailVersion:    consentGuardrailVersion,
 		ConsentPassagesOnly:        consentKnowledgePassagesOnly,
+		SingleAgent:                singleAgent,
 		ModelPrices:                modelPrices,
 		AppsURL:                    strings.TrimSpace(getenv("APPS_URL")),
 		RagURL:                     strings.TrimSpace(getenv("RAG_URL")),

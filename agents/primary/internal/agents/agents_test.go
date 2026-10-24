@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"unicode/utf8"
 
@@ -54,6 +55,8 @@ func (m *treeModel) GenerateContent(_ context.Context, request *model.LLMRequest
 		name = plannerName
 	case strings.Contains(instruction, "You are the researcher sub-agent"):
 		name = researcherName
+	case strings.Contains(instruction, "You answer one question from the live web"):
+		name = webSearchName
 	}
 	m.mu.Lock()
 	m.requests[name] = append(m.requests[name], request)
@@ -320,6 +323,58 @@ func TestKrudeLoadsToolboxesWhenATaskNeedsThem(t *testing.T) {
 	}
 }
 
+// ADK asks a toolset for its tools again before every model step (adk-go
+// #785, in v2.5), so the loaded toolset has no ProcessRequest of its own to
+// pack what load_tools loaded mid-invocation: the test above passes on
+// ADK's re-evaluation alone.
+func TestTheLoadedToolsetLeavesPackingToADK(t *testing.T) {
+	catalog, err := newToolCatalog(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, packs := catalog.loaded().(interface {
+		ProcessRequest(agent.Context, *model.LLMRequest) error
+	}); packs {
+		t.Fatal("the loaded toolset packs its own tools; ADK re-evaluates Tools before every step")
+	}
+}
+
+// A toolbox loaded mid-invocation stays callable on every later step of that
+// invocation, not only the one right after load_tools.
+func TestALoadedToolboxStaysCallableForTheRestOfTheTurn(t *testing.T) {
+	notes := Toolbox{Name: "notes", Description: "Notes.", Toolset: staticToolset{echoTool(t, "notes_add"), echoTool(t, "notes_read")}}
+	llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
+		switch {
+		case functionResponse(request, "notes_read") != "":
+			return genai.NewContentFromText("Done.", genai.RoleModel)
+		case functionResponse(request, "notes_add") != "":
+			return functionCalls(&genai.FunctionCall{ID: "call_read", Name: "notes_read", Args: map[string]any{"text": "read back"}})
+		case functionResponse(request, "load_tools") != "":
+			return functionCalls(&genai.FunctionCall{ID: "call_add", Name: "notes_add", Args: map[string]any{"text": "buy milk"}})
+		default:
+			return functionCalls(&genai.FunctionCall{ID: "call_load", Name: "load_tools", Args: map[string]any{"names": []any{"notes"}}})
+		}
+	})
+	h := newHarness(t, llm, notes)
+	if answer := h.turn("member_1", nil, "Add a note and read it back."); answer != "Done." {
+		t.Fatalf("answer = %q", answer)
+	}
+
+	krude := llm.requestsFor(RootName)
+	if len(krude) != 4 {
+		t.Fatalf("Krude made %d model calls, want 4", len(krude))
+	}
+	for step, request := range krude[1:] {
+		declared := declaredFunctions(request)
+		if countName(declared, "notes_add") != 1 || countName(declared, "notes_read") != 1 {
+			t.Fatalf("step %d declared %v, want each notes tool once", step+2, declared)
+		}
+	}
+	if read := functionResponse(krude[3], "notes_read"); !strings.Contains(read, "read back") {
+		t.Fatalf("the second loaded tool did not run, got %q", read)
+	}
+}
+
 func TestKrudeUsesAToolboxLoadedBeforeTheTurn(t *testing.T) {
 	notes := Toolbox{Name: "notes", Description: "Notes.", Toolset: staticToolset{echoTool(t, "notes_add")}}
 	llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
@@ -415,6 +470,50 @@ func TestKrudeSpawnsTemporaryHelpersTogether(t *testing.T) {
 	}
 	results := functionResponse(llm.requestsFor(RootName)[1], "spawn_helper")
 	for _, want := range []string{"Draft ready.", "Facts listed.", "helper_drafter_", "helper_fact_checker_"} {
+		if !strings.Contains(results, want) {
+			t.Fatalf("spawn_helper results %s are missing %q", results, want)
+		}
+	}
+}
+
+// ADK v2.6 shares one run between RunNode calls with the same WithRunID and
+// replays a finished one. spawn_helper passes no run ID and names every
+// helper apart, so two identical helpers in one turn each run, and spawning
+// the same helper in a later turn of the same thread runs it again.
+func TestIdenticalHelpersEachRun(t *testing.T) {
+	var helperRuns, calls atomic.Int64
+	llm := newTreeModel(func(agentName string, request *model.LLMRequest) *genai.Content {
+		switch {
+		case agentName == "helper":
+			return genai.NewContentFromText(fmt.Sprintf("Run %d.", helperRuns.Add(1)), genai.RoleModel)
+		case hasFunctionResponse(request) && request.Contents[len(request.Contents)-1].Parts[0].FunctionResponse != nil:
+			return genai.NewContentFromText("Done.", genai.RoleModel)
+		default:
+			same := map[string]any{"name": "drafter", "instruction": "You draft.", "task": "Draft it."}
+			return functionCalls(
+				&genai.FunctionCall{ID: fmt.Sprintf("call_%d", calls.Add(1)), Name: "spawn_helper", Args: same},
+				&genai.FunctionCall{ID: fmt.Sprintf("call_%d", calls.Add(1)), Name: "spawn_helper", Args: same},
+			)
+		}
+	})
+	h := newHarness(t, llm)
+	ctx := context.Background()
+	created, err := h.sessions.Create(ctx, &session.CreateRequest{AppName: RootName, UserID: "member_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for turn := 1; turn <= 2; turn++ {
+		for _, err := range h.turns.Run(ctx, "member_1", created.Session.ID(), genai.NewContentFromText("Draft it twice.", genai.RoleUser), agent.RunConfig{}) {
+			if err != nil {
+				t.Fatalf("turn %d: %v", turn, err)
+			}
+		}
+		if got := helperRuns.Load(); got != int64(2*turn) {
+			t.Fatalf("after turn %d the helpers ran %d times, want %d", turn, got, 2*turn)
+		}
+	}
+	results := functionResponse(llm.requestsFor(RootName)[len(llm.requestsFor(RootName))-1], "spawn_helper")
+	for _, want := range []string{"helper_drafter_1", "helper_drafter_2", "helper_drafter_3", "helper_drafter_4"} {
 		if !strings.Contains(results, want) {
 			t.Fatalf("spawn_helper results %s are missing %q", results, want)
 		}

@@ -157,6 +157,10 @@ type Krude struct {
 	// of a run delivering one interaction, and of no other run; empty leaves
 	// each model its own default.
 	deliveryThinking genai.ThinkingLevel
+	// singleAgent builds Root as one agent with tools
+	// (agents.SingleAgentRoot) rather than with its sub-agents (agents.Root):
+	// Settings' SingleAgent. Every other build is the same either way.
+	singleAgent bool
 
 	// closers stops everything Build opened, kept in the order Build opened
 	// them. Close runs them in reverse — the same order devui's own defers
@@ -307,6 +311,12 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 			logger.WarnContext(ctx, "apps toolbox unavailable, running without it", "error", err)
 		} else {
 			toolboxes = append(toolboxes, appsToolbox)
+			krude.closers = append(krude.closers, func(context.Context) error {
+				if err := appsToolbox.Close(); err != nil {
+					return fmt.Errorf("close apps toolbox: %w", err)
+				}
+				return nil
+			})
 			logger.InfoContext(ctx, "apps toolbox", "url", settings.AppsURL)
 		}
 		readOnly, err := agents.AppsToolbox(agents.AppsConfig{
@@ -318,6 +328,12 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		if err == nil {
 			unattended = append(unattended, readOnly)
 			krude.readOnlyApps = &readOnly
+			krude.closers = append(krude.closers, func(context.Context) error {
+				if err := readOnly.Close(); err != nil {
+					return fmt.Errorf("close read-only apps toolbox: %w", err)
+				}
+				return nil
+			})
 		}
 	}
 	if settings.RagURL != "" {
@@ -400,6 +416,10 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 	krude.room = room
 	krude.deliveryToolboxes = deliveryToolboxes(unattended, unattendedQuiet, deliveringInteractions)
 	krude.deliveryThinking = settings.DeliveryThinking
+	krude.singleAgent = settings.SingleAgent
+	if settings.SingleAgent {
+		logger.InfoContext(ctx, "Krude runs as one agent with web_search and plan, and no sub-agents")
+	}
 	if settings.DeliveryThinking != "" {
 		logger.InfoContext(ctx, "runs delivering an agent request think at a set level; every other run as its model does by default",
 			"thinking_level", settings.DeliveryThinking)
@@ -484,7 +504,11 @@ func (krude *Krude) ManagedRoom(spec agents.ManagedSpec) (agent.Agent, error) {
 // buildAgents builds Krude, for every kind of run, from the router and the
 // toolboxes Build gathered.
 func (krude *Krude) buildAgents() error {
-	root, err := agents.Root(krude.router, krude.toolboxes, krude.Memory != nil)
+	buildRoot := agents.Root
+	if krude.singleAgent {
+		buildRoot = agents.SingleAgentRoot
+	}
+	root, err := buildRoot(krude.router, krude.toolboxes, krude.Memory != nil)
 	if err != nil {
 		return fmt.Errorf("root agent: %w", err)
 	}

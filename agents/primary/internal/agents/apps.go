@@ -3,6 +3,7 @@ package agents
 import (
 	_ "embed"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"slices"
@@ -53,7 +54,9 @@ type AppsConfig struct {
 // yet know about, always asks first.
 //
 // Building the toolbox makes no network call of its own: the MCP client
-// connects, and lists tools, lazily on first use.
+// connects, and lists tools, lazily on first use. The toolbox holds that MCP
+// session open until it is closed: whoever builds it closes it, with
+// Toolbox.Close, once no agent uses it any more.
 func AppsToolbox(config AppsConfig) (Toolbox, error) {
 	baseURL := strings.TrimRight(config.URL, "/")
 	if baseURL == "" {
@@ -86,6 +89,12 @@ func AppsToolbox(config AppsConfig) (Toolbox, error) {
 		return Toolbox{}, fmt.Errorf("apps toolbox: %w", err)
 	}
 
+	// ADK's MCP toolset is an io.Closer, which wrapping and filtering hide,
+	// so the toolbox keeps the original to close.
+	closer, ok := inner.(io.Closer)
+	if !ok {
+		return Toolbox{}, fmt.Errorf("apps toolbox: the MCP toolset %T cannot be closed", inner)
+	}
 	var toolset tool.Toolset = &listedOnce{Toolset: memberauth.WrapToolset(inner)}
 	description := "Every app the member has connected through Composio — their real GitHub repos, files, email, calendars, CRMs and the rest — reached through their own connection: search a toolkit's tools, read data, and make changes with confirmation."
 	if config.ReadOnly {
@@ -96,9 +105,20 @@ func AppsToolbox(config AppsConfig) (Toolbox, error) {
 		Name:         AppsToolboxName,
 		Description:  description,
 		Instructions: appsInstructions,
-		Toolset:      toolset,
+		Toolset:      closingToolset{Toolset: toolset, closer: closer},
 	}, nil
 }
+
+// closingToolset is a toolset that closes what it was built on, such as the
+// MCP toolset a wrapped or filtered toolset reaches.
+type closingToolset struct {
+	tool.Toolset
+	closer io.Closer
+}
+
+func (c closingToolset) Close() error { return c.closer.Close() }
+
+var _ io.Closer = closingToolset{}
 
 // listedOnce keeps a toolset's first successful listing. The apps service
 // serves every member the same tools, so only the first listing, as
