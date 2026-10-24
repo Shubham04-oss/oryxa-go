@@ -5,6 +5,7 @@
 //	oryxa services     list the services this binary carries
 //	oryxa healthcheck  ask the process on ORYXA_ADDRESS whether it is serving
 //	oryxa spicedb-reconcile  repair SpiceDB's relationships from their sources now
+//	oryxa spicedb-schema-write  write the SpiceDB schema this binary carries
 //
 // Every service reads its own variables, documented in .env.example at the
 // repository root. The process itself reads ORYXA_ADDRESS, ORYXA_SERVICES,
@@ -26,6 +27,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/access/spicedb"
 	"github.com/Shubham04-oss/oryxa-go/internal/access/spicedb/projector"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
@@ -55,6 +57,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return healthcheck(ctx, os.Getenv("ORYXA_ADDRESS"), stderr)
 	case "spicedb-reconcile":
 		return reconcileSpiceDB(ctx, stdout, stderr)
+	case "spicedb-schema-write":
+		return writeSpiceDBSchema(ctx, stdout, stderr)
 	case "help", "-h", "--help":
 		usage(stdout)
 		return 0
@@ -101,6 +105,7 @@ Commands:
   healthcheck  ask the process on ORYXA_ADDRESS whether it is serving
   spicedb-reconcile  repair SpiceDB's relationships from their sources now,
                as the nightly run does; needs DATABASE_URL and SPICEDB_*
+  spicedb-schema-write  write the SpiceDB schema this binary carries; needs SPICEDB_*
 `, strings.Join(host.Names(definitions), ", "))
 }
 
@@ -167,5 +172,31 @@ func reconcileSpiceDB(ctx context.Context, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	return 0
+}
+
+// writeSpiceDBSchema writes the embedded schema, the first step of turning
+// SpiceDB on (deploy/README.md), and says whether anything changed.
+func writeSpiceDBSchema(ctx context.Context, stdout, stderr io.Writer) int {
+	client, err := spicedb.Dial(spicedb.FromEnv())
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer client.Close()
+	before, err := spicedb.SchemaDiff(ctx, client)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if len(before) == 0 {
+		fmt.Fprintln(stdout, "SpiceDB already has this binary's schema")
+		return 0
+	}
+	if err := spicedb.WriteSchema(ctx, client); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "wrote the schema; %d differences fixed\n", len(before))
 	return 0
 }
