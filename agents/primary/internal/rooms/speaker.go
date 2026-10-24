@@ -142,13 +142,20 @@ func spoken(reply string) string {
 	return summary
 }
 
-// addressedDirectly reports whether the message that woke this seat named it.
+// addressedDirectly reports whether the message that woke this seat named it,
+// read by the relay's own mention parser: "@ada" names ada, never ada-2 or
+// adam.
 func addressedDirectly(seat Seat, transcript []Message) bool {
 	if len(transcript) == 0 {
 		return false
 	}
 	last := transcript[len(transcript)-1]
-	return strings.Contains(strings.ToLower(last.Body), "@"+strings.ToLower(seat.Handle))
+	for _, handle := range addressedHandles(last.Body, last.AuthorHandle) {
+		if handle == seat.Handle {
+			return true
+		}
+	}
+	return false
 }
 
 // Prompt is what a seat is shown when its turn comes: who it is in this room,

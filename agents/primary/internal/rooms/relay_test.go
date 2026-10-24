@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -670,5 +671,52 @@ func TestAddressedHandles(t *testing.T) {
 
 	if got := addressedHandles("@carol talking about herself", "carol"); len(got) != 0 {
 		t.Errorf("addressedHandles naming only the author = %v, want none", got)
+	}
+}
+
+// A mention is a whole token: "@ada" never matches a longer handle, and an
+// "@" inside a word or an address names nobody.
+func TestAddressedHandlesMatchWholeTokens(t *testing.T) {
+	for _, test := range []struct {
+		body string
+		want []string
+	}{
+		{"@ada can you look", []string{"ada"}},
+		{"@ada-2 can you look", []string{"ada-2"}},
+		{"@adam can you look", []string{"adam"}},
+		{"@ada, @ada-2 and @adam", []string{"ada", "ada-2", "adam"}},
+		{"(@ada) and @bob.", []string{"ada", "bob"}},
+		{"@Ada can you look", []string{"ada"}},
+		{"thanks @ada- that helps", []string{"ada"}},
+		{"@ada@bob", []string{"ada"}},
+		{"mail ops@ada.com", nil},
+		{"mail ops.team@ada.com or first+last@ada.com", nil},
+		{"an @ alone, or @-", nil},
+		{"line one\n@ada on line two", []string{"ada"}},
+	} {
+		if got := addressedHandles(test.body, "carol"); !slices.Equal(got, test.want) {
+			t.Errorf("addressedHandles(%q) = %v, want %v", test.body, got, test.want)
+		}
+	}
+}
+
+// A seat is only told it was named when the message named exactly it.
+func TestPromptOnlySaysNamedForAnExactMention(t *testing.T) {
+	ada := relayAgentSeat("ada", "user-ada", "agent-ada")
+	room := Situation{Name: "room", Seats: []Seat{relayPersonSeat("bob", "user-bob", true), ada}}
+	for _, test := range []struct {
+		body  string
+		named bool
+	}{
+		{"@ada can you look", true},
+		{"@Ada can you look", true},
+		{"@ada-2 can you look", false},
+		{"@adam can you look", false},
+		{"mail ops@ada.com", false},
+	} {
+		prompt := Prompt(ada, room, []Message{{AuthorHandle: "bob", Body: test.body}})
+		if got := strings.Contains(prompt, "You were asked by name"); got != test.named {
+			t.Errorf("Prompt for %q says named = %v, want %v", test.body, got, test.named)
+		}
 	}
 }

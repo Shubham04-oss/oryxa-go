@@ -60,8 +60,11 @@ const (
 
 // mentionPattern finds "@handle" tokens in a message body. Handles are what
 // [Service]'s own handle function produces: lowercase letters, digits and
-// hyphens, so that is all this looks for.
-var mentionPattern = regexp.MustCompile(`@([A-Za-z0-9-]+)`)
+// hyphens, so that is all this looks for, and a token runs to the end of
+// them, so "@ada" is never read out of "@ada-2" or "@adam". An "@" only
+// starts a mention at the start of the body or after a character that
+// cannot be part of a word or an address, so "ops@ada.com" names nobody.
+var mentionPattern = regexp.MustCompile(`(?:^|[^A-Za-z0-9_.+-])@([A-Za-z0-9-]+)`)
 
 // Relay is what happens after somebody posts a message in a room: append it,
 // work out which agent seats should answer, run them together, and append
@@ -443,6 +446,11 @@ func distinctSeats(seats []Seat) []Seat {
 // appear. A body that only names its own author returns nothing: that is
 // not addressing anybody, so it is treated exactly like a message that
 // addressed nobody at all.
+//
+// Handles are lowercase, so "@Ada" names ada; and a handle never ends in a
+// hyphen, so "@ada-" (a dash typed after the name) names ada too. This is
+// the one mention parser in a room: who answers, who a message is stored
+// as addressing and whether a seat was named all read it.
 func addressedHandles(body, authorHandle string) []string {
 	matches := mentionPattern.FindAllStringSubmatch(body, -1)
 	if len(matches) == 0 {
@@ -451,8 +459,8 @@ func addressedHandles(body, authorHandle string) []string {
 	seen := make(map[string]bool, len(matches))
 	out := make([]string, 0, len(matches))
 	for _, match := range matches {
-		handle := match[1]
-		if handle == authorHandle || seen[handle] {
+		handle := strings.TrimRight(strings.ToLower(match[1]), "-")
+		if handle == "" || handle == authorHandle || seen[handle] {
 			continue
 		}
 		seen[handle] = true
