@@ -39,8 +39,8 @@ secrets, CI and routes.
 |---|---|---|
 | Route | `edge-staging.oryxa.in/*` | `edge.oryxa.in/*` |
 | `EDGE_PUBLIC_URL` (var) | `https://edge-staging.oryxa.in` | `https://edge.oryxa.in` |
-| Preview route | `staging.oryxa-preview.net/*` | `oryxa-preview.net/*` |
-| `EDGE_PREVIEW_URL` (var) | `https://staging.oryxa-preview.net` | `https://oryxa-preview.net` |
+| Preview route | `staging-preview.oryxa.uk/*` | `preview.oryxa.uk/*` |
+| `EDGE_PREVIEW_URL` (var) | `https://staging-preview.oryxa.uk` | `https://preview.oryxa.uk` |
 | `AGENTS_TOKEN_PUBLIC_KEYS` (var) | `["<base64 DER SPKI>"]` of staging agents' `AGENTS_PRIMARY_SERVICE_KEY_ID` | the same for production's key |
 | `EDGE_URL_SIGNING_KEY` (secret) | 32+ random bytes, `wrangler secret put EDGE_URL_SIGNING_KEY --env staging` | its own value |
 
@@ -60,16 +60,16 @@ a1 runners are arm64; CI's dry run skips the image with
 image builds.
 
 **Previews' origin:** a preview serves pages the sandbox made, so it is on
-a registrable domain of its own, `oryxa-preview.net` (#474): on
+a registrable domain of its own, `oryxa.uk` (#474), already a zone in the same Cloudflare account: on
 `edge.oryxa.in` its script could set `Domain=oryxa.in` cookies that app and
 api trust. The Worker serves `/p/…` only on `EDGE_PREVIEW_URL`'s host and
 nothing else there; without that var, no host serves previews. Every
 preview also gets `Content-Security-Policy: sandbox allow-scripts
 allow-forms allow-popups`, so even in a tab of its own it runs in an opaque
-origin, as in web-next's iframe. The zone is `cloudflare_zone.preview` in
-deploy/production/preview.tf; wrangler makes the custom domain and its DNS
-record on deploy, as it does for `edge.oryxa.in`, so the zone must exist
-first.
+origin, as in web-next's iframe. `oryxa.uk` is already a zone in the
+account, and wrangler makes the custom domain and its DNS record on deploy,
+as it does for `edge.oryxa.in`. Nothing that signs people in may ever be
+hosted under `oryxa.uk`: a preview can set cookies for the whole domain.
 
 **WAF:** the edge's own zone needs no `/v1/internal` rule (it has no such
 routes). Preview links (`/p/…`) and terminals (`/t/…`) are reached by
