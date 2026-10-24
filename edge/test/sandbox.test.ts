@@ -6,7 +6,7 @@ import { runDurableObjectAlarm } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Event, ExecResult, LogResponse } from "../src/contracts";
 import { blockedTarget } from "../src/sandbox/egress";
-import { BACKUPS_PREFIX, backupPrefix, setWorkspaceFactory } from "../src/sandbox/sandbox";
+import { BACKUPS_PREFIX, PREVIEW_CSP, backupPrefix, setWorkspaceFactory } from "../src/sandbox/sandbox";
 import { FakeWorkspace, workspaces } from "./fakes";
 import { type TokenOptions, call } from "./tokens";
 
@@ -257,6 +257,7 @@ describe("previews", () => {
     expect(page.headers.get("set-cookie")).toBeNull();
     expect(page.headers.get("service-worker-allowed")).toBeNull();
     expect(page.headers.get("x-kept")).toBe("yes");
+    expect(page.headers.get("content-security-policy")).toBe(PREVIEW_CSP);
     await page.text();
 
     workspace().ports.set(4000, () => {
@@ -272,17 +273,35 @@ describe("previews", () => {
     await post("/sandbox/shared/exec/command", { command: "python3 -m http.server 8080 &" });
     workspace().ports.set(8080, (request) => new Response(`hello from ${new URL(request.url).pathname}`));
     const signed = (await (await post("/sandbox/shared/preview", { port: 8080 })).json()) as { url: string; expiresAt: string };
-    expect(signed.url).toMatch(/^https:\/\/edge\.test\/p\/[^/]+\/$/);
+    expect(signed.url).toMatch(/^https:\/\/preview\.test\/p\/[^/]+\/$/);
     const worker = (exports as unknown as { default: Fetcher }).default;
     const page = await worker.fetch(`${signed.url}index.html`);
     expect(await page.text()).toBe("hello from /index.html");
 
     const token = signed.url.split("/p/")[1]!.slice(0, -1);
     const [payload, signature] = token.split(".");
-    const tampered = `https://edge.test/p/${payload}.${signature!.slice(0, -2)}AA/`;
+    const tampered = `https://preview.test/p/${payload}.${signature!.slice(0, -2)}AA/`;
     expect((await worker.fetch(tampered)).status).toBe(403);
     const asTerminal = await worker.fetch(`https://edge.test/t/${token}`, { headers: { upgrade: "websocket" } });
     expect(asTerminal.status).toBe(403);
+  });
+
+  it("serves previews on the preview host only, and nothing else there (#474)", async () => {
+    await post("/sandbox/shared/exec/command", { command: "true" });
+    workspace().ports.set(8080, () => new Response("hello", { headers: { "content-security-policy": "default-src 'self'" } }));
+    const signed = (await (await post("/sandbox/shared/preview", { port: 8080 })).json()) as { url: string };
+    const worker = (exports as unknown as { default: Fetcher }).default;
+    const page = await worker.fetch(signed.url);
+    expect(await page.text()).toBe("hello");
+    // The server's own policy is kept, and the sandbox added beside it.
+    expect(page.headers.get("content-security-policy")).toBe(`default-src 'self', ${PREVIEW_CSP}`);
+
+    const onEdge = signed.url.replace("https://preview.test/", "https://edge.test/");
+    expect((await worker.fetch(onEdge)).status).toBe(404);
+    expect((await worker.fetch("https://preview.test/healthz")).status).toBe(404);
+    expect((await worker.fetch(`https://preview.test${base}/children`)).status).toBe(404);
+    const token = signed.url.split("/p/")[1]!.slice(0, -1);
+    expect((await worker.fetch(`https://preview.test/t/${token}`, { headers: { upgrade: "websocket" } })).status).toBe(404);
   });
 });
 
