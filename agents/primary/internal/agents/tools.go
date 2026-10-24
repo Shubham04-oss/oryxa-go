@@ -2,6 +2,7 @@ package agents
 
 import (
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 
@@ -31,6 +32,16 @@ type Toolbox struct {
 	Description  string
 	Instructions string
 	Toolset      tool.Toolset
+}
+
+// Close releases what the toolbox's toolset holds open, such as the apps
+// toolbox's MCP session, when its toolset is an io.Closer, and is nil
+// otherwise. The toolbox's tools fail once it is closed.
+func (b Toolbox) Close() error {
+	if closer, ok := b.Toolset.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
 }
 
 type toolCatalog struct {
