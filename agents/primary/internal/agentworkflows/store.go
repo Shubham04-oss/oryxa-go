@@ -366,6 +366,37 @@ func (store *Store) FinishExecution(ctx context.Context, scope Scope, id string,
 	return execution, nil
 }
 
+// AbandonExecution fails an execution whose workflow can no longer run, in
+// one conditional update: only one still queued, or running on a lease that
+// has run out, is settled, and it records the failed lifecycle event alone,
+// with no attempt, start time or started event for work that never ran. It
+// reports whether it settled the execution; when it did not, it returns the
+// execution as it is (running on a live lease, or already settled).
+func (store *Store) AbandonExecution(ctx context.Context, scope Scope, id, errorText string) (Execution, bool, error) {
+	now := time.Now().UTC()
+	var execution Execution
+	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		if err := scanExecution(tx.QueryRow(ctx, `
+			UPDATE agents_primary.member_agent_workflow_executions
+			SET status='failed', error=$4, completed_at=$5, lease_until=NULL
+			WHERE organization_id=$1 AND owner_user_id=$2 AND id=$3
+				AND (status='queued' OR (status='running' AND (lease_until IS NULL OR lease_until < $5)))
+			RETURNING `+executionColumns,
+			scope.OrganizationID, scope.UserID, id, truncate(errorText, 2000), now), &execution); err != nil {
+			return err
+		}
+		return recordExecutionLifecycle(ctx, tx, agentsv1.AgentWorkflowExecutionFailedDetailType, execution, now)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		execution, err = store.GetExecution(ctx, scope, id)
+		return execution, false, err
+	}
+	if err != nil {
+		return Execution{}, false, fmt.Errorf("abandon workflow execution: %w", err)
+	}
+	return execution, true, nil
+}
+
 const workflowColumns = `id, organization_id, owner_user_id, name, description, team_id, status,
 	assignments, schedule_expression, schedule_timezone, schedule_state, revision, created_at, updated_at`
 

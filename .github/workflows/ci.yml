@@ -7,6 +7,11 @@
 # Jobs run on the self-hosted runners on a1 (labels self-hosted, oryxa-go).
 # Those machines persist between jobs, so nothing here may assume a fresh
 # host: the database takes a free host port, and the image built is removed.
+#
+# A pull request from a fork runs every job on GitHub's ubuntu-latest instead
+# (each job's runs-on), since its code would otherwise run on a1 (#459). A fork
+# can edit this file, so the runners also refuse such jobs themselves: see the
+# job-started hook in deploy/runner/linux.sh.
 
 name: CI
 
@@ -25,7 +30,7 @@ concurrency:
 jobs:
   changes:
     name: Changes
-    runs-on: [self-hosted, oryxa-go]
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || fromJSON('["self-hosted","oryxa-go"]') }}
     timeout-minutes: 5
     outputs:
       go: ${{ steps.paths.outputs.go }}
@@ -89,7 +94,7 @@ jobs:
     name: Go
     needs: changes
     if: needs.changes.outputs.go == 'true'
-    runs-on: [self-hosted, oryxa-go]
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || fromJSON('["self-hosted","oryxa-go"]') }}
     timeout-minutes: 20
     services:
       # The same pgvector image docker-compose.yml runs locally.
@@ -233,7 +238,7 @@ jobs:
     name: Web
     needs: changes
     if: needs.changes.outputs.web == 'true'
-    runs-on: [self-hosted, oryxa-go]
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || fromJSON('["self-hosted","oryxa-go"]') }}
     timeout-minutes: 15
     defaults:
       run:
@@ -272,7 +277,7 @@ jobs:
     name: Web next
     needs: changes
     if: needs.changes.outputs.web_next == 'true'
-    runs-on: [self-hosted, oryxa-go]
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || fromJSON('["self-hosted","oryxa-go"]') }}
     timeout-minutes: 15
     defaults:
       run:
@@ -336,7 +341,7 @@ jobs:
     name: Edge
     needs: changes
     if: needs.changes.outputs.edge == 'true'
-    runs-on: [self-hosted, oryxa-go]
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || fromJSON('["self-hosted","oryxa-go"]') }}
     timeout-minutes: 15
     defaults:
       run:
@@ -367,7 +372,7 @@ jobs:
     name: Image
     needs: changes
     if: needs.changes.outputs.go == 'true'
-    runs-on: [self-hosted, oryxa-go]
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || fromJSON('["self-hosted","oryxa-go"]') }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -381,7 +386,7 @@ jobs:
     name: OpenTofu
     needs: changes
     if: needs.changes.outputs.tofu == 'true'
-    runs-on: [self-hosted, oryxa-go]
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || fromJSON('["self-hosted","oryxa-go"]') }}
     # The providers are several hundred megabytes. From a cold cache on a
     # self-hosted runner they have taken over ten minutes to download.
     timeout-minutes: 25

@@ -60,8 +60,11 @@ const (
 
 // mentionPattern finds "@handle" tokens in a message body. Handles are what
 // [Service]'s own handle function produces: lowercase letters, digits and
-// hyphens, so that is all this looks for.
-var mentionPattern = regexp.MustCompile(`@([A-Za-z0-9-]+)`)
+// hyphens, so that is all this looks for, and a token runs to the end of
+// them, so "@ada" is never read out of "@ada-2" or "@adam". An "@" only
+// starts a mention at the start of the body or after a character that
+// cannot be part of a word or an address, so "ops@ada.com" names nobody.
+var mentionPattern = regexp.MustCompile(`(?:^|[^A-Za-z0-9_.+-])@([A-Za-z0-9-]+)`)
 
 // Relay is what happens after somebody posts a message in a room: append it,
 // work out which agent seats should answer, run them together, and append
@@ -158,6 +161,10 @@ type relayItem struct {
 // waiting on its owner answers again as soon as its owner has answered, and
 // is told so again by every message that names it until then.
 //
+// An away person's own agent, named in their place, is told so in its turn
+// (its [Summons]), and passing is not silence from it either: the person was
+// asked, so the room hears that they will have to answer it themselves.
+//
 // An agent's own reply can itself address another seat, and that seat
 // answers in turn — this is how agents answer agents — but never past
 // maxAgentTurns, maxConsecutivePasses or relayBudget, and never a seat
@@ -210,7 +217,7 @@ func (relay *Relay) Post(ctx context.Context, room Situation, message Message, v
 			return results, nil
 		}
 		asked := responders[:min(len(responders), left)]
-		var unreached []Seat
+		var unreached []responder
 		if item.verdict != nil {
 			// A person is owed an answer, or a line saying why not, from every
 			// seat they named. An agent's chain just ends where its turns do.
@@ -255,22 +262,26 @@ type addition struct {
 
 // round runs asked together, each on a turn of its own, and stores what they
 // come to in the order they are given: an answer, nothing for a seat that
-// passes, and for one that could not answer a line saying so. unreached are
-// seats the message named that had no turn left, which say that too. It
-// returns what it stored, and how many turns in a row have passed by now,
-// counting on from passes, and whether the room refused something because it
-// had been paused by then. Whether that ends the relay is for the caller to
-// say once the whole round is in: a seat that ran has its answer heard.
-func (relay *Relay) round(ctx context.Context, room Situation, trigger Message, transcript []Message, asked, unreached []Seat, passes int) ([]addition, int, bool) {
+// passes, and for one that could not answer a line saying so. A seat
+// standing in for an away person who was named does not pass in silence:
+// that person was asked, so the room is told they will have to answer it
+// themselves. unreached are seats the message named that had no turn left,
+// which say that too. It returns what it stored, and how many turns in a row
+// have passed by now, counting on from passes, and whether the room refused
+// something because it had been paused by then. Whether that ends the relay
+// is for the caller to say once the whole round is in: a seat that ran has
+// its answer heard.
+func (relay *Relay) round(ctx context.Context, room Situation, trigger Message, transcript []Message, asked, unreached []responder, passes int) ([]addition, int, bool) {
 	running := make([]chan turn, len(asked))
-	for index, seat := range asked {
+	for index, responder := range asked {
 		running[index] = make(chan turn, 1)
-		go func() { running[index] <- relay.takeTurn(ctx, seat, room, transcript) }()
+		go func() { running[index] <- relay.takeTurn(ctx, responder.Seat, room, transcript, responder.summons) }()
 	}
 
 	var added []addition
 	paused := false
-	for index, seat := range asked {
+	for index, responder := range asked {
+		seat := responder.Seat
 		taken := <-running[index]
 		if taken.err == nil && strings.TrimSpace(taken.reply) == "" {
 			taken.err = errSaidNothing
@@ -286,6 +297,13 @@ func (relay *Relay) round(ctx context.Context, room Situation, trigger Message, 
 			paused = paused || errors.Is(err, ErrPaused)
 		case taken.reply == Pass:
 			passes++
+			if away := responder.summons.StandingInFor; away != "" {
+				line, err := relay.note(ctx, room, trigger, seat, passedFor(seat, away))
+				if err == nil {
+					added = append(added, addition{Message: line})
+				}
+				paused = paused || errors.Is(err, ErrPaused)
+			}
 		default:
 			passes = 0
 			said, err := relay.say(ctx, room, trigger, seat, relay.guarded(ctx, trigger.RoomID, seat, taken.reply))
@@ -298,7 +316,8 @@ func (relay *Relay) round(ctx context.Context, room Situation, trigger Message, 
 			added = append(added, addition{Message: said, answer: true})
 		}
 	}
-	for _, seat := range unreached {
+	for _, responder := range unreached {
+		seat := responder.Seat
 		relay.logger().WarnContext(ctx, "rooms: relay: a seat was named past the turns one message may cause; saying so in the room",
 			"room_id", trigger.RoomID, "seat", seat.Handle, "in_reply_to_seq", trigger.Seq)
 		line, err := relay.note(ctx, room, trigger, seat, noTurn(seat))
@@ -351,12 +370,20 @@ func (relay *Relay) guarded(ctx context.Context, roomID string, seat Seat, reply
 	return said
 }
 
+// responder is a seat the relay asks to answer, and why it was asked, which
+// the seat's turn is told rather than left to work out from the text.
+type responder struct {
+	Seat
+	summons Summons
+}
+
 // resolveResponders is rules 1 and 2: addressing decides first, and only
 // when trigger addresses nobody real does verdict get a say — and verdict
 // only has a say at all when it is non-nil, which is true for the message a
 // person posted and false for every reply answering it goes on to cause,
-// since nothing judged those.
-func resolveResponders(seats []Seat, trigger Message, verdict *Verdict) []Seat {
+// since nothing judged those. Whoever verdict routes to, a person's own agent
+// never answers over them unasked (speaksOverPerson).
+func resolveResponders(seats []Seat, trigger Message, verdict *Verdict) []responder {
 	if handles := addressedHandles(trigger.Body, trigger.AuthorHandle); len(handles) > 0 {
 		if responders, addressed := addressedSeats(seats, handles); addressed {
 			return excludeAuthor(responders, trigger.AuthorHandle)
@@ -374,13 +401,25 @@ func resolveResponders(seats []Seat, trigger Message, verdict *Verdict) []Seat {
 		// no seat at all — is ignored, not substituted for.
 		return nil
 	}
-	return excludeAuthor([]Seat{seat}, trigger.AuthorHandle)
+	if speaksOverPerson(seats, seat, trigger) {
+		// Routed to somebody's own agent while that person is reading the
+		// room, or is the one asking: it would be answering over them. Jev
+		// routes by role and is not asked to weigh that, so it is a rule
+		// here, and the message goes to the seat Rules would pick instead,
+		// if any is free — told, like any routed seat, that it may pass.
+		if seat, ok = freeAgentSeat(seats, trigger); !ok {
+			return nil
+		}
+	}
+	return excludeAuthor([]responder{{Seat: seat}}, trigger.AuthorHandle)
 }
 
 // addressedSeats resolves rule 1 for the handles a message named. addressed
 // is false when none of them matched a real seat in the room, which means
 // the message did not really address anyone and rule 2 should run instead.
-func addressedSeats(seats []Seat, handles []string) (responders []Seat, addressed bool) {
+// Every responder it returns was named, itself or as the away person it
+// stands in for.
+func addressedSeats(seats []Seat, handles []string) (responders []responder, addressed bool) {
 	for _, handle := range handles {
 		seat, ok := findSeat(seats, handle)
 		if !ok {
@@ -389,13 +428,13 @@ func addressedSeats(seats []Seat, handles []string) (responders []Seat, addresse
 		addressed = true
 		switch {
 		case seat.Kind == SeatAgent:
-			responders = append(responders, seat)
+			responders = append(responders, responder{Seat: seat, summons: Summons{Named: true}})
 		case seat.Present:
 			// Addressed and here: they answer for themselves. Their agent
 			// talking over them would be worse than silence.
 		default:
 			if agent, ok := agentForUser(seats, seat.UserID); ok {
-				responders = append(responders, agent)
+				responders = append(responders, responder{Seat: agent, summons: Summons{Named: true, StandingInFor: seat.Handle}})
 			}
 		}
 	}
@@ -407,33 +446,40 @@ func addressedSeats(seats []Seat, handles []string) (responders []Seat, addresse
 // verdict is asked to route to somebody, not to the speaker — but this is
 // the backstop that keeps either one from turning into an agent replying to
 // itself forever.
-func excludeAuthor(seats []Seat, authorHandle string) []Seat {
-	var out []Seat
-	for _, seat := range seats {
-		if seat.Handle == authorHandle {
+func excludeAuthor(responders []responder, authorHandle string) []responder {
+	var out []responder
+	for _, responder := range responders {
+		if responder.Handle == authorHandle {
 			continue
 		}
-		out = append(out, seat)
+		out = append(out, responder)
 	}
 	return out
 }
 
 // distinctSeats drops a seat listed twice, as naming a person and their own
 // agent both does: a seat answers a message once, and two turns of one agent
-// at the same time would only collide on its thread.
-func distinctSeats(seats []Seat) []Seat {
-	var out []Seat
-	seen := make(map[string]bool, len(seats))
-	for _, seat := range seats {
-		key := "agent:" + seat.AgentID
-		if seat.AgentID == "" {
-			key = "handle:" + seat.Handle
+// at the same time would only collide on its thread. The one turn it takes
+// carries every reason it was asked: named itself and standing in for its
+// away person, it is told both.
+func distinctSeats(responders []responder) []responder {
+	var out []responder
+	at := make(map[string]int, len(responders))
+	for _, responder := range responders {
+		key := "agent:" + responder.AgentID
+		if responder.AgentID == "" {
+			key = "handle:" + responder.Handle
 		}
-		if seen[key] {
+		if index, seen := at[key]; seen {
+			first := &out[index].summons
+			first.Named = first.Named || responder.summons.Named
+			if first.StandingInFor == "" {
+				first.StandingInFor = responder.summons.StandingInFor
+			}
 			continue
 		}
-		seen[key] = true
-		out = append(out, seat)
+		at[key] = len(out)
+		out = append(out, responder)
 	}
 	return out
 }
@@ -443,6 +489,11 @@ func distinctSeats(seats []Seat) []Seat {
 // appear. A body that only names its own author returns nothing: that is
 // not addressing anybody, so it is treated exactly like a message that
 // addressed nobody at all.
+//
+// Handles are lowercase, so "@Ada" names ada; and a handle never ends in a
+// hyphen, so "@ada-" (a dash typed after the name) names ada too. This is
+// the one mention parser in a room: who answers, who a message is stored
+// as addressing and whether a seat was named all read it.
 func addressedHandles(body, authorHandle string) []string {
 	matches := mentionPattern.FindAllStringSubmatch(body, -1)
 	if len(matches) == 0 {
@@ -451,8 +502,8 @@ func addressedHandles(body, authorHandle string) []string {
 	seen := make(map[string]bool, len(matches))
 	out := make([]string, 0, len(matches))
 	for _, match := range matches {
-		handle := match[1]
-		if handle == authorHandle || seen[handle] {
+		handle := strings.TrimRight(strings.ToLower(match[1]), "-")
+		if handle == "" || handle == authorHandle || seen[handle] {
 			continue
 		}
 		seen[handle] = true

@@ -44,6 +44,10 @@ type Config struct {
 	// file, named by the connector's manifest id (INTEGRATIONS_CONNECTORS_DIR).
 	// Empty means no connector runs.
 	ConnectorsDir string
+	// ConnectorLauncher starts each connector as the connector user
+	// (INTEGRATIONS_CONNECTOR_LAUNCHER; the image's is /connector-launch).
+	// Empty runs connectors as the service's own user.
+	ConnectorLauncher string
 	// EgressKeys sign the handles connectors call apps with, as JSON
 	// {"current": "<kid>", "keys": {"<kid>": "<at least 32 bytes>"}} in
 	// INTEGRATIONS_EGRESS_KEYS. Without them tool calls are not mounted.
@@ -94,6 +98,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		}
 	}
 	config.ConnectorsDir = strings.TrimSpace(getenv("INTEGRATIONS_CONNECTORS_DIR"))
+	config.ConnectorLauncher = strings.TrimSpace(getenv("INTEGRATIONS_CONNECTOR_LAUNCHER"))
 	if raw := strings.TrimSpace(getenv("INTEGRATIONS_EGRESS_KEYS")); raw != "" {
 		var keys struct {
 			Current string                    `json:"current"`

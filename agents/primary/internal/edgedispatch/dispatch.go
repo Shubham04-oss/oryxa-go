@@ -10,6 +10,11 @@
 // Each dispatch runs in a fresh side-conversation thread of the member's: the
 // call's transcript is other people's words, and a side conversation is where
 // such words are read as context that can never authorize a publication.
+//
+// A call in a teamspace's room is about that teamspace: the member must be one
+// of the room's members, as Go admitted them to it (edgemembers), and the run
+// is pinned to the teamspace (threads.RunInput.TeamspaceID), so its tools file,
+// read and publish there and in no other, as a side conversation's do.
 package edgedispatch
 
 import (
@@ -21,6 +26,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/edgemembers"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/relevance"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 	edgev1 "github.com/Shubham04-oss/oryxa-go/contracts/edge/v1"
@@ -57,6 +63,9 @@ var (
 	ErrInvalid = errors.New("invalid dispatch")
 	// ErrNotMember means the member is not in the organization.
 	ErrNotMember = errors.New("not a member of the organization")
+	// ErrNotInRoom means the member is not one of the teamspace room's
+	// members. It is an ErrNotMember, refused the same way.
+	ErrNotInRoom = fmt.Errorf("%w: not a member of this teamspace's room", ErrNotMember)
 	// ErrUnavailable means this process is stopping: send it again.
 	ErrUnavailable = errors.New("dispatch unavailable: the service is stopping")
 )
@@ -175,6 +184,23 @@ type Members interface {
 	IsMember(ctx context.Context, organizationID, userID string) (bool, error)
 }
 
+// RoomMembers says who Go admitted to a room on the edge. *edgemembers.Store
+// satisfies it (ForEdgeMembers): a member is recorded there only once Go has
+// checked they can see the room's teamspace, and forgotten when they leave
+// its team or the organization, or the teamspace is deleted.
+type RoomMembers interface {
+	InRoom(ctx context.Context, organizationID string, room Room, member string) (bool, error)
+}
+
+// ForEdgeMembers adapts the edge room members' store.
+func ForEdgeMembers(store *edgemembers.Store) RoomMembers { return edgeMembersAdapter{store} }
+
+type edgeMembersAdapter struct{ store *edgemembers.Store }
+
+func (adapter edgeMembersAdapter) InRoom(ctx context.Context, organizationID string, room Room, member string) (bool, error) {
+	return adapter.store.Exists(ctx, edgemembers.Membership{Org: organizationID, Room: room, Member: member})
+}
+
 // Edge receives what a dispatched run ended with.
 type Edge interface {
 	Deliver(ctx context.Context, result Result) error
@@ -184,6 +210,7 @@ type Edge interface {
 type Service struct {
 	threads Threads
 	members Members
+	rooms   RoomMembers
 	edge    Edge
 	logger  *slog.Logger
 
@@ -195,12 +222,14 @@ type Service struct {
 	going   sync.WaitGroup
 }
 
-// New makes a Service.
-func New(service Threads, members Members, edge Edge, logger *slog.Logger) *Service {
+// New makes a Service. rooms may be nil, and then every dispatch from a
+// teamspace's room is refused: without it nothing says the member is on the
+// teamspace.
+func New(service Threads, members Members, rooms RoomMembers, edge Edge, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Service{threads: service, members: members, edge: edge, logger: logger}
+	return &Service{threads: service, members: members, rooms: rooms, edge: edge, logger: logger}
 }
 
 // Dispatch checks the request, starts the member's agent on it and returns
@@ -230,6 +259,21 @@ func (service *Service) Dispatch(ctx context.Context, request Request) (Accepted
 	}
 	if !isMember {
 		return Accepted{}, ErrNotMember
+	}
+	if request.Room.Kind == edgev1.RoomTeamspace {
+		// A teamspace room's id is the teamspace's. The call is about that
+		// teamspace, so the member must be in its room; Input pins the run
+		// to it.
+		if service.rooms == nil {
+			return Accepted{}, ErrNotInRoom
+		}
+		inRoom, err := service.rooms.InRoom(ctx, request.Organization, request.Room, request.Member)
+		if err != nil {
+			return Accepted{}, fmt.Errorf("check the member is in the room: %w", err)
+		}
+		if !inRoom {
+			return Accepted{}, ErrNotInRoom
+		}
 	}
 
 	// No access token: the member is in a call, not at the run. A tool that
@@ -322,7 +366,8 @@ func (service *Service) Wait(ctx context.Context) {
 }
 
 // Input is the run a dispatch starts: the request, framed for an answer that
-// is spoken, with the call's last lines as the guard's context.
+// is spoken, with the call's last lines as the guard's context. A run from a
+// teamspace's room is pinned to that teamspace; any other room pins nothing.
 func Input(request Request) threads.RunInput {
 	said := strings.TrimSpace(request.Said)
 	var message strings.Builder
@@ -345,11 +390,15 @@ func Input(request Request) threads.RunInput {
 	if len(context) > relevance.MaxContextLines {
 		context = context[len(context)-relevance.MaxContextLines:]
 	}
-	return threads.RunInput{
+	input := threads.RunInput{
 		Message:            message.String(),
 		StartedBy:          agentsv1.StartedByTrigger,
 		PublicationRequest: &threads.PublicationRequest{Request: said, Context: append([]string{}, context...)},
 	}
+	if request.Room.Kind == edgev1.RoomTeamspace {
+		input.TeamspaceID = request.Room.ID
+	}
+	return input
 }
 
 func truncate(text string, runes int) string {

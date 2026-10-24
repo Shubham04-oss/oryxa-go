@@ -9,6 +9,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/edgeclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/edgedispatch"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/edgemembers"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
@@ -44,7 +45,10 @@ func mountEdgeDispatch(settings serviceconfig.Config, platform host.Platform, se
 	if err != nil {
 		return nil, nil, fmt.Errorf("the edge client for dispatched answers: %w", err)
 	}
-	dispatch := edgedispatch.New(edgedispatch.ForThreads(service), members, edgedispatch.EdgeResults{Edge: edge}, logger)
+	// A call in a teamspace's room dispatches only for a member Go admitted
+	// to that room (edgemembers), and its run is pinned to the teamspace.
+	rooms := edgedispatch.ForEdgeMembers(edgemembers.NewStore(platform.Database))
+	dispatch := edgedispatch.New(edgedispatch.ForThreads(service), members, rooms, edgedispatch.EdgeResults{Edge: edge}, logger)
 	logger.Info("the edge's voice agents can dispatch work here", "edge", settings.EdgeURL, "edge_keys", len(keys))
 	return dispatch, &httpserver.EdgeDispatch{Tokens: tokens, Dispatcher: dispatch}, nil
 }

@@ -460,6 +460,9 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	}
 	agentRegistry, err := managedagents.New(managedagents.Config{
 		Repository: registryStore,
+		// Specialists' runs are bounded like Krude's, so a lease of
+		// RunTimeout+1m (deliveries, wake-ups, workflows) outlasts the run it holds.
+		RunTimeout: settings.RunTimeout,
 		Factory: func(definition managedagents.Definition) (agent.Agent, error) {
 			if definition.Kind == managedagents.KindPrimary {
 				return krude.Root, nil

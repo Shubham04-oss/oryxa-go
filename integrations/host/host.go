@@ -1,8 +1,10 @@
 // Package host runs connectors: it spawns each connector binary on its own
 // private Unix socket, supervises it, reads its manifest with Describe and
 // checks every message that crosses the contract against that manifest.
-// Connectors are never trusted: they get a bare environment and, later,
-// egress handles instead of tokens.
+// Connectors are never trusted: they get a bare environment, egress handles
+// instead of tokens and, with Config.Launcher, a user of their own, so
+// they cannot read the host's memory or environment (and with it the task's
+// AWS credentials) or reach its sockets.
 package host
 
 import (
@@ -10,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,6 +49,11 @@ type Config struct {
 	// InvokeTimeout, SyncIdle and SyncLimit are the contract's 30 s call deadline,
 	// 60 s silence limit and 30 minute run limit.
 	InvokeTimeout, SyncIdle, SyncLimit time.Duration
+	// Launcher, when set, is the launch binary (./launch) every connector is
+	// started through, which runs it as the connector user. The host then
+	// needs CAP_KILL to stop connectors (the image's /oryxa has it). Empty
+	// runs them as the host's own user, as in local development and tests.
+	Launcher string
 }
 
 func (c *Config) defaults() {
@@ -87,6 +95,10 @@ type Host struct {
 // New creates a host whose sockets live in a fresh private directory.
 func New(cfg Config) (*Host, error) {
 	cfg.defaults()
+	// No process of the host's user may read its memory or /proc environ.
+	if err := undumpable(); err != nil {
+		return nil, fmt.Errorf("host: %w", err)
+	}
 	// os.MkdirTemp creates the directory 0700; the path stays short for the socket limit.
 	dir, err := os.MkdirTemp("", "oryxa-conn")
 	if err != nil {
@@ -239,12 +251,22 @@ func (c *connector) hasManifest() bool { return c.m != nil }
 // runOnce starts the process, describes it, calls up once it is ready and
 // returns when the process has exited.
 func (c *connector) runOnce(ctx context.Context, up func()) error {
-	_ = os.Remove(c.socket)
+	listener, err := c.listen()
+	if err != nil {
+		return err
+	}
 	cmd := exec.Command(c.spec.Path, c.spec.Args...)
-	// A bare environment: connectors never see the host's secrets.
-	cmd.Env = []string{gosdk.SocketEnv + "=" + c.socket}
+	if launcher := c.host.cfg.Launcher; launcher != "" {
+		cmd = exec.Command(launcher, append([]string{c.spec.Path}, c.spec.Args...)...)
+	}
+	// A bare environment: connectors never see the host's secrets. The one
+	// variable is the inherited listener's descriptor, fd 3 (ExtraFiles[0]).
+	cmd.Env = []string{gosdk.ListenerFDEnv + "=3"}
+	cmd.ExtraFiles = []*os.File{listener}
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	listener.Close()
+	if err != nil {
 		return fmt.Errorf("start: %w", err)
 	}
 	exited := make(chan struct{})
@@ -288,6 +310,23 @@ func (c *connector) runOnce(ctx context.Context, up func()) error {
 		c.setClient(nil, 0)
 		return ctx.Err()
 	}
+}
+
+// listen binds the connector's socket in the host's private directory and
+// returns it as a file for the connector to inherit. The connector never
+// needs the directory, so it stays the host's alone.
+func (c *connector) listen() (*os.File, error) {
+	_ = os.Remove(c.socket)
+	lis, err := net.ListenUnix("unix", &net.UnixAddr{Name: c.socket, Net: "unix"})
+	if err != nil {
+		return nil, fmt.Errorf("listen: %w", err)
+	}
+	lis.SetUnlinkOnClose(false) // the host dials the path after it hands the socket down
+	defer lis.Close()
+	if err := os.Chmod(c.socket, 0o600); err != nil {
+		return nil, err
+	}
+	return lis.File()
 }
 
 // accept validates a Describe answer. The first one is registered; a restarted

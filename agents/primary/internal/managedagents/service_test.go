@@ -513,3 +513,30 @@ func TestAGrantsFilesAndKnowledgeDefaultToAllAndEmptyMeansNone(t *testing.T) {
 		}
 	}
 }
+
+// TestTheConfiguredRunTimeoutReachesEveryEngine: a specialist's run is
+// bounded by the run timeout the service was configured with, as the
+// primary's is, rather than by the threads default its callers' leases do
+// not follow.
+func TestTheConfiguredRunTimeoutReachesEveryEngine(t *testing.T) {
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := newFakeRepository()
+	service, err := New(Config{
+		Repository: repo,
+		Factory:    func(Definition) (agent.Agent, error) { return namedAgent(t, "managed_agt_primary"), nil },
+		Sessions:   session.InMemoryService(), Runs: noRuns{}, Prices: prices,
+		RunTimeout: 25 * time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.runTimeout != 25*time.Minute {
+		t.Fatalf("run timeout = %s, want 25m", service.runTimeout)
+	}
+	if _, err := service.engine(repo.primary, UnattendedQuiet); err != nil {
+		t.Fatalf("engine() error = %v", err)
+	}
+}

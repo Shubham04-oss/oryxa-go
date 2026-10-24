@@ -39,6 +39,12 @@ func TestRulesDecide(t *testing.T) {
 	bob := decidePersonSeat("bob", "user-bob", false)
 	sales := decideAgentSeat("ada", "user-ada", "agent-ada", "sales")
 	salesOwnerPresent := decidePersonSeat("ada-person", "user-ada", true)
+	salesOwnerAway := decidePersonSeat("ada-person", "user-ada", false)
+	// ownSales is Ada's own agent, which speaks for her; sales above is a
+	// specialist she contributed, which speaks for nobody.
+	ownSales := sales
+	ownSales.SpeaksFor = "user-ada"
+	pricing := decideAgentSeat("pricing", "user-ada", "agent-pricing", "pricing")
 
 	cases := []struct {
 		name    string
@@ -68,10 +74,28 @@ func TestRulesDecide(t *testing.T) {
 			want:  Verdict{Certainty: 1, Model: rulesModel, Why: "acknowledgement: never answered"},
 		},
 		{
-			name:  "a question with a free agent seat is answered",
+			name:  "a question with a free agent seat is answered by that seat",
 			seats: []Seat{bob, sales},
 			body:  "does anyone have the sales deck?",
-			want:  Verdict{Answer: true, Certainty: 1, Model: rulesModel, Why: "asks something, and an agent seat is free to take it"},
+			want:  Verdict{Answer: true, Speaker: "ada", Certainty: 1, Model: rulesModel, Why: "asks something, and an agent seat is free to take it"},
+		},
+		{
+			name:  "an away person's own agent is free to take a question",
+			seats: []Seat{bob, salesOwnerAway, ownSales},
+			body:  "does anyone have the sales deck?",
+			want:  Verdict{Answer: true, Speaker: "ada", Certainty: 1, Model: rulesModel, Why: "asks something, and an agent seat is free to take it"},
+		},
+		{
+			name:  "a contributed specialist is preferred to an away person's own agent",
+			seats: []Seat{bob, salesOwnerAway, ownSales, pricing},
+			body:  "what do we charge for this?",
+			want:  Verdict{Answer: true, Speaker: "pricing", Certainty: 1, Model: rulesModel, Why: "asks something, and an agent seat is free to take it"},
+		},
+		{
+			name:  "a contributed specialist is free while the person who contributed it is present",
+			seats: []Seat{salesOwnerPresent, ownSales, pricing},
+			body:  "what do we charge for this?",
+			want:  Verdict{Answer: true, Speaker: "pricing", Certainty: 1, Model: rulesModel, Why: "asks something, and an agent seat is free to take it"},
 		},
 		{
 			name:  "a question with no agent seat at all goes unanswered",
@@ -81,7 +105,7 @@ func TestRulesDecide(t *testing.T) {
 		},
 		{
 			name:  "a question is unanswered while the only agent's own person is present",
-			seats: []Seat{salesOwnerPresent, sales},
+			seats: []Seat{salesOwnerPresent, ownSales},
 			body:  "does anyone have the sales deck?",
 			want:  Verdict{Certainty: 1, Model: rulesModel, Why: "asks something, but no agent seat is free"},
 		},
@@ -366,7 +390,13 @@ func TestJevDecide(t *testing.T) {
 // own role and who they speak for, plus nobody — and nothing internal (a
 // user or agent id) leaks into it.
 func TestJevSpeakerQuestionOffersEachSeatsOwnRole(t *testing.T) {
+	// ada is Ada Lovelace's own agent: it speaks for her, not for itself.
 	sales := decideAgentSeat("ada", "user-ada-secret", "agent-ada-secret", "sales")
+	sales.DisplayName = "Krude"
+	sales.SpeaksFor = "user-ada-secret"
+	adaPerson := decidePersonSeat("ada-lovelace", "user-ada-secret", false)
+	adaPerson.DisplayName = "Ada Lovelace"
+	pricing := decideAgentSeat("pricing", "user-bob", "agent-pricing", "pricing")
 	bob := decidePersonSeat("bob", "user-bob", true)
 	answers := map[string]any{
 		qAnswer:  choiceAnswer("needs_an_agent", 0.9, map[string]float64{"needs_an_agent": 0.9, "between_people": 0.06, "small_talk": 0.04}),
@@ -382,7 +412,7 @@ func TestJevSpeakerQuestionOffersEachSeatsOwnRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	decider := Jev{Ask: client.Ask, Fallback: Rules{}}
-	room := Situation{Name: "launch-room", Seats: []Seat{bob, sales}}
+	room := Situation{Name: "launch-room", Seats: []Seat{bob, adaPerson, sales, pricing}}
 	message := Message{Body: "can someone send the sales deck?"}
 
 	if _, err := decider.Decide(context.Background(), room, message); err != nil {
@@ -394,8 +424,11 @@ func TestJevSpeakerQuestionOffersEachSeatsOwnRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	sent := string(raw)
-	if !strings.Contains(sent, `"role":"sales"`) || !strings.Contains(sent, `"speaks_for":"ada"`) {
-		t.Fatalf("request sent = %s, want the sales seat's role and who it speaks for", sent)
+	if !strings.Contains(sent, `"ada":{"role":"sales","speaks_for":"Ada Lovelace"}`) {
+		t.Fatalf("request sent = %s, want the sales seat's role and the person it speaks for", sent)
+	}
+	if want := `"pricing":{"role":"pricing","speaks_for":"` + speaksForTeam + `"}`; !strings.Contains(sent, want) {
+		t.Fatalf("request sent = %s, want the specialist described as speaking for the team (%s)", sent, want)
 	}
 	if strings.Contains(sent, "user-ada-secret") || strings.Contains(sent, "agent-ada-secret") {
 		t.Fatalf("request sent = %s, an internal id leaked into what Jev is shown", sent)
@@ -503,5 +536,23 @@ func TestLiveJevAsksTheRealQuestions(t *testing.T) {
 		if verdict.Speaker != "" && !knownAgentSeat([]Seat{sales, support}, verdict.Speaker) {
 			t.Errorf("%q: speaker = %q, want one of this room's own agent seats", body, verdict.Speaker)
 		}
+	}
+}
+
+// The author of a message is doing the talking, so their own agent is never
+// the one Rules picks to answer it, even before their presence is recorded.
+func TestRulesNeverPicksTheAuthorsOwnAgent(t *testing.T) {
+	ada := decidePersonSeat("ada", "user-ada", false)
+	adaAgent := decideAgentSeat("krude", "user-ada", "agent-ada", "")
+	adaAgent.SpeaksFor = "user-ada"
+	room := Situation{Seats: []Seat{ada, adaAgent}}
+	message := Message{Body: "does anyone have the deck?", AuthorHandle: "ada", AuthorUserID: "user-ada"}
+
+	got, err := (Rules{}).Decide(context.Background(), room, message)
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if got.Answer || got.Speaker != "" {
+		t.Fatalf("Decide() = %+v, want no answer: the only agent speaks for the author", got)
 	}
 }
