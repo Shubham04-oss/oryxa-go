@@ -51,8 +51,8 @@ type Config struct {
 	// 60 s silence limit and 30 minute run limit.
 	InvokeTimeout, SyncIdle, SyncLimit time.Duration
 	// ConnectorUID, when set, is the user and group connectors run as. The
-	// host needs CAP_SETUID and CAP_SETGID for it (the image's /oryxa has
-	// them); without them no connector starts. Zero runs them as the host's
+	// host needs CAP_SETUID and CAP_SETGID for it and CAP_KILL to stop them
+	// (the image's /oryxa has the three); without them no connector starts. Zero runs them as the host's
 	// own user, as in local development and tests.
 	ConnectorUID uint32
 }

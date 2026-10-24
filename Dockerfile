@@ -22,12 +22,21 @@ RUN mkdir -p /out/connectors && for dir in integrations/connectors/*/; do \
       CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" \
         -o "/out/connectors/$id" "./$dir" || exit 1; \
     done
+# Connectors run as their own user, connector (65533), so they cannot read the
+# service's memory or environment (#478). Switching to it needs CAP_SETUID and
+# CAP_SETGID, and stopping a connector of another user CAP_KILL; /oryxa gets
+# the three as file capabilities and still runs as nonroot.
+COPY --from=gcr.io/distroless/static-debian12:nonroot /etc/passwd /etc/group /out/etc/
+RUN echo 'connector:x:65533:65533:connector:/nonexistent:/sbin/nologin' >> /out/etc/passwd && \
+    echo 'connector:x:65533:' >> /out/etc/group && \
+    apk add --no-cache libcap && setcap cap_kill,cap_setgid,cap_setuid=ep /out/oryxa
 
 # Every service in one static executable. ORYXA_SERVICES picks which of them
 # a container runs; all of them by default.
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/oryxa /oryxa
 COPY --from=build /out/connectors /connectors
+COPY --from=build /out/etc/passwd /out/etc/group /etc/
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s CMD ["/oryxa", "healthcheck"]
 ENTRYPOINT ["/oryxa"]

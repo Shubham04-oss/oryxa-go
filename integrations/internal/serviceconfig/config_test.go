@@ -74,12 +74,18 @@ func TestOnReadsConnectorsEgressKeysAndTheBrokerAddress(t *testing.T) {
 	config, err := FromEnv(env(map[string]string{
 		"INTEGRATIONS_ENABLED":        "true",
 		"INTEGRATIONS_CONNECTORS_DIR": " /connectors ",
+		"INTEGRATIONS_CONNECTOR_UID":  "65533",
 		"INTEGRATIONS_EGRESS_KEYS":    `{"current":"k1","keys":{"k1":"` + key + `"}}`,
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.ConnectorsDir != "/connectors" || config.EgressKeys.Current != "k1" || config.BrokerAddress != "127.0.0.1:8091" {
+	for _, uid := range []string{"0", "nobody", "-1"} {
+		if _, err := FromEnv(env(map[string]string{"INTEGRATIONS_ENABLED": "true", "INTEGRATIONS_CONNECTOR_UID": uid})); err == nil {
+			t.Errorf("connector uid %q accepted", uid)
+		}
+	}
+	if config.ConnectorsDir != "/connectors" || config.ConnectorUID != 65533 || config.EgressKeys.Current != "k1" || config.BrokerAddress != "127.0.0.1:8091" {
 		t.Fatalf("config = %+v", config)
 	}
 	for name, raw := range map[string]string{

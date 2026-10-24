@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/Shubham04-oss/oryxa-go/integrations/egress"
@@ -44,6 +45,10 @@ type Config struct {
 	// file, named by the connector's manifest id (INTEGRATIONS_CONNECTORS_DIR).
 	// Empty means no connector runs.
 	ConnectorsDir string
+	// ConnectorUID is the user and group connectors run as
+	// (INTEGRATIONS_CONNECTOR_UID); the image's is 65533. Empty runs them as
+	// the service's own user.
+	ConnectorUID uint32
 	// EgressKeys sign the handles connectors call apps with, as JSON
 	// {"current": "<kid>", "keys": {"<kid>": "<at least 32 bytes>"}} in
 	// INTEGRATIONS_EGRESS_KEYS. Without them tool calls are not mounted.
@@ -94,6 +99,13 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		}
 	}
 	config.ConnectorsDir = strings.TrimSpace(getenv("INTEGRATIONS_CONNECTORS_DIR"))
+	if raw := strings.TrimSpace(getenv("INTEGRATIONS_CONNECTOR_UID")); raw != "" {
+		uid, err := strconv.ParseUint(raw, 10, 32)
+		if err != nil || uid == 0 {
+			return Config{}, fmt.Errorf("INTEGRATIONS_CONNECTOR_UID is not a user id other than 0")
+		}
+		config.ConnectorUID = uint32(uid)
+	}
 	if raw := strings.TrimSpace(getenv("INTEGRATIONS_EGRESS_KEYS")); raw != "" {
 		var keys struct {
 			Current string                    `json:"current"`
