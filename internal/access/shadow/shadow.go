@@ -175,18 +175,55 @@ func (shadow *Shadow) compare(next job) {
 		})
 		return
 	}
-	shadow.count(next.ctx, ask, "disagreed")
+	shadow.disagree(next.ctx, ask, next.allowed, answer, checks)
+}
+
+// disagree counts, logs and records a difference between the code and SpiceDB.
+func (shadow *Shadow) disagree(ctx context.Context, ask access.Ask, code, answer bool, checks []spicedb.Check) {
+	shadow.count(ctx, ask, "disagreed")
 	asked := make([]string, len(checks))
 	for i, check := range checks {
 		asked[i] = fmt.Sprintf("%s:%s#%s@%s:%s", check.Resource.Type, check.Resource.ID, check.Permission, check.Subject.Type, check.Subject.ID)
 	}
-	shadow.logger.WarnContext(next.ctx, "spicedb disagrees with the code", "service", ask.Service, "action", ask.Action,
-		"resource_kind", ask.ResourceKind, "resource_id", ask.ResourceID, "code", next.allowed, "spicedb", answer)
+	shadow.logger.WarnContext(ctx, "spicedb disagrees with the code", "service", ask.Service, "action", ask.Action,
+		"resource_kind", ask.ResourceKind, "resource_id", ask.ResourceID, "code", code, "spicedb", answer)
 	if shadow.recorder != nil {
-		ctx, cancel := context.WithTimeout(next.ctx, 5*time.Second)
-		shadow.recorder.Disagree(ctx, access.Disagreement{Ask: ask, Code: next.allowed, SpiceDB: answer, Checks: asked})
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		shadow.recorder.Disagree(ctx, access.Disagreement{Ask: ask, Code: code, SpiceDB: answer, Checks: asked})
 		cancel()
 	}
+}
+
+// DecideTimeout bounds a decision a request waits for. Slower is no answer,
+// and no answer refuses.
+const DecideTimeout = 500 * time.Millisecond
+
+// Decide answers ask from SpiceDB, for a service switched to it (step 5).
+// codeAllowed is what the code answered; a difference is recorded, without
+// waiting to settle, since SpiceDB's answer is the one the caller gets.
+func (shadow *Shadow) Decide(ctx context.Context, ask access.Ask, codeAllowed bool) (bool, error) {
+	if shadow == nil {
+		return false, access.ErrNoAnswer
+	}
+	checks, ok := shadow.checks(ask.Actor, ask.UserID, ask.AgentID, ask.Action,
+		spicedb.Object{Type: ask.ResourceKind, ID: ask.ResourceID}, ask.Limited)
+	if !ok || len(checks) == 0 {
+		shadow.count(ctx, ask, "skipped")
+		return false, access.ErrNoAnswer
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, DecideTimeout)
+	answer, err := shadow.checker.Check(checkCtx, ask.OrganizationID, checks)
+	cancel()
+	if err != nil {
+		shadow.count(ctx, ask, "unanswered")
+		return false, fmt.Errorf("spicedb did not decide: %w", err)
+	}
+	if answer != codeAllowed {
+		shadow.disagree(ctx, ask, codeAllowed, answer, checks)
+	} else {
+		shadow.count(ctx, ask, "agreed")
+	}
+	return answer, nil
 }
 
 func (shadow *Shadow) count(ctx context.Context, ask access.Ask, outcome string) {
