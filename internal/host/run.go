@@ -170,6 +170,10 @@ func openPlatform(ctx context.Context, config Config, selected []Definition, sel
 		}
 		logger.Info("postgres connected", "extensions", database.ExtensionVersions(), "max_conns", database.Pool.Config().MaxConns)
 	}
+	if err := spicedb.CheckSchema(ctx, spicedb.FromEnv(), os.Getenv, logger.With("component", "access-shadow")); err != nil {
+		database.Close()
+		return Platform{}, nil, err
+	}
 	// The shadow records disagreements in the access log, so it needs the
 	// database; failing to dial SpiceDB leaves it off rather than the process.
 	var comparer access.Comparer

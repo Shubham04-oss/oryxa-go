@@ -23,6 +23,17 @@ variable "spicedb_desired_count" {
   default     = 0
 }
 
+variable "access_engines" {
+  description = "Which services decide access from SpiceDB (ACCESS_ENGINE_<SERVICE>), by service: files, rag, knowledge, apps or teams, each \"spicedb\" or \"code\". Given to the oryxa task only while SpiceDB runs (spicedb_desired_count above zero). Empty, the default, leaves every service on its code; deploy/README.md, \"Deciding from SpiceDB\", gives the order."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition     = alltrue([for service, engine in var.access_engines : contains(["files", "rag", "knowledge", "apps", "teams"], service) && contains(["code", "spicedb"], engine)])
+    error_message = "access_engines maps files, rag, knowledge, apps or teams to \"code\" or \"spicedb\"."
+  }
+}
+
 locals {
   spicedb       = var.spicedb_enabled ? 1 : 0
   spicedb_on    = var.spicedb_enabled && var.spicedb_desired_count > 0
@@ -32,10 +43,12 @@ locals {
 
   # What the oryxa task reads (internal/access/spicedb.FromEnv). Insecure is
   # plain gRPC, which only the VPC and the security group below ever carry.
-  spicedb_environment = local.spicedb_on ? {
+  # ACCESS_ENGINE_<SERVICE> come only with the endpoint: a service set to
+  # spicedb without SpiceDB refuses to start.
+  spicedb_environment = local.spicedb_on ? merge({
     SPICEDB_ENDPOINT = "${local.spicedb_host}:50051"
     SPICEDB_INSECURE = "true"
-  } : {}
+  }, { for service, engine in var.access_engines : "ACCESS_ENGINE_${upper(service)}" => engine }) : {}
 
   spicedb_datastore = [
     { name = "SPICEDB_DATASTORE_ENGINE", value = "postgres" },
@@ -343,8 +356,9 @@ resource "aws_cloudwatch_metric_alarm" "spicedb_running" {
 locals {
   spicedb_queue = "${local.name}-spicedb-events"
 
-  # projector.Subscriptions(), by source. Keep it in step with the Go: an event
-  # it maps but this leaves out is never projected, only reconciled at night.
+  # projector.Subscriptions(), by source; TestRuleMatchesSubscriptions fails
+  # when they drift. An event it maps but this leaves out is never projected,
+  # only reconciled at night.
   spicedb_subscriptions = {
     "oryxa.agents" = ["agents.agent.created.v1", "agents.agent.deleted.v1", "agents.agent.updated.v1", "agents.interaction.requested.v1"]
     "oryxa.apps"   = ["apps.connection.connected.v1", "apps.connection.initiated.v1", "apps.connection.removed.v1"]
