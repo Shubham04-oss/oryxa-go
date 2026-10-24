@@ -71,6 +71,9 @@ type slice struct {
 var ownedSlices = []slice{
 	{"org", []string{"owner", "admin", "member"}, []string{"auth"}},
 	{"org", []string{"executive"}, []string{"auth", "workspace"}},
+	{"chart_person", []string{"user", "chart", "manager", "exec_of"}, []string{"auth", "workspace"}},
+	// The chart before #442, per user: nothing expects it, so the reconcile
+	// that writes the chart_person one deletes it.
 	{"member", []string{"chart", "manager", "exec_of"}, []string{"auth", "workspace"}},
 	{"team", []string{"org", "parent", "lead", "member"}, []string{"teams"}},
 	{"agent", []string{"acts_for", "org"}, []string{"agents"}},
@@ -198,7 +201,8 @@ func grantRels(world World, agent Agent) []Rel {
 // chartRels is the org chart as runtime.Above reads it: everyone it names is
 // on the chart, executives are marked, and an edge whose relation is in
 // authority makes its from the to's manager. The chart names people by email;
-// a person who is not a member of the org is left out.
+// a person who is not a member of the org is left out. Each person is a
+// chart_person of this org (chartPerson), so the chart counts in no other.
 func chartRels(chart Chart, memberships []Membership) []Rel {
 	users := map[string]string{}
 	for _, membership := range memberships {
@@ -212,13 +216,14 @@ func chartRels(chart Chart, memberships []Membership) []Rel {
 	onChart := func(email string) {
 		if id := user(email); id != "" && !named[id] {
 			named[id] = true
-			rels = append(rels, rel("member", id, "chart", "org", chart.Org))
+			rels = append(rels, rel("chart_person", chartPerson(chart.Org, id), "user", "member", id),
+				rel("chart_person", chartPerson(chart.Org, id), "chart", "org", chart.Org))
 		}
 	}
 	for _, email := range chart.Chart.Executives {
 		onChart(email)
 		if id := user(email); id != "" {
-			rels = append(rels, rel("member", id, "exec_of", "org", chart.Org), rel("org", chart.Org, "executive", "member", id))
+			rels = append(rels, rel("chart_person", chartPerson(chart.Org, id), "exec_of", "org", chart.Org), rel("org", chart.Org, "executive", "member", id))
 		}
 	}
 	for _, relationship := range chart.Chart.Relationships {
@@ -226,11 +231,14 @@ func chartRels(chart Chart, memberships []Membership) []Rel {
 		onChart(relationship.To)
 		from, to := user(relationship.From), user(relationship.To)
 		if from != "" && to != "" && from != to && slices.Contains(chart.Chart.Authority, relationship.Relation) {
-			rels = append(rels, rel("member", to, "manager", "member", from))
+			rels = append(rels, rel("chart_person", chartPerson(chart.Org, to), "manager", "chart_person", chartPerson(chart.Org, from)))
 		}
 	}
 	return rels
 }
+
+// chartPerson is the id of user's place in org's chart.
+func chartPerson(org, user string) string { return org + "/" + user }
 
 // Diff is what to delete and what to write so that actual becomes expected.
 func Diff(expected, actual []Rel) (remove, add []Rel) {

@@ -13,20 +13,36 @@
 use expiration
 
 definition member {
+    // Legacy: the org chart lived here until #442, per user and so shared by
+    // every org the user is in. Nothing reads these; the reconcile deletes
+    // them, and a later schema drops them once they hold nothing (SpiceDB
+    // refuses to drop a relation that still does).
+    relation chart: org
+    relation manager: member
+    relation exec_of: org
+}
+
+// One person in one org's chart, id "<org>/<user>", so one org's chart never
+// counts in another org the same user is in (#442). Subjects stay members:
+// check chart_person:<org>/<user>#outranked_by@member:<user>.
+definition chart_person {
+    // the user this is
+    relation user: member
     // set only for people the org chart names, so a person the chart leaves
     // out is above nobody and below nobody, as runtime.Above does today
     relation chart: org
     // an orgChart edge whose relation is in orgChart.authority
-    relation manager: member
+    relation manager: chart_person
     // set only on executives
     relation exec_of: org
     // consent shortcuts (§4); written from step 6
     relation standing_summary: member
     relation lease: member with in_thread and expiration
 
+    permission self = user
     // Above: an executive outranks everyone named in the chart but other
     // executives, and nobody outranks an executive.
-    permission outranked_by = (manager + manager->outranked_by + chart->executives) - exec_of->participate
+    permission outranked_by = (manager->self + manager->outranked_by + chart->executives) - exec_of->participate
     permission summary_without_asking = outranked_by + standing_summary + lease
     permission access_without_asking = lease
 }
