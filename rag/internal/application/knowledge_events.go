@@ -596,6 +596,7 @@ func (service *Service) knowledgeCorpus(ctx context.Context, organizationID stri
 		}
 		return domain.Corpus{}, err
 	}
+	service.corpusCreated(ctx, corpus)
 	return corpus, nil
 }
 

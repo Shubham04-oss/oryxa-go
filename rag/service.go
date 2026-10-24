@@ -299,6 +299,11 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		logger.Warn("RAG_EVENTS_QUEUE_URL is not set: rag will not hear about deleted organizations, members leaving them, deleted teams, deleted files, or documents knowledge publishes or removes")
 	}
 
+	closeEngine, err := withEngine(platform, service)
+	if err != nil {
+		return host.Service{}, err
+	}
+
 	server := httpserver.New(service, httpserver.Config{
 		AllowedOrigins: config.AllowedOrigins,
 		Capabilities: httpserver.Capabilities{
@@ -328,5 +333,6 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			Write: 180 * time.Second,
 		},
 		Workers: workers,
+		Close:   closeEngine,
 	}, nil
 }
