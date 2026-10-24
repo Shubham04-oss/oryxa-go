@@ -175,8 +175,14 @@ type Dependencies struct {
 	// Shadow compares mayRead's decisions with SpiceDB. Nil compares
 	// nothing.
 	Shadow access.Comparer
-	Logger *slog.Logger
-	Clock  func() time.Time
+	// Engine, when set, decides mayRead from SpiceDB
+	// (ACCESS_ENGINE_KNOWLEDGE=spicedb), and Relationships writes a source's
+	// place in it as the source is added or removed. Nil for both keeps the
+	// code deciding.
+	Engine        access.Decider
+	Relationships Relationships
+	Logger        *slog.Logger
+	Clock         func() time.Time
 }
 
 type Config struct {
@@ -205,6 +211,8 @@ type Service struct {
 	judge           Judge
 	recorder        Recorder
 	shadow          access.Comparer
+	engine          access.Decider
+	relationships   Relationships
 	logger          *slog.Logger
 	now             func() time.Time
 	config          Config
@@ -223,6 +231,8 @@ func New(dependencies Dependencies, config Config) *Service {
 		judge:           dependencies.Judge,
 		recorder:        dependencies.Recorder,
 		shadow:          dependencies.Shadow,
+		engine:          dependencies.Engine,
+		relationships:   dependencies.Relationships,
 		logger:          dependencies.Logger,
 		now:             dependencies.Clock,
 		config:          config,

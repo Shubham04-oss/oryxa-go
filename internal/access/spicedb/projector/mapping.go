@@ -205,6 +205,22 @@ func Placed(resourceType, id string, placement Placement) (Change, error) {
 	return Change{Organization: placement.Org, Touch: rels}, nil
 }
 
+// SourceRegistered is a knowledge source added. Knowledge publishes no event
+// for it; the reconcile writes the same from the table (Expected).
+func SourceRegistered(org, id, connection, createdBy string) (Change, error) {
+	if org == "" || id == "" {
+		return Change{}, fmt.Errorf("source registered: organization %q, id %q", org, id)
+	}
+	rels := []Rel{rel("source", id, "org", "org", org)}
+	if connection != "" {
+		rels = append(rels, rel("source", id, "connection", "connection", connection))
+	}
+	if createdBy != "" {
+		rels = append(rels, rel("source", id, "created_by", "member", createdBy))
+	}
+	return Change{Organization: org, Touch: rels}, nil
+}
+
 // Deleted drops a resource and everything on it, grants included.
 func Deleted(resourceType, org, id string) (Change, error) {
 	if id == "" {

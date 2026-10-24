@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/access"
+	"github.com/Shubham04-oss/oryxa-go/internal/access/spicedb/projector"
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/membertoken"
@@ -208,11 +209,19 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		Logger:   logger,
 	}
 	dependencies.Policy = platform.WorkspaceSettings()
+	engine, err := projector.OpenEngine(platform, Name)
+	if err != nil {
+		return host.Service{}, err
+	}
+	if engine != nil {
+		dependencies.Engine, dependencies.Relationships = engine.Decider, relationships{engine}
+	}
 	service, err := New(dependencies, Config{
 		AllowedOrigins: config.AllowedOrigins, FullSweepInterval: config.FullSweepInterval,
 		Services: serviceVerifier, OriginalsBucket: config.OriginalsBucket,
 	})
 	if err != nil {
+		engine.Close()
 		return host.Service{}, err
 	}
 
@@ -237,6 +246,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		Routes:   service.Routes(),
 		Timeouts: host.Timeouts{Read: 15 * time.Second, Write: 30 * time.Second},
 		Workers:  workers,
+		Close:    engine.Close,
 	}, nil
 }
 

@@ -58,6 +58,16 @@ func (engine *Engine) Placed(ctx context.Context, resourceType, id string, place
 	return err
 }
 
+// SourceRegistered writes a knowledge source's relationships as it is added.
+func (engine *Engine) SourceRegistered(ctx context.Context, org, id, connection, createdBy string) error {
+	change, err := SourceRegistered(org, id, connection, createdBy)
+	if err != nil {
+		return err
+	}
+	_, err = engine.writer.Apply(ctx, change)
+	return err
+}
+
 // Deleted drops a resource's relationships as it is deleted.
 func (engine *Engine) Deleted(ctx context.Context, resourceType, organizationID, id string) error {
 	change, err := Deleted(resourceType, organizationID, id)
