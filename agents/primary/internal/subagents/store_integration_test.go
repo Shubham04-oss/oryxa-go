@@ -245,4 +245,23 @@ func TestPostgresStoreListsWhatToSweep(t *testing.T) {
 	if want := []string{records[0].ID, records[2].ID}; !slices.Equal(found, want) {
 		t.Fatalf("sweepable = %v, want %v", found, want)
 	}
+
+	// The delete holds to the same condition as the rows are when it runs:
+	// one reopened since it was listed stays.
+	reopened := records[0]
+	reopened.State, reopened.ExpiresAt = StateRunning, now.Add(time.Hour)
+	if err := store.Update(ctx, reopened, StateDone); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := store.DeleteExpired(ctx, now, records[0].ID, records[1].ID, records[2].ID, records[3].ID)
+	if err != nil || len(deleted) != 0 {
+		t.Fatalf("deleted %v, %v; want none: none is both expired and not running now", deleted, err)
+	}
+	reopened.State, reopened.ExpiresAt = StateDone, now.Add(-time.Minute)
+	if err := store.Update(ctx, reopened, StateRunning); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err = store.DeleteExpired(ctx, now, records[0].ID, records[1].ID); err != nil || !slices.Equal(deleted, []string{records[0].ID}) {
+		t.Fatalf("deleted %v, %v; want the expired one alone", deleted, err)
+	}
 }

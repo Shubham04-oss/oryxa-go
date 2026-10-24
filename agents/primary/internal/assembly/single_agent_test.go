@@ -80,9 +80,8 @@ func TestSubagentsComeWithTheFlagAndTheirStorage(t *testing.T) {
 	on.singleAgent = true
 	knowledge := fakeToolbox(t, "knowledge", "knowledge_search")
 	on.readOnlyKnowledge = &knowledge
-	sandbox := fakeToolbox(t, "sandbox", "sandbox_execute_code")
 	storage := SubagentStorage{Store: subagents.NewMemoryStore(), Sessions: session.InMemoryService()}
-	if err := on.startSubagents(serviceconfig.Config{SubagentsPerRun: 2, SubagentsPerProcess: 8, SubagentTTL: time.Hour}, storage, &sandbox, slog.New(slog.DiscardHandler)); err != nil {
+	if err := on.startSubagents(serviceconfig.Config{SubagentsPerRun: 2, SubagentsPerProcess: 8, SubagentTTL: time.Hour}, storage, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatal(err)
 	}
 	if err := on.buildAgents(); err != nil {

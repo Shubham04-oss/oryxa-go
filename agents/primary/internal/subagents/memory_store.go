@@ -67,6 +67,20 @@ func (s *MemoryStore) ListSweepable(_ context.Context, expiredBefore, staleBefor
 	return records, nil
 }
 
+func (s *MemoryStore) DeleteExpired(_ context.Context, expiredBefore time.Time, ids ...string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var deleted []string
+	for _, id := range ids {
+		record, ok := s.records[id]
+		if ok && record.State != StateRunning && record.ExpiresAt.Before(expiredBefore) {
+			delete(s.records, id)
+			deleted = append(deleted, id)
+		}
+	}
+	return deleted, nil
+}
+
 func (s *MemoryStore) filter(keep func(Record) bool) []Record {
 	s.mu.Lock()
 	defer s.mu.Unlock()

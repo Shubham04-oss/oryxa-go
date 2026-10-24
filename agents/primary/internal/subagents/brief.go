@@ -37,7 +37,7 @@ type Brief struct {
 	Objective string   `json:"objective" jsonschema:"What to find out or produce, in one or two sentences."`
 	Output    string   `json:"output" jsonschema:"What to return, and its shape: for example a table of vendor, price and source, or five bullet points with a link each."`
 	Context   string   `json:"context,omitempty" jsonschema:"Everything the sub-agent needs to know. It sees nothing else: not this conversation, not the member, not what you already found."`
-	Tools     []string `json:"tools,omitempty" jsonschema:"The tools it may use: any of knowledge (the organization's documents), apps_read (read the member's connected apps) and web_search (the live web), which send, post and change nothing; or sandbox (run code in this conversation's sandbox) alone, never beside the others, since code there can reach the network. Give only what the objective needs."`
+	Tools     []string `json:"tools,omitempty" jsonschema:"The tools it may use, from: knowledge (the organization's documents), apps_read (read the member's connected apps), web_search (the live web). Give only what the objective needs; all of them only read, and none can send, post or change anything."`
 	Files     []string `json:"files,omitempty" jsonschema:"Names of this conversation's files (artifacts) to hand it, read-only, at most five."`
 	Budget    Budget   `json:"budget,omitempty" jsonschema:"How much it may spend on this assignment: model_calls (default 30, at most 100) and minutes (default 5, at most 15)."`
 	Wait      bool     `json:"wait,omitempty" jsonschema:"true waits until it finishes, fails or asks you a question, and returns that. false returns its id at once, so several can work at the same time; read them later with agent_status."`
@@ -80,13 +80,6 @@ func checkBrief(in Brief, available []string) (brief, error) {
 	tools, err := checkTools(in.Tools, available)
 	if err != nil {
 		return brief{}, err
-	}
-	// Code in the sandbox can reach the network, so a sub-agent that read the
-	// organization's documents, the member's apps or the web, any of which
-	// may carry instructions somebody planted, could send what it read out
-	// through it. A sandbox sub-agent computes on its brief and files alone.
-	if slices.Contains(tools, ToolSandbox) && len(tools) > 1 {
-		return brief{}, errors.New("sandbox cannot be given beside knowledge, apps_read or web_search: code in the sandbox can reach the network. Give one sub-agent the reads and another the sandbox, and pass what the first found to the second in its context")
 	}
 	checked.tools = tools
 	for _, raw := range in.Files {

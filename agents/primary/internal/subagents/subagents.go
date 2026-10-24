@@ -13,13 +13,13 @@
 //
 // A sub-agent runs as the member, on the context of the run of Krude's that
 // set it working: the member's token, the run's usage counter, which prices
-// its model calls into that run, and the run's record of what it read. Its
-// tools are a fixed set (Worker): reads of the organization's knowledge, the
-// member's apps and the web, which send, post and change nothing; or, on its
-// own, the conversation's sandbox, which runs code with network access and
-// so is never given beside a read (checkBrief), so that nothing a sub-agent
-// read can leave through it. It never starts sub-agents of its own, and it
-// neither reads nor writes memory. A running sub-agent stops when the run that set it working ends;
+// its model calls into that run, and the run's record of what it read. It
+// reads, and changes nothing: its tools are a fixed read-only set (Worker),
+// the organization's knowledge, the member's apps and the web. It has no
+// sandbox, whose code can reach the network: what a sub-agent read could
+// carry planted instructions, and nothing could stop them sending it out.
+// It never starts sub-agents of its own, and it neither reads nor writes
+// memory. A running sub-agent stops when the run that set it working ends;
 // a done or waiting one is kept, for the thread's next runs, until its TTL
 // after its last activity runs out.
 //
@@ -44,9 +44,8 @@ const AppName = "krude_sub"
 // WorkerName is the agent name a sub-agent answers to in its own session.
 const WorkerName = "subagent"
 
-// The tool families a brief may allow, and nothing else. The three reads
-// send, post and change nothing; the sandbox runs code, network included,
-// so a brief has it alone or not at all.
+// The tool families a brief may allow, and nothing else: reads, none of
+// which sends, posts or changes anything.
 const (
 	// ToolKnowledge is the organization's documents, searched as the member.
 	ToolKnowledge = "knowledge"
@@ -55,15 +54,11 @@ const (
 	ToolAppsRead = "apps_read"
 	// ToolWebSearch is web_search, Krude's own search-only agent.
 	ToolWebSearch = "web_search"
-	// ToolSandbox is the conversation's sandbox, the one Krude uses, for
-	// running code over scratch files. It is not read-only: code there can
-	// reach the network. A brief that allows it allows nothing else.
-	ToolSandbox = "sandbox"
 )
 
 // Families are the tool families a brief may name, in the order they are
 // described.
-var Families = []string{ToolKnowledge, ToolAppsRead, ToolWebSearch, ToolSandbox}
+var Families = []string{ToolKnowledge, ToolAppsRead, ToolWebSearch}
 
 // The tools Krude manages its sub-agents with, and the one a sub-agent asks
 // Krude a question with.
@@ -93,12 +88,11 @@ const (
 )
 
 // Worker is what Builder builds a sub-agent from: its instruction, the tool
-// families its brief allowed, the thread whose sandbox it shares, its own
-// tools (ask_parent) and the callbacks that count and bound its model calls.
+// families its brief allowed, its own tools (ask_parent), the callbacks that
+// count and bound its model calls, and Meter for the models its tools run.
 type Worker struct {
 	Instruction string
 	Tools       []string
-	Thread      Thread
 	Own         []tool.Tool
 	BeforeModel []llmagent.BeforeModelCallback
 	AfterModel  []llmagent.AfterModelCallback
@@ -111,7 +105,7 @@ type Worker struct {
 }
 
 // Builder builds sub-agents: internal/agents' SubagentBuilder, over the
-// lite model and the toolboxes it may have.
+// lite model and the read-only toolboxes.
 type Builder interface {
 	// Families are the tool families this deployment can give a sub-agent,
 	// of Families.

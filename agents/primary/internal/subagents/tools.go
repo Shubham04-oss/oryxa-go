@@ -18,10 +18,9 @@ import (
 )
 
 // identityKeys are the thread's state a sub-agent's session starts with:
-// who it acts for, so its toolboxes act as the member (memberauth), and the
-// edge places its sandbox calls in the member's organization. They are
-// literals, mirrored from internal/agents and memberauth, as edgeclient's
-// are.
+// who it acts for, so its toolboxes act as the member (memberauth). They
+// are literals, mirrored from internal/agents and memberauth, as
+// edgeclient's are.
 var identityKeys = []string{"organization_id", "managed_agent_id", "managed_agent_kind", "managed_agent_grant"}
 
 // maxListed bounds how many sub-agents agent_status lists, newest first.
@@ -32,7 +31,7 @@ const maxListed = 32
 func (m *Manager) Tools() ([]tool.Tool, error) {
 	spawn, err := functiontool.New(functiontool.Config{
 		Name:        SpawnToolName,
-		Description: "Starts a sub-agent on one assignment from a complete brief, and returns its id, or with wait true its result. It sees only the brief and the files you hand it, and works with the tools you allow it: reads that send, post and change nothing, or the sandbox on its own. Start several in one turn for independent questions; they work at the same time.",
+		Description: "Starts a sub-agent on one assignment from a complete brief, and returns its id, or with wait true its result. It sees only the brief and the files you hand it, works with the read-only tools you allow it, and never sends, posts or changes anything. Start several in one turn for independent questions; they work at the same time.",
 	}, func(ctx agent.Context, args Brief) (View, error) {
 		return m.spawn(ctx, args)
 	})
@@ -410,20 +409,21 @@ func (m *Manager) settle(ctx context.Context, record Record) Record {
 	if c, _ := m.active(record.ID); c != nil {
 		return record
 	}
-	return m.markStopped(ctx, record, "its run ended before it finished")
+	stopped, _ := m.markStopped(ctx, record, "its run ended before it finished")
+	return stopped
 }
 
-func (m *Manager) markStopped(ctx context.Context, record Record, reason string) Record {
+func (m *Manager) markStopped(ctx context.Context, record Record, reason string) (Record, error) {
 	from := record.State
 	now := m.now()
 	record.State, record.Error, record.Progress, record.Question = StateStopped, reason, "", ""
 	record.UpdatedAt, record.ExpiresAt = now, now.Add(m.ttl)
 	if err := m.store.Update(ctx, record, from); err != nil {
 		m.logger.WarnContext(ctx, "record a sub-agent stopped", "subagent_id", record.ID, "error", err)
-		return record
+		return record, err
 	}
 	m.logState(ctx, record)
-	return record
+	return record, nil
 }
 
 func (m *Manager) status(ctx agent.Context, in statusArgs) (statusResult, error) {
@@ -490,34 +490,73 @@ func (m *Manager) stop(ctx agent.Context, in stopArgs) (View, error) {
 		if state == StateRunning {
 			reason = "its run ended before it finished"
 		}
-		record = m.markStopped(ctx, record, reason)
+		record, _ = m.markStopped(ctx, record, reason)
 	}
 	return viewOf(record, m.now()), nil
 }
 
-// sweep removes the thread's expired sub-agents, with their transcripts,
-// as the process's sweeper (Sweep) does everywhere, so a thread in use
-// never waits on it. It is best effort.
+// sweep removes the thread's sub-agents that expired more than a TTL ago,
+// with their transcripts, as the process's sweeper (Sweep) does
+// everywhere. For a TTL after it expires, agent_status says a sub-agent
+// expired. It is best effort.
 func (m *Manager) sweep(ctx context.Context, thread Thread) {
 	records, err := m.store.List(ctx, thread)
 	if err != nil {
 		m.logger.WarnContext(ctx, "list a thread's sub-agents to sweep", "thread_id", thread.ID, "error", err)
 		return
 	}
-	cutoff := m.now()
-	var gone []Record
+	cutoff := m.sweepCutoff()
 	for _, record := range records {
 		if record.State != StateRunning && record.ExpiresAt.Before(cutoff) {
-			gone = append(gone, record)
+			m.sweepOne(ctx, record, cutoff)
 		}
-	}
-	if err := m.remove(ctx, gone); err != nil {
-		m.logger.WarnContext(ctx, "sweep a thread's expired sub-agents", "thread_id", thread.ID, "error", err)
 	}
 }
 
+// sweepCutoff is the expiry before which a sub-agent is removed: a TTL
+// after it expired.
+func (m *Manager) sweepCutoff() time.Time { return m.now().Add(-m.ttl) }
+
+// sweepOne removes one expired sub-agent and its transcript, if it is
+// still expired once its thread's records are held: a message_agent here,
+// or on another replica, may have reopened it since it was listed. The row
+// goes first, by a delete that holds to the same condition in the
+// database, and the transcript only if the row went. Nothing working is
+// ever stopped from here. It reports whether it removed the sub-agent.
+func (m *Manager) sweepOne(ctx context.Context, listed Record, cutoff time.Time) bool {
+	lock := m.recordsOf(listed.Thread)
+	lock.Lock()
+	defer lock.Unlock()
+	if c, _ := m.active(listed.ID); c != nil {
+		return false
+	}
+	record, err := m.store.Get(ctx, listed.Thread, listed.ID)
+	if err != nil {
+		if !errors.Is(err, ErrNotFound) {
+			m.logger.WarnContext(ctx, "read a sub-agent to sweep", "subagent_id", listed.ID, "error", err)
+		}
+		return false
+	}
+	if record.State == StateRunning || !record.ExpiresAt.Before(cutoff) {
+		return false
+	}
+	deleted, err := m.store.DeleteExpired(ctx, cutoff, record.ID)
+	if err != nil {
+		m.logger.WarnContext(ctx, "sweep an expired sub-agent", "subagent_id", record.ID, "error", err)
+		return false
+	}
+	if len(deleted) == 0 {
+		return false
+	}
+	if err := m.deleteSession(ctx, record); err != nil {
+		m.logger.WarnContext(ctx, "delete a swept sub-agent's transcript", "subagent_id", record.ID, "error", err)
+	}
+	return true
+}
+
 // remove deletes records and their transcripts, stopping any this process
-// is working on first.
+// is working on first: for a thread, a member or an organization that is
+// being forgotten, never for the sweep.
 func (m *Manager) remove(ctx context.Context, records []Record) error {
 	if len(records) == 0 {
 		return nil
@@ -544,36 +583,49 @@ func (m *Manager) deleteSession(ctx context.Context, record Record) error {
 	return nil
 }
 
-// Sweep removes, everywhere, the sub-agents past their expiry with their
-// transcripts, and records as stopped the running ones a dead process left
-// (last written longer ago than any assignment can run). It reports how
-// many it removed and stopped. Replicas may sweep at once: each removal is
-// safe to repeat.
+// Sweep removes, everywhere, the sub-agents that expired more than a TTL
+// ago, with their transcripts, and records as stopped the running ones a
+// dead process left (last written longer ago than any assignment can run).
+// It reports how many it removed and stopped. A record that cannot be swept
+// now is logged and left for the next sweep; the rest are still swept.
+// Replicas may sweep at once: each removal holds to its condition in the
+// database.
 func (m *Manager) Sweep(ctx context.Context) (removed, stopped int, err error) {
-	now := m.now()
-	records, err := m.store.ListSweepable(ctx, now, now.Add(-staleRunningAfter), sweepBatch)
+	cutoff, staleBefore := m.sweepCutoff(), m.now().Add(-staleRunningAfter)
+	records, err := m.store.ListSweepable(ctx, cutoff, staleBefore, sweepBatch)
 	if err != nil {
 		return 0, 0, err
 	}
-	var gone []Record
 	for _, record := range records {
 		if record.State != StateRunning {
-			gone = append(gone, record)
+			if m.sweepOne(ctx, record, cutoff) {
+				removed++
+			}
 			continue
 		}
-		if c, _ := m.active(record.ID); c != nil {
-			continue
+		if m.stopLeftOver(ctx, record, staleBefore) {
+			stopped++
 		}
-		lock := m.recordsOf(record.Thread)
-		lock.Lock()
-		m.markStopped(ctx, record, "its run ended before it finished")
-		lock.Unlock()
-		stopped++
 	}
-	if err := m.remove(ctx, gone); err != nil {
-		return 0, stopped, err
+	return removed, stopped, nil
+}
+
+// stopLeftOver records as stopped a running sub-agent that nothing works
+// on and that has not been written since staleBefore, once its thread's
+// records are held and it still is.
+func (m *Manager) stopLeftOver(ctx context.Context, listed Record, staleBefore time.Time) bool {
+	lock := m.recordsOf(listed.Thread)
+	lock.Lock()
+	defer lock.Unlock()
+	if c, _ := m.active(listed.ID); c != nil {
+		return false
 	}
-	return len(gone), stopped, nil
+	record, err := m.store.Get(ctx, listed.Thread, listed.ID)
+	if err != nil || record.State != StateRunning || !record.UpdatedAt.Before(staleBefore) {
+		return false
+	}
+	_, err = m.markStopped(ctx, record, "its run ended before it finished")
+	return err == nil
 }
 
 // StartSweeping runs Sweep every sweepEvery until stop is called, which

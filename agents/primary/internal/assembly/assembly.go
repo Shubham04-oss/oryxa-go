@@ -448,8 +448,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		if options.Subagents == nil {
 			logger.InfoContext(ctx, "Krude runs as one agent with web_search and plan, and no sub-agents")
 		} else {
-			sandbox := agents.SandboxToolbox(sandboxTools)
-			if err := krude.startSubagents(settings, *options.Subagents, &sandbox, logger); err != nil {
+			if err := krude.startSubagents(settings, *options.Subagents, logger); err != nil {
 				return fail("sub-agents", err)
 			}
 			logger.InfoContext(ctx, "Krude runs as one agent with web_search and plan, and starts sub-agents of its own",
@@ -555,13 +554,12 @@ func (krude *Krude) ManagedRoom(spec agents.ManagedSpec) (agent.Agent, error) {
 
 // startSubagents sets up single-agent Krude's sub-agents: the manager that
 // runs them, on the lite model with the read-only knowledge and apps
-// toolboxes, web_search and the conversation's sandbox, and the tools Root
-// manages them with.
-func (krude *Krude) startSubagents(settings serviceconfig.Config, storage SubagentStorage, sandbox *agents.Toolbox, logger *slog.Logger) error {
+// toolboxes and web_search, its sweeper, and the tools Root manages them
+// with.
+func (krude *Krude) startSubagents(settings serviceconfig.Config, storage SubagentStorage, logger *slog.Logger) error {
 	builder, err := agents.SubagentBuilder(krude.router, agents.SubagentToolboxes{
 		Knowledge: krude.readOnlyKnowledge,
 		Apps:      krude.readOnlyApps,
-		Sandbox:   sandbox,
 	})
 	if err != nil {
 		return err

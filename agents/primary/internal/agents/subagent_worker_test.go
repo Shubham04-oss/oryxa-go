@@ -5,7 +5,6 @@ import (
 	"iter"
 	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -17,7 +16,6 @@ import (
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool"
-	"google.golang.org/adk/v2/tool/functiontool"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
 	spawned "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/subagents"
@@ -26,7 +24,7 @@ import (
 
 // subagentToolboxes are toolboxes as a deployment has them, each with
 // tools a sub-agent must never be given beside the ones it may.
-func subagentToolboxes(t *testing.T, sandbox tool.Tool) SubagentToolboxes {
+func subagentToolboxes(t *testing.T) SubagentToolboxes {
 	t.Helper()
 	echo := func(names ...string) staticToolset {
 		var tools staticToolset
@@ -35,14 +33,9 @@ func subagentToolboxes(t *testing.T, sandbox tool.Tool) SubagentToolboxes {
 		}
 		return tools
 	}
-	if sandbox == nil {
-		sandbox = echoTool(t, "sandbox_execute_code")
-	}
 	return SubagentToolboxes{
 		Knowledge: &Toolbox{Name: KnowledgeToolboxName, Instructions: "Search, then cite.", Toolset: echo("knowledge_search", "knowledge_collections", "knowledge_sync_source")},
 		Apps:      &Toolbox{Name: AppsToolboxName, Toolset: echo("apps_connections", "apps_search_tools", "apps_run_read_tool", "apps_run_tool", "apps_send_email")},
-		Sandbox: &Toolbox{Name: "sandbox", Toolset: append(staticToolset{sandbox},
-			echo("sandbox_read_files", "sandbox_write_files", "sandbox_reset", "sandbox_remove_files", "sandbox_save_artifact")...)},
 	}
 }
 
@@ -84,18 +77,12 @@ func TestSubagentsGetOnlyTheirBriefsReadOnlyTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	builder, err := SubagentBuilder(router, subagentToolboxes(t, nil))
+	builder, err := SubagentBuilder(router, subagentToolboxes(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := builder.Families(); !slices.Equal(got, spawned.Families) {
-		t.Fatalf("families = %v, want all four", got)
-	}
-	// Code in the sandbox can reach the network: it never sits beside a read.
-	for _, read := range []string{spawned.ToolKnowledge, spawned.ToolAppsRead, spawned.ToolWebSearch} {
-		if _, err := builder.Build(spawned.Worker{Tools: []string{read, spawned.ToolSandbox}}); err == nil {
-			t.Fatalf("built a sub-agent with %s beside the sandbox", read)
-		}
+		t.Fatalf("families = %v, want the three reads", got)
 	}
 	for name, tc := range map[string]struct {
 		families []string
@@ -105,9 +92,6 @@ func TestSubagentsGetOnlyTheirBriefsReadOnlyTools(t *testing.T) {
 		"knowledge": {[]string{spawned.ToolKnowledge}, []string{spawned.AskToolName, "knowledge_collections", "knowledge_search"}},
 		"every read": {[]string{spawned.ToolKnowledge, spawned.ToolAppsRead, spawned.ToolWebSearch}, []string{
 			"apps_connections", "apps_run_read_tool", "apps_search_tools", spawned.AskToolName, "knowledge_collections", "knowledge_search", webSearchName,
-		}},
-		"the sandbox alone": {[]string{spawned.ToolSandbox}, []string{
-			spawned.AskToolName, "sandbox_execute_code", "sandbox_read_files", "sandbox_write_files",
 		}},
 	} {
 		llm.mu.Lock()
@@ -147,7 +131,7 @@ func TestSubagentBuilderOffersOnlyWhatThisDeploymentHas(t *testing.T) {
 	if got := builder.Families(); !slices.Equal(got, []string{spawned.ToolWebSearch}) {
 		t.Fatalf("families = %v, want web_search alone: a toolbox with no toolset is not usable", got)
 	}
-	for _, family := range []string{spawned.ToolKnowledge, spawned.ToolAppsRead, spawned.ToolSandbox, "browser", "apps"} {
+	for _, family := range []string{spawned.ToolKnowledge, spawned.ToolAppsRead, "sandbox", "browser", "apps"} {
 		if _, err := builder.Build(spawned.Worker{Tools: []string{family}}); err == nil {
 			t.Fatalf("%q: built a sub-agent with a family this deployment cannot give", family)
 		}
@@ -176,58 +160,6 @@ func TestSubagentToolCallsOutsideTheAllowlistAreRefused(t *testing.T) {
 		if err != nil || result == nil || !strings.Contains(result["error"].(string), "not one of your tools") {
 			t.Fatalf("%s = %v, %v", name, result, err)
 		}
-	}
-}
-
-type recordedTarget struct {
-	mu                       sync.Mutex
-	app, session, agent, org string
-}
-
-// TestASubagentsSandboxIsTheThreads: a sub-agent's sandbox calls run as
-// though in the thread's own session, so they reach the sandbox Krude uses
-// there, in the member's organization.
-func TestASubagentsSandboxIsTheThreads(t *testing.T) {
-	var seen recordedTarget
-	sandbox, err := functiontool.New(functiontool.Config{Name: "sandbox_execute_code", Description: "Runs code."}, func(ctx agent.Context, _ echoArgs) (echoArgs, error) {
-		seen.mu.Lock()
-		defer seen.mu.Unlock()
-		seen.app, seen.session, seen.agent = ctx.AppName(), ctx.SessionID(), ctx.AgentName()
-		organization, _ := ctx.ReadonlyState().Get(OrganizationIDKey)
-		seen.org, _ = organization.(string)
-		return echoArgs{Text: "4"}, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
-		if functionResponse(request, "sandbox_execute_code") != "" {
-			return genai.NewContentFromText("It is 4.", genai.RoleModel)
-		}
-		return functionCalls(&genai.FunctionCall{ID: "call_code", Name: "sandbox_execute_code", Args: map[string]any{"text": "2+2"}})
-	})
-	router, err := modelrouter.New(llm, llm)
-	if err != nil {
-		t.Fatal(err)
-	}
-	builder, err := SubagentBuilder(router, subagentToolboxes(t, sandbox))
-	if err != nil {
-		t.Fatal(err)
-	}
-	worker, err := builder.Build(spawned.Worker{
-		Instruction: "You are a sub-agent.", Tools: []string{spawned.ToolSandbox}, Own: []tool.Tool{askParentTool(t)},
-		Thread: spawned.Thread{OrganizationID: "org_1", UserID: "member_1", App: RootName, ID: "thread_1"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if answer := runWorker(t, worker, "thread_1/sa_1"); answer != "It is 4." {
-		t.Fatalf("answer = %q", answer)
-	}
-	seen.mu.Lock()
-	defer seen.mu.Unlock()
-	if seen.app != RootName || seen.session != "thread_1" || seen.agent != RootName || seen.org != "org_1" {
-		t.Fatalf("the sandbox call ran as app %q, session %q, agent %q, organization %q", seen.app, seen.session, seen.agent, seen.org)
 	}
 }
 

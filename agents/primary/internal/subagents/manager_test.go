@@ -60,7 +60,7 @@ func TestSpawnWithWaitReturnsTheResult(t *testing.T) {
 	if !strings.Contains(text(first.Config.SystemInstruction), "ask_parent") {
 		t.Fatal("the sub-agent's instruction does not tell it to ask Krude")
 	}
-	if worker := m.builder.built[0]; !slices.Equal(worker.Tools, []string{ToolWebSearch}) || worker.Thread != testThread || len(worker.Own) != 1 || worker.Own[0].Name() != AskToolName {
+	if worker := m.builder.built[0]; !slices.Equal(worker.Tools, []string{ToolWebSearch}) || len(worker.Own) != 1 || worker.Own[0].Name() != AskToolName {
 		t.Fatalf("worker = %+v", worker)
 	}
 }
@@ -499,7 +499,8 @@ func TestBriefsAreChecked(t *testing.T) {
 		"a write tool":          {testBrief(true, "apps"), "not a tool a sub-agent can have"},
 		"the browser":           {testBrief(true, "browser"), "not a tool a sub-agent can have"},
 		"nesting":               {testBrief(true, SpawnToolName), "not a tool a sub-agent can have"},
-		"unavailable here":      {testBrief(true, ToolSandbox), `"sandbox" is not available here`},
+		"unavailable here":      {testBrief(true, ToolAppsRead), `"apps_read" is not available here`},
+		"the sandbox":           {testBrief(true, "sandbox"), "not a tool a sub-agent can have"},
 		"no objective":          {Brief{Output: "x"}, "needs an objective"},
 		"no output":             {Brief{Objective: "x"}, "needs an output"},
 		"too many files":        {Brief{Objective: "x", Output: "y", Files: []string{"a", "b", "c", "d", "e", "f"}}, "at most 5 files"},
@@ -682,26 +683,6 @@ func TestARunningRecordNothingWorksOnReadsAsStopped(t *testing.T) {
 	}
 }
 
-// TestTheSandboxIsNeverGivenBesideARead: code in the sandbox can reach the
-// network, so a sub-agent that could read private or planted text never has
-// it; a sandbox sub-agent alone may compute.
-func TestTheSandboxIsNeverGivenBesideARead(t *testing.T) {
-	m := newTestManager(t, answer("Computed."))
-	ctx, _ := m.run(t, context.Background(), "run_1")
-	for _, read := range []string{ToolKnowledge, ToolAppsRead, ToolWebSearch} {
-		if _, err := m.spawn(ctx, testBrief(true, read, ToolSandbox)); err == nil || !strings.Contains(err.Error(), "can reach the network") {
-			t.Fatalf("%s beside the sandbox = %v", read, err)
-		}
-	}
-	view, err := m.spawn(ctx, testBrief(true, ToolSandbox))
-	if err != nil || view.State != StateDone || !slices.Equal(view.Tools, []string{ToolSandbox}) {
-		t.Fatalf("the sandbox alone = %+v, %v", view, err)
-	}
-	if len(m.builder.built) != 1 {
-		t.Fatalf("built %d sub-agents, want only the sandbox-only one", len(m.builder.built))
-	}
-}
-
 // TestWebSearchCountsAgainstTheBudget: the model calls web_search makes for
 // a sub-agent count against its budget and its totals, as its own do.
 func TestWebSearchCountsAgainstTheBudget(t *testing.T) {
@@ -811,7 +792,7 @@ func TestMessagesItNeverReadAreRecorded(t *testing.T) {
 }
 
 // TestTheSweeperRemovesExpiredSubAgentsEverywhere: Sweep removes every
-// thread's expired sub-agents with their transcripts, records as stopped
+// thread's sub-agents expired a TTL ago with their transcripts, records as stopped
 // the running ones a dead process left, and leaves alone the ones working.
 func TestTheSweeperRemovesExpiredSubAgentsEverywhere(t *testing.T) {
 	m := newTestManager(t, answer("Done."), func(config *Config) { config.TTL = time.Hour })
@@ -849,7 +830,15 @@ func TestTheSweeperRemovesExpiredSubAgentsEverywhere(t *testing.T) {
 	if record := m.store.record(t, "sa_left"); record.State != StateStopped {
 		t.Fatalf("left over = %+v", record)
 	}
+	// Just expired, they are kept a while, for agent_status to say so.
 	m.clock.advance(time.Hour + time.Minute)
+	if removed, stopped, err := m.Sweep(context.Background()); err != nil || removed != 0 || stopped != 0 {
+		t.Fatalf("a sweep within the grace = %d removed, %d stopped, %v", removed, stopped, err)
+	}
+	if status, err := m.status(ctx, statusArgs{ID: done.ID}); err != nil || status.Agents[0].State != StateExpired {
+		t.Fatalf("status within the grace = %+v, %v", status, err)
+	}
+	m.clock.advance(time.Hour)
 	removed, stopped, err = m.Sweep(context.Background())
 	if err != nil || removed != 3 || stopped != 0 {
 		t.Fatalf("sweep = %d removed, %d stopped, %v; want both done ones and the stopped one removed", removed, stopped, err)
@@ -868,4 +857,121 @@ func TestTheSweeperRemovesExpiredSubAgentsEverywhere(t *testing.T) {
 	stop := m.StartSweeping()
 	stop()
 	stop()
+}
+
+// raceStore lets a test act between the sweeper listing what to sweep and
+// sweeping it, as a message_agent here or on another replica may.
+type raceStore struct {
+	*MemoryStore
+	afterList func()
+}
+
+func (s *raceStore) ListSweepable(ctx context.Context, expiredBefore, staleBefore time.Time, limit int) ([]Record, error) {
+	records, err := s.MemoryStore.ListSweepable(ctx, expiredBefore, staleBefore, limit)
+	if s.afterList != nil {
+		s.afterList()
+	}
+	return records, err
+}
+
+func (s *raceStore) reopen(t *testing.T, id string, until time.Time) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record := s.records[id]
+	record.State, record.ExpiresAt = StateRunning, until
+	s.records[id] = record
+}
+
+// TestTheSweepNeverRemovesAReopenedSubAgent: a sub-agent listed as expired
+// and reopened before the sweep reaches it (here, as another replica's
+// message_agent would, or by a run of this process's) is neither removed
+// nor stopped, and keeps its transcript.
+func TestTheSweepNeverRemovesAReopenedSubAgent(t *testing.T) {
+	for _, where := range []string{"another replica", "this process"} {
+		t.Run(where, func(t *testing.T) {
+			store := &raceStore{MemoryStore: NewMemoryStore()}
+			release := make(chan struct{})
+			m := newTestManager(t, func(ctx context.Context, request *model.LLMRequest) (*genai.Content, error) {
+				if strings.Contains(lastUserText(request), "Krude's reply") {
+					select {
+					case <-release:
+					case <-ctx.Done():
+						return nil, context.Cause(ctx)
+					}
+				}
+				return genai.NewContentFromText("Done.", genai.RoleModel), nil
+			}, func(config *Config) { config.Store, config.TTL = store, time.Hour })
+			m.store = store.MemoryStore
+			defer close(release)
+			ctx, _ := m.run(t, context.Background(), "run_1")
+			view, err := m.spawn(ctx, testBrief(true))
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.clock.advance(2*time.Hour + time.Minute)
+			store.afterList = func() {
+				store.afterList = nil
+				if where == "another replica" {
+					store.reopen(t, view.ID, m.clock.Now().Add(time.Hour))
+					return
+				}
+				// Back to before it expired, for message_agent to reopen it,
+				// then on to the sweep's time again.
+				m.clock.advance(-2 * time.Hour)
+				if _, err := m.message(ctx, messageArgs{ID: view.ID, Message: "One more thing."}); err != nil {
+					t.Error(err)
+				}
+				m.clock.advance(2 * time.Hour)
+			}
+			removed, stopped, err := m.Sweep(context.Background())
+			if err != nil || removed != 0 || stopped != 0 {
+				t.Fatalf("sweep = %d removed, %d stopped, %v; want nothing touched", removed, stopped, err)
+			}
+			if record := m.store.record(t, view.ID); record.State != StateRunning {
+				t.Fatalf("record = %+v", record)
+			}
+			if _, err := m.sessions.Get(context.Background(), &session.GetRequest{AppName: AppName, UserID: "member_1", SessionID: "thread_1/" + view.ID}); err != nil {
+				t.Fatalf("the reopened sub-agent's transcript was removed: %v", err)
+			}
+			if where == "this process" {
+				if c, _ := m.active(view.ID); c == nil || c.ctx.Err() != nil {
+					t.Fatal("the sweep stopped a working sub-agent")
+				}
+			}
+		})
+	}
+}
+
+// failingSessions fails to delete one sub-agent's transcript.
+type failingSessions struct {
+	session.Service
+	failing string
+}
+
+func (s failingSessions) Delete(ctx context.Context, request *session.DeleteRequest) error {
+	if strings.HasSuffix(request.SessionID, s.failing) {
+		return errors.New("the session store is down")
+	}
+	return s.Service.Delete(ctx, request)
+}
+
+// TestOneBadRecordDoesNotStopTheSweep: a sub-agent whose transcript cannot
+// be deleted is logged, and the sweep goes on with the rest.
+func TestOneBadRecordDoesNotStopTheSweep(t *testing.T) {
+	m := newTestManager(t, answer("Done."), func(config *Config) { config.TTL = time.Hour })
+	ctx, _ := m.run(t, context.Background(), "run_1")
+	first, err := m.spawn(ctx, testBrief(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.spawn(ctx, testBrief(true)); err != nil {
+		t.Fatal(err)
+	}
+	m.sessions = failingSessions{Service: m.sessions, failing: first.ID}
+	m.Manager.sessions = m.sessions
+	m.clock.advance(3 * time.Hour)
+	if removed, _, err := m.Sweep(context.Background()); err != nil || removed != 2 {
+		t.Fatalf("sweep = %d removed, %v; want both rows removed despite one transcript", removed, err)
+	}
 }

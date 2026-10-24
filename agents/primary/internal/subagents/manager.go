@@ -37,7 +37,7 @@ import (
 const workerInstruction = `You are a sub-agent that Krude, a member's assistant, started for one assignment. Your brief is your first message, and it is all you know: you do not see the conversation, the member, or anything Krude found. Work on your own with the tools you have, and give as your final answer what the brief's Return asks for, in that shape.
 
 - If something only Krude or the member could tell you blocks the work, call ask_parent with one clear question instead of guessing, and stop. Krude's answer comes as your next message. Never ask about anything you can find out yourself.
-- You never send, post, publish or change anything for the member, and never use a tool to reach anyone or anything your brief did not name. If the work needs a change made, say in your result what should change, and Krude will decide.
+- You read. You never send, post, publish or change anything, and you have no tool that could. If the work needs a change made, say in your result what should change, and Krude will decide.
 - Your model calls and minutes are limited. Use only the tools the objective needs, and answer as soon as you can.
 - Say where each fact came from (a document, an app record, a web page) so Krude can check it, and say plainly what you could not find.
 - A later message from Krude may ask a follow-up. Answer it from what you already found, and do more work only where it needs it.`
@@ -352,7 +352,11 @@ func (m *Manager) work(c *child, record Record, content *genai.Content) {
 		if unread > 0 {
 			// It stopped or failed before it read what Krude sent: say so,
 			// rather than let those messages vanish.
-			record.Error = oneLine(fmt.Sprintf("%s; %d message(s) you sent while it worked were not read", record.Error, unread), maxErrorRunes)
+			note := fmt.Sprintf("%d message(s) you sent while it worked were not read", unread)
+			if record.Error != "" {
+				note = record.Error + "; " + note
+			}
+			record.Error = oneLine(note, maxErrorRunes)
 		}
 		writeContext, cancel := context.WithTimeout(context.WithoutCancel(c.ctx), writeTimeout)
 		if err := m.store.Update(writeContext, record, StateRunning); err != nil {
@@ -440,7 +444,6 @@ func (m *Manager) drive(ctx context.Context, c *child, record *Record, spent *us
 	worker, err := m.builder.Build(Worker{
 		Instruction: workerInstruction,
 		Tools:       record.Tools,
-		Thread:      record.Thread,
 		Own:         []tool.Tool{ask},
 		BeforeModel: []llmagent.BeforeModelCallback{countCall(c, record.BudgetModelCalls)},
 		AfterModel:  []llmagent.AfterModelCallback{countUsage(spent), capCalls},

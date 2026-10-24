@@ -116,6 +116,10 @@ type Store interface {
 	// before staleBefore, in every thread.
 	ListSweepable(ctx context.Context, expiredBefore, staleBefore time.Time, limit int) ([]Record, error)
 	Delete(ctx context.Context, ids ...string) error
+	// DeleteExpired deletes those of ids that are not running and expired
+	// before expiredBefore, as they are in the store when it runs, and
+	// returns the ids it deleted.
+	DeleteExpired(ctx context.Context, expiredBefore time.Time, ids ...string) ([]string, error)
 }
 
 // PostgresStore is agents_primary.subagents.
@@ -222,6 +226,22 @@ func (store *PostgresStore) Delete(ctx context.Context, ids ...string) error {
 		return fmt.Errorf("delete sub-agents: %w", err)
 	}
 	return nil
+}
+
+func (store *PostgresStore) DeleteExpired(ctx context.Context, expiredBefore time.Time, ids ...string) ([]string, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := store.database.Pool.Query(ctx, `DELETE FROM agents_primary.subagents
+		WHERE id = ANY($1) AND state <> 'running' AND expires_at < $2 RETURNING id`, ids, expiredBefore)
+	if err != nil {
+		return nil, fmt.Errorf("delete expired sub-agents: %w", err)
+	}
+	deleted, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("delete expired sub-agents: %w", err)
+	}
+	return deleted, nil
 }
 
 func (store *PostgresStore) query(ctx context.Context, sql string, args ...any) ([]Record, error) {
