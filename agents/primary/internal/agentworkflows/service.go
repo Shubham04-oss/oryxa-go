@@ -309,14 +309,17 @@ func (service *Service) Execute(ctx context.Context, dispatch Dispatch) (Executi
 		return Execution{}, ErrUnavailable
 	}
 	scope := Scope{OrganizationID: strings.TrimSpace(dispatch.OrganizationID), UserID: strings.TrimSpace(dispatch.OwnerUserID)}
+	executionID := strings.TrimSpace(dispatch.ExecutionID)
 	workflow, err := service.Get(ctx, scope, strings.TrimSpace(dispatch.WorkflowID))
+	if errors.Is(err, ErrNotFound) {
+		return service.abandon(ctx, scope, executionID, dispatch.ExternalID, err, "the workflow was deleted before this execution ran")
+	}
 	if err != nil {
 		return Execution{}, err
 	}
 	if workflow.Status != StatusActive {
-		return Execution{}, ErrDisabled
+		return service.abandon(ctx, scope, executionID, dispatch.ExternalID, ErrDisabled, "the workflow was disabled before this execution ran")
 	}
-	executionID := strings.TrimSpace(dispatch.ExecutionID)
 	if executionID == "" {
 		executionID, err = newID("awx")
 		if err != nil {
@@ -331,11 +334,7 @@ func (service *Service) Execute(ctx context.Context, dispatch Dispatch) (Executi
 		}
 		executionID = created.ID
 	}
-	lease := service.executionLease
-	if lease <= 0 {
-		lease = 15 * time.Minute
-	}
-	running, claimed, err := service.repository.ClaimExecution(ctx, scope, executionID, strings.TrimSpace(dispatch.ExternalID), lease)
+	running, claimed, err := service.repository.ClaimExecution(ctx, scope, executionID, strings.TrimSpace(dispatch.ExternalID), service.lease())
 	if err != nil {
 		return Execution{}, err
 	}
@@ -364,23 +363,78 @@ func (service *Service) Execute(ctx context.Context, dispatch Dispatch) (Executi
 	if err != nil {
 		return service.fail(ctx, scope, executionID, err)
 	}
-	status := ExecutionSucceeded
-	for _, result := range delegation.Results {
-		if result.Status == "needs_confirmation" {
-			status = ExecutionNeedsConfirmation
-			break
-		}
-		// Anything but completed is work that was not done: failed, and also
-		// blocked, needs_input, or a status this does not know.
-		if result.Status != "completed" {
-			status = ExecutionFailed
-		}
-	}
-	errorText := ""
-	if status == ExecutionFailed {
-		errorText = "one or more workflow assignments did not complete"
-	}
+	status, errorText := executionOutcome(delegation.Results)
 	return service.repository.FinishExecution(ctx, scope, executionID, status, encoded, errorText)
+}
+
+// executionOutcome folds the assignments' results into the execution's
+// status. Any assignment that did not complete (failed, and also blocked,
+// needs_input, or a status this does not know) fails the execution, even
+// when others await confirmation: needs_confirmation is reported only when
+// every other assignment completed, so a waiting confirmation never hides a
+// failure. A failed execution's error names the assignments still awaiting
+// confirmation, and the stored result keeps every assignment's own status.
+func executionOutcome(results []primaryagents.SystemDelegationResult) (ExecutionStatus, string) {
+	var failed, confirming []string
+	for _, result := range results {
+		switch result.Status {
+		case "completed":
+		case "needs_confirmation":
+			confirming = append(confirming, result.AgentID)
+		default:
+			failed = append(failed, result.AgentID)
+		}
+	}
+	switch {
+	case len(failed) > 0:
+		text := fmt.Sprintf("%d of %d workflow assignments did not complete (%s)", len(failed), len(results), strings.Join(failed, ", "))
+		if len(confirming) > 0 {
+			text += fmt.Sprintf("; %d await confirmation (%s)", len(confirming), strings.Join(confirming, ", "))
+		}
+		return ExecutionFailed, text
+	case len(confirming) > 0:
+		return ExecutionNeedsConfirmation, ""
+	default:
+		return ExecutionSucceeded, ""
+	}
+}
+
+// abandon settles an execution whose workflow can no longer run: disabled,
+// or deleted, after Start (or a schedule) queued it. Left alone it would
+// stay queued for good. It claims the execution first, so it never fails one
+// another delivery is still running, and returns cause so the caller (the
+// Step Functions worker) reports the matching failure code. A scheduled
+// dispatch that never created a row has nothing to settle.
+func (service *Service) abandon(ctx context.Context, scope Scope, executionID, externalID string, cause error, reason string) (Execution, error) {
+	if executionID == "" {
+		return Execution{}, cause
+	}
+	ctx = context.WithoutCancel(ctx)
+	current, claimed, err := service.repository.ClaimExecution(ctx, scope, executionID, strings.TrimSpace(externalID), service.lease())
+	if errors.Is(err, ErrNotFound) {
+		// A deleted workflow takes its executions with it.
+		return Execution{}, cause
+	}
+	if err != nil {
+		return Execution{}, errors.Join(cause, err)
+	}
+	if !claimed {
+		if current.Status == ExecutionRunning {
+			return current, ErrInProgress
+		}
+		// Already settled, by an earlier delivery: report what it was.
+		return current, nil
+	}
+	failed, err := service.repository.FinishExecution(ctx, scope, executionID, ExecutionFailed, nil, reason)
+	return failed, errors.Join(cause, err)
+}
+
+// lease is how long one delivery holds an execution it claimed.
+func (service *Service) lease() time.Duration {
+	if service.executionLease <= 0 {
+		return 15 * time.Minute
+	}
+	return service.executionLease
 }
 
 func (service *Service) fail(ctx context.Context, scope Scope, id string, cause error) (Execution, error) {
