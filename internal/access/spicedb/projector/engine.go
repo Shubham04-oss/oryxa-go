@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/access"
 	"github.com/Shubham04-oss/oryxa-go/internal/access/spicedb"
@@ -18,7 +19,10 @@ import (
 // write them from the events.
 type Engine struct {
 	Decider access.Decider
-	writer  *Writer
+	writer  applier
+	// seen is the projector's: a write here records its keys, so an older
+	// event delivered late can't undo it (#457).
+	seen orderer
 	// grants re-reads an agent's grants; only OpenWriter's engine has it.
 	grants *Reconciler
 	close  func()
@@ -46,13 +50,21 @@ func OpenEngine(platform host.Platform, service string) (*Engine, error) {
 	return &Engine{
 		Decider: decider,
 		writer:  NewWriter(client, tokens.New(platform.Database.Pool)),
+		seen:    tokens.NewSeen(platform.Database.Pool),
 		close:   func() { _ = client.Close() },
 	}, nil
 }
 
-// Apply writes change, as a mapping in this package made it.
-func (engine *Engine) Apply(ctx context.Context, change Change) error {
-	_, err := engine.writer.Apply(ctx, change)
+// Apply writes change, as a mapping in this package made it, at the time
+// the source committed it: the event's OccurredAt when the caller has it,
+// otherwise time.Now() just after the commit. Like an event, it is skipped
+// when a newer change already touched the same relationships.
+func (engine *Engine) Apply(ctx context.Context, change Change, at time.Time) error {
+	check, record := orderingKeys(change)
+	_, err := engine.seen.Guard(ctx, check, record, at, func(ctx context.Context) error {
+		_, err := engine.writer.Apply(ctx, change)
+		return err
+	})
 	return err
 }
 
@@ -72,7 +84,7 @@ func OpenWriter(platform host.Platform) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Engine{writer: reconciler.writer, grants: reconciler, close: closeClient}, nil
+	return &Engine{writer: reconciler.writer, seen: tokens.NewSeen(platform.Database.Pool), grants: reconciler, close: closeClient}, nil
 }
 
 // SyncGrants brings one agent's grants in line with agents, reading every
@@ -85,43 +97,39 @@ func (engine *Engine) SyncGrants(ctx context.Context, org, agent string) error {
 }
 
 // Placed writes a corpus's or file's relationships as it is created.
-func (engine *Engine) Placed(ctx context.Context, resourceType, id string, placement Placement) error {
+func (engine *Engine) Placed(ctx context.Context, resourceType, id string, placement Placement, at time.Time) error {
 	change, err := Placed(resourceType, id, placement)
 	if err != nil {
 		return err
 	}
-	_, err = engine.writer.Apply(ctx, change)
-	return err
+	return engine.Apply(ctx, change, at)
 }
 
 // SourceRegistered writes a knowledge source's relationships as it is added.
-func (engine *Engine) SourceRegistered(ctx context.Context, org, id, connection, createdBy string) error {
+func (engine *Engine) SourceRegistered(ctx context.Context, org, id, connection, createdBy string, at time.Time) error {
 	change, err := SourceRegistered(org, id, connection, createdBy)
 	if err != nil {
 		return err
 	}
-	_, err = engine.writer.Apply(ctx, change)
-	return err
+	return engine.Apply(ctx, change, at)
 }
 
 // ConnectionOwned writes an apps connection's relationships as it starts.
-func (engine *Engine) ConnectionOwned(ctx context.Context, org, id, member string) error {
+func (engine *Engine) ConnectionOwned(ctx context.Context, org, id, member string, at time.Time) error {
 	change, err := ConnectionOwned(org, id, member)
 	if err != nil {
 		return err
 	}
-	_, err = engine.writer.Apply(ctx, change)
-	return err
+	return engine.Apply(ctx, change, at)
 }
 
 // Deleted drops a resource's relationships as it is deleted.
-func (engine *Engine) Deleted(ctx context.Context, resourceType, organizationID, id string) error {
+func (engine *Engine) Deleted(ctx context.Context, resourceType, organizationID, id string, at time.Time) error {
 	change, err := Deleted(resourceType, organizationID, id)
 	if err != nil {
 		return err
 	}
-	_, err = engine.writer.Apply(ctx, change)
-	return err
+	return engine.Apply(ctx, change, at)
 }
 
 // Close releases the SpiceDB client; a nil Engine has none.
