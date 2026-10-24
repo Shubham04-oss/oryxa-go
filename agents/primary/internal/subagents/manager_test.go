@@ -663,3 +663,21 @@ func TestKrudesToolsAreTheFour(t *testing.T) {
 		t.Fatalf("tools = %v", names)
 	}
 }
+
+// TestARunningRecordNothingWorksOnReadsAsStopped: a record left running by
+// a run whose process died reads as stopped, not as working forever.
+func TestARunningRecordNothingWorksOnReadsAsStopped(t *testing.T) {
+	m := newTestManager(t, answer("Done."))
+	ctx, _ := m.run(t, context.Background(), "run_2")
+	now := m.clock.Now()
+	if err := m.store.Create(context.Background(), Record{
+		ID: "sa_left", Thread: testThread, ParentRunID: "run_1", Objective: "x", State: StateRunning,
+		BudgetModelCalls: 1, BudgetMinutes: 1, CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	status, err := m.status(ctx, statusArgs{})
+	if err != nil || len(status.Agents) != 1 || status.Agents[0].State != StateStopped || !strings.Contains(status.Agents[0].Error, "run ended") {
+		t.Fatalf("status = %+v, %v", status, err)
+	}
+}

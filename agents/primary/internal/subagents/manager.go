@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"strings"
 	"sync"
@@ -94,9 +95,18 @@ type Manager struct {
 	// child's pending, exiting and question.
 	mu      sync.Mutex
 	running map[string]*child
-	// records serializes the tools' read-modify-write of a record no
-	// goroutine of this process is working on.
-	records sync.Mutex
+	// records serializes the tools' read-modify-write of records no
+	// goroutine of this process is working on, by thread (recordsOf).
+	records [32]sync.Mutex
+}
+
+// recordsOf is the lock over the thread's records. Threads share each of a
+// few locks, so that one thread's calls wait only on the few others that
+// hash alike.
+func (m *Manager) recordsOf(thread Thread) *sync.Mutex {
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(thread.App + "\x00" + thread.ID))
+	return &m.records[hash.Sum32()%uint32(len(m.records))]
 }
 
 // New returns the manager.

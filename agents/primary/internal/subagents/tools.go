@@ -203,19 +203,20 @@ func (m *Manager) await(ctx agent.Context, c *child, thread Thread, id string) (
 // too long for it is saved as an artifact of the thread first, so that the
 // file is the run's like any other it keeps.
 func (m *Manager) read(ctx agent.Context, thread Thread, id string) (View, error) {
-	m.records.Lock()
-	defer m.records.Unlock()
+	records := m.recordsOf(thread)
+	records.Lock()
+	defer records.Unlock()
 	record, err := m.store.Get(ctx, thread, id)
 	if err != nil {
 		return View{}, m.explain(err, id)
 	}
-	record = m.keepResult(ctx, record)
+	record = m.keepResult(ctx, m.settle(ctx, record))
 	return viewOf(record, m.now()), nil
 }
 
 // keepResult saves a done record's whole result as an artifact of the
 // thread when it is too long for the record, and names it there. Holding
-// m.records.
+// the thread's records lock.
 func (m *Manager) keepResult(ctx agent.Context, record Record) Record {
 	if record.State != StateDone || record.FullResult == "" || record.ResultArtifact != "" || ctx.Artifacts() == nil {
 		return record
@@ -258,14 +259,15 @@ func (m *Manager) message(ctx agent.Context, in messageArgs) (View, error) {
 		return View{}, fmt.Errorf("a message holds at most %d characters", maxMessageRunes)
 	}
 
-	m.records.Lock()
+	records := m.recordsOf(thread)
+	records.Lock()
 	record, err := m.store.Get(ctx, thread, id)
 	if err != nil {
-		m.records.Unlock()
+		records.Unlock()
 		return View{}, m.explain(err, id)
 	}
 	if c, queued := m.queue(scope, id, text); c != nil {
-		m.records.Unlock()
+		records.Unlock()
 		if !queued {
 			return View{}, errors.New("that sub-agent is working for another run")
 		}
@@ -277,7 +279,7 @@ func (m *Manager) message(ctx agent.Context, in messageArgs) (View, error) {
 		return view, nil
 	}
 	if record, err = m.store.Get(ctx, thread, id); err != nil {
-		m.records.Unlock()
+		records.Unlock()
 		return View{}, m.explain(err, id)
 	}
 	now := m.now()
@@ -286,21 +288,21 @@ func (m *Manager) message(ctx agent.Context, in messageArgs) (View, error) {
 	case StateRunning:
 		// Nothing in this process works on it, so the run that set it
 		// working ended without its record saying so.
-		record = m.markStopped(ctx, record, "its run ended before it finished")
-		m.records.Unlock()
+		m.markStopped(ctx, record, "its run ended before it finished")
+		records.Unlock()
 		return View{}, fmt.Errorf("sub-agent %s was stopped when its run ended, and cannot be resumed; start a new one", id)
 	case StateExpired:
-		m.records.Unlock()
+		records.Unlock()
 		return View{}, fmt.Errorf("sub-agent %s expired, with its work; start a new one", id)
 	default:
-		m.records.Unlock()
+		records.Unlock()
 		return View{}, fmt.Errorf("sub-agent %s is %s and cannot be resumed; start a new one", id, state)
 	}
 	record = m.keepResult(ctx, record)
 	from := record.State
 	c := newChild(ctx, id, scope)
 	if err := m.reserve(c); err != nil {
-		m.records.Unlock()
+		records.Unlock()
 		c.discard()
 		return View{}, err
 	}
@@ -309,7 +311,7 @@ func (m *Manager) message(ctx agent.Context, in messageArgs) (View, error) {
 	record.Progress = "reading your message"
 	record.UpdatedAt, record.ExpiresAt = now, now.Add(m.ttl)
 	if err := m.store.Update(ctx, record, from); err != nil {
-		m.records.Unlock()
+		records.Unlock()
 		m.release(c)
 		c.discard()
 		if errors.Is(err, ErrStateChanged) {
@@ -317,7 +319,7 @@ func (m *Manager) message(ctx agent.Context, in messageArgs) (View, error) {
 		}
 		return View{}, err
 	}
-	m.records.Unlock()
+	records.Unlock()
 	m.logState(ctx, record)
 	m.start(c, record, messageContent([]string{text}))
 	if in.Wait {
@@ -362,6 +364,21 @@ func waitFor(c *child) bool {
 	}
 }
 
+// settle reads a record that says it is running, and that nothing in this
+// process works on, as the stop it was: the run that set it working ended
+// without the record saying so, as when its process died. Only that run
+// could be working on it, and the tool calling this is a later one in the
+// same thread. Holding the thread's records lock.
+func (m *Manager) settle(ctx context.Context, record Record) Record {
+	if record.State != StateRunning {
+		return record
+	}
+	if c, _ := m.active(record.ID); c != nil {
+		return record
+	}
+	return m.markStopped(ctx, record, "its run ended before it finished")
+}
+
 func (m *Manager) markStopped(ctx context.Context, record Record, reason string) Record {
 	from := record.State
 	now := m.now()
@@ -387,8 +404,9 @@ func (m *Manager) status(ctx agent.Context, in statusArgs) (statusResult, error)
 		}
 		return statusResult{Agents: []View{view}}, nil
 	}
-	m.records.Lock()
-	defer m.records.Unlock()
+	lock := m.recordsOf(thread)
+	lock.Lock()
+	defer lock.Unlock()
 	records, err := m.store.List(ctx, thread)
 	if err != nil {
 		return statusResult{}, err
@@ -400,7 +418,7 @@ func (m *Manager) status(ctx agent.Context, in statusArgs) (statusResult, error)
 	}
 	now := m.now()
 	for _, record := range records {
-		result.Agents = append(result.Agents, viewOf(m.keepResult(ctx, record), now))
+		result.Agents = append(result.Agents, viewOf(m.keepResult(ctx, m.settle(ctx, record)), now))
 	}
 	if len(records) == 0 {
 		result.Note = "This conversation has no sub-agents."
@@ -414,21 +432,22 @@ func (m *Manager) stop(ctx agent.Context, in stopArgs) (View, error) {
 		return View{}, err
 	}
 	id := strings.TrimSpace(in.ID)
-	m.records.Lock()
+	records := m.recordsOf(thread)
+	records.Lock()
 	record, err := m.store.Get(ctx, thread, id)
 	if err != nil {
-		m.records.Unlock()
+		records.Unlock()
 		return View{}, m.explain(err, id)
 	}
 	if c, _ := m.active(id); c != nil {
-		m.records.Unlock()
+		records.Unlock()
 		c.cancel(errStopped)
 		if !waitFor(c) {
 			return View{}, fmt.Errorf("sub-agent %s is stopping, and has not yet recorded that it stopped", id)
 		}
 		return m.read(ctx, thread, id)
 	}
-	defer m.records.Unlock()
+	defer records.Unlock()
 	if record, err = m.store.Get(ctx, thread, id); err != nil {
 		return View{}, m.explain(err, id)
 	}
