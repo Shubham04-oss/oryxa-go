@@ -18,9 +18,13 @@ export interface Env {
   // BROWSER is the Browser Run binding.
   BROWSER: Fetcher;
   // EDGE_URL_SIGNING_KEY signs preview and terminal URLs (a secret, 32+
-  // characters); EDGE_PUBLIC_URL is where those URLs point.
+  // characters); EDGE_PUBLIC_URL is where terminal URLs point, and
+  // EDGE_PREVIEW_URL where preview URLs do. Previews serve pages a sandbox
+  // made, so their host is on a registrable domain of its own, where script
+  // cannot set cookies for oryxa.in (#474); it serves nothing else.
   EDGE_URL_SIGNING_KEY: string;
   EDGE_PUBLIC_URL: string;
+  EDGE_PREVIEW_URL: string;
   // SANDBOX_INSTANCE is the sandbox containers' instance type.
   SANDBOX_INSTANCE?: string;
 

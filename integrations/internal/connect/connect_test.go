@@ -182,6 +182,19 @@ type rig struct {
 
 const clientSecret = "shhh-client-secret-value"
 
+// testNonce is the nonce the browser that starts every test sign-in keeps,
+// and testCookie that browser's cookies.
+const testNonce = "browser-nonce-1"
+
+var testBrowserHash = hashState(testNonce)
+
+func testCookie(name string) string {
+	if name == BrowserCookieName(testBrowserHash) {
+		return testNonce
+	}
+	return ""
+}
+
 // The tests need a Postgres with the schema's migrations applied; see
 // integrations/vault_integration_test.go. The rows they make are removed after.
 func newRig(t *testing.T) *rig {
@@ -232,7 +245,7 @@ func (r *rig) advance(d time.Duration) { r.clock.Add(int64(d)) }
 // start begins a sign-in as member m1 and answers its state.
 func (r *rig) start(t *testing.T, member string) (state string, authorize *url.URL) {
 	t.Helper()
-	raw, err := r.Start(context.Background(), StartRequest{Org: r.org, Member: member, App: "google", Level: "personal", ReturnTo: "https://app.example.com/settings"})
+	raw, err := r.Start(context.Background(), StartRequest{BrowserHash: testBrowserHash, Org: r.org, Member: member, App: "google", Level: "personal", ReturnTo: "https://app.example.com/settings"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +263,7 @@ func (r *rig) start(t *testing.T, member string) (state string, authorize *url.U
 func (r *rig) connected(t *testing.T) string {
 	t.Helper()
 	state, _ := r.start(t, "m1")
-	done, err := r.Complete(context.Background(), Callback{State: state, Code: "code-1"})
+	done, err := r.Complete(context.Background(), Callback{Cookie: testCookie, State: state, Code: "code-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +305,7 @@ func TestConnectCallbackAndTheFlowAtRest(t *testing.T) {
 		t.Fatalf("the state itself is stored (%d rows), %v", stored, err)
 	}
 
-	done, err := r.Complete(ctx, Callback{State: state, Code: "code-1"})
+	done, err := r.Complete(ctx, Callback{Cookie: testCookie, State: state, Code: "code-1"})
 	if err != nil || done.ConnectionID == "" || done.ReturnTo != "https://app.example.com/settings" || done.App != "google" {
 		t.Fatalf("Complete = %+v, %v", done, err)
 	}
@@ -327,7 +340,7 @@ func TestConnectCallbackAndTheFlowAtRest(t *testing.T) {
 	}
 
 	// The state is single use.
-	if _, err := r.Complete(ctx, Callback{State: state, Code: "code-1"}); !errors.Is(err, ErrBadState) {
+	if _, err := r.Complete(ctx, Callback{Cookie: testCookie, State: state, Code: "code-1"}); !errors.Is(err, ErrBadState) {
 		t.Fatalf("replayed state: err = %v", err)
 	}
 	// Signing in again renews the connection rather than adding a twin.
@@ -343,7 +356,7 @@ func TestSignInFailures(t *testing.T) {
 	var failure *Failure
 
 	t.Run("unknown, empty and expired state", func(t *testing.T) {
-		if _, err := r.Complete(ctx, Callback{State: "nope", Code: "code-1"}); !errors.Is(err, ErrBadState) {
+		if _, err := r.Complete(ctx, Callback{Cookie: testCookie, State: "nope", Code: "code-1"}); !errors.Is(err, ErrBadState) {
 			t.Fatalf("unknown: %v", err)
 		}
 		if _, err := r.Complete(ctx, Callback{}); !errors.Is(err, ErrBadState) {
@@ -351,20 +364,20 @@ func TestSignInFailures(t *testing.T) {
 		}
 		state, _ := r.start(t, "m1")
 		r.advance(StateLifetime + time.Second)
-		if _, err := r.Complete(ctx, Callback{State: state, Code: "code-1"}); !errors.Is(err, ErrBadState) {
+		if _, err := r.Complete(ctx, Callback{Cookie: testCookie, State: state, Code: "code-1"}); !errors.Is(err, ErrBadState) {
 			t.Fatalf("expired: %v", err)
 		}
 	})
 	t.Run("the member denied it", func(t *testing.T) {
 		state, _ := r.start(t, "m1")
-		done, err := r.Complete(ctx, Callback{State: state, Error: "access_denied"})
+		done, err := r.Complete(ctx, Callback{Cookie: testCookie, State: state, Error: "access_denied"})
 		if !errors.As(err, &failure) || failure.Reason != ReasonDenied || done.ReturnTo == "" || done.ConnectionID != "" {
 			t.Fatalf("Complete = %+v, %v", done, err)
 		}
 	})
 	t.Run("the app refuses the code", func(t *testing.T) {
 		state, _ := r.start(t, "m1")
-		if _, err := r.Complete(ctx, Callback{State: state, Code: "wrong"}); !errors.As(err, &failure) || failure.Reason != ReasonDenied {
+		if _, err := r.Complete(ctx, Callback{Cookie: testCookie, State: state, Code: "wrong"}); !errors.As(err, &failure) || failure.Reason != ReasonDenied {
 			t.Fatalf("err = %v", err)
 		}
 	})
@@ -373,7 +386,7 @@ func TestSignInFailures(t *testing.T) {
 		r.app.meRefused = true
 		r.app.mu.Unlock()
 		state, _ := r.start(t, "m2")
-		_, err := r.Complete(ctx, Callback{State: state, Code: "code-1"})
+		_, err := r.Complete(ctx, Callback{Cookie: testCookie, State: state, Code: "code-1"})
 		if !errors.As(err, &failure) || failure.Reason != ReasonInvalid {
 			t.Fatalf("err = %v", err)
 		}
@@ -389,12 +402,44 @@ func TestSignInFailures(t *testing.T) {
 	})
 }
 
+// A forwarded authorize link, finished in another browser, is refused before
+// the code is redeemed, and spends the state (#477).
+func TestSignInFromAnotherBrowser(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	otherNonce := func(name string) string { return "browser-nonce-2" }
+	for name, cookie := range map[string]func(string) string{"no cookie": nil, "another nonce": otherNonce} {
+		t.Run(name, func(t *testing.T) {
+			state, _ := r.start(t, "m1")
+			r.app.mu.Lock()
+			issued := r.app.issued
+			r.app.mu.Unlock()
+			done, err := r.Complete(ctx, Callback{Cookie: cookie, State: state, Code: "code-1"})
+			var failure *Failure
+			if !errors.As(err, &failure) || failure.Reason != ReasonWrongBrowser || done.ConnectionID != "" {
+				t.Fatalf("Complete = %+v, %v", done, err)
+			}
+			r.app.mu.Lock()
+			redeemed := r.app.issued != issued
+			r.app.mu.Unlock()
+			if redeemed {
+				t.Fatal("the code was redeemed for a browser that did not start the sign-in")
+			}
+			if _, err := r.Complete(ctx, Callback{Cookie: testCookie, State: state, Code: "code-1"}); !errors.Is(err, ErrBadState) {
+				t.Fatalf("the state was not spent: %v", err)
+			}
+		})
+	}
+}
+
 func TestStartRefusals(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
-	good := StartRequest{Org: r.org, Member: "m1", App: "google", Level: "personal"}
+	good := StartRequest{BrowserHash: testBrowserHash, Org: r.org, Member: "m1", App: "google", Level: "personal"}
 	for name, tweak := range map[string]func(*StartRequest){
 		"no member":        func(s *StartRequest) { s.Member = "" },
+		"no browser hash":  func(s *StartRequest) { s.BrowserHash = "" },
+		"not a hash":       func(s *StartRequest) { s.BrowserHash = strings.Repeat("Z", 64) },
 		"slash in the org": func(s *StartRequest) { s.Org = "a/b" },
 		"bad level":        func(s *StartRequest) { s.Level = "team" },
 		"foreign return":   func(s *StartRequest) { s.ReturnTo = "https://evil.example.com/" },
@@ -611,17 +656,20 @@ func TestHTTPConnectThenCallback(t *testing.T) {
 	r := newRig(t)
 	server := httpserver.New(allowAll{}, nil)
 	Routes(server, r.Service, nil)
+	browser := &http.Cookie{Name: BrowserCookieName(testBrowserHash), Value: testNonce}
 	do := func(method, target, body string, internal bool) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(method, target, strings.NewReader(body))
 		if internal {
 			request.Header.Set(serviceauth.Header, "t")
+		} else {
+			request.AddCookie(browser)
 		}
 		recorder := httptest.NewRecorder()
 		server.ServeHTTP(recorder, request)
 		return recorder
 	}
 
-	body := fmt.Sprintf(`{"org":%q,"member":"m1","app":"google","level":"personal","return_to":"https://app.example.com/settings?tab=apps"}`, r.org)
+	body := fmt.Sprintf(`{"org":%q,"member":"m1","app":"google","level":"personal","return_to":"https://app.example.com/settings?tab=apps","browser_hash":%q}`, r.org, testBrowserHash)
 	if got := do("POST", "/v1/connect", body, false); got.Code != http.StatusUnauthorized {
 		t.Fatalf("connect without a service token answered %d", got.Code)
 	}
@@ -667,5 +715,16 @@ func TestHTTPConnectThenCallback(t *testing.T) {
 	location, _ = url.Parse(denied.Header().Get("Location"))
 	if denied.Code != http.StatusSeeOther || location.Query().Get("status") != "failed" || location.Query().Get("reason") != ReasonDenied {
 		t.Fatalf("denied callback answered %d to %s", denied.Code, denied.Header().Get("Location"))
+	}
+
+	// Forwarded to a browser without the cookie: refused, back to the page.
+	third := do("POST", "/v1/connect", body, true)
+	json.Unmarshal(third.Body.Bytes(), &answer)
+	authorize, _ = url.Parse(answer.URL)
+	browser = &http.Cookie{Name: "unrelated", Value: "x"}
+	forwarded := do("GET", CallbackPath+"?state="+url.QueryEscape(authorize.Query().Get("state"))+"&code=code-1", "", false)
+	location, _ = url.Parse(forwarded.Header().Get("Location"))
+	if forwarded.Code != http.StatusSeeOther || location.Query().Get("status") != "failed" || location.Query().Get("reason") != ReasonWrongBrowser {
+		t.Fatalf("forwarded callback answered %d to %s", forwarded.Code, forwarded.Header().Get("Location"))
 	}
 }

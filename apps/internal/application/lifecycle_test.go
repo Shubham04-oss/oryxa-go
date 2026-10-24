@@ -125,7 +125,7 @@ func TestMaintenanceFailsConnectionsNobodyCameBackFrom(t *testing.T) {
 		t.Fatalf("recent connection = %q", got.Status)
 	}
 	// Its state is spent too, so a late callback cannot revive it.
-	if _, err := h.service.CompleteConnection(context.Background(), staleState, "success", ""); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := h.service.CompleteConnection(context.Background(), ConnectCallback{State: staleState, CookieState: staleState, Status: "success"}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("late callback = %v, want not found", err)
 	}
 }

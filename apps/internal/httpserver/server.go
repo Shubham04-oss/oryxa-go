@@ -10,8 +10,13 @@ package httpserver
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -45,8 +50,8 @@ type appsService interface {
 	Connect(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.ConnectInput) (domain.Connection, string, error)
 	BrokerFor(ctx context.Context, toolkit string) (string, error)
 	ConnectPipedream(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.ConnectInput) (domain.Connection, string, error)
-	CompletePipedreamConnection(ctx context.Context, state, status string) (application.Completion, error)
-	CompleteConnection(ctx context.Context, state, status, accountID string) (application.Completion, error)
+	CompletePipedreamConnection(ctx context.Context, callback application.ConnectCallback) (application.Completion, error)
+	CompleteConnection(ctx context.Context, callback application.ConnectCallback) (application.Completion, error)
 	Connections(ctx context.Context, credentials authclient.Credentials, organizationID, toolkit string, organization bool) ([]domain.Connection, error)
 	Connection(ctx context.Context, credentials authclient.Credentials, organizationID, id string) (domain.Connection, error)
 	RemoveConnection(ctx context.Context, credentials authclient.Credentials, organizationID, id string) error
@@ -308,15 +313,21 @@ func (server *Server) connect(writer http.ResponseWriter, request *http.Request)
 	if broker == domain.BrokerPipedream {
 		connect = server.service.ConnectPipedream
 	}
+	nonce, err := newBrowserNonce()
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
 	connection, redirectURL, err := connect(request.Context(), credentials, request.PathValue("organizationID"),
 		application.ConnectInput{
 			Toolkit: body.Toolkit, ReturnTo: body.ReturnTo, Alias: body.Alias,
-			AutoSubscribe: body.AutoSubscribe,
+			AutoSubscribe: body.AutoSubscribe, Host: request.Host, BrowserNonce: nonce,
 		})
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
 	}
+	setConnectCookie(writer, broker, nonce)
 	if broker == domain.BrokerNative {
 		// The connection is the integrations service's until the member
 		// finishes, and a row appears here when it says so.
@@ -330,8 +341,7 @@ func (server *Server) connect(writer http.ResponseWriter, request *http.Request)
 // answers the browser, not an API client: with a return page it redirects
 // there, saying how it went; without one it answers JSON.
 func (server *Server) completeConnection(writer http.ResponseWriter, request *http.Request) {
-	query := request.URL.Query()
-	completion, err := server.service.CompleteConnection(request.Context(), query.Get("state"), query.Get("status"), query.Get("connected_account_id"))
+	completion, err := server.service.CompleteConnection(request.Context(), connectCallback(request))
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
@@ -342,13 +352,70 @@ func (server *Server) completeConnection(writer http.ResponseWriter, request *ht
 // completePipedreamConnection is where Pipedream's hosted connect sends the
 // member's browser back, answered as completeConnection answers Composio's.
 func (server *Server) completePipedreamConnection(writer http.ResponseWriter, request *http.Request) {
-	query := request.URL.Query()
-	completion, err := server.service.CompletePipedreamConnection(request.Context(), query.Get("state"), query.Get("status"))
+	completion, err := server.service.CompletePipedreamConnection(request.Context(), connectCallback(request))
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
 	}
 	server.sendBack(writer, request, completion)
+}
+
+const (
+	// connectCookiePath covers Composio's and Pipedream's callbacks.
+	connectCookiePath   = "/v1/apps/connect/"
+	connectCookiePrefix = "oryxa_apps_connect_"
+	connectCookieAge    = 15 * 60
+	// nativeCookiePath and nativeCookiePrefix are the integrations service's
+	// connect.CallbackPath and connect.BrowserCookiePrefix, which apps
+	// cannot import; its callback reads the cookie set here.
+	nativeCookiePath   = "/v1/integrations/oauth/callback"
+	nativeCookiePrefix = "oryxa_integrations_signin_"
+	nativeCookieAge    = 10 * 60
+)
+
+// newBrowserNonce is the random value a connect keeps in the browser that
+// starts it, so that only that browser can finish it (#476, #477).
+func newBrowserNonce() (string, error) {
+	value := make([]byte, 32)
+	if _, err := rand.Read(value); err != nil {
+		return "", fmt.Errorf("generate a browser nonce: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(value), nil
+}
+
+// setConnectCookie keeps a connect's nonce in the browser, on its callback's
+// path alone, out of JavaScript's reach. The name comes from the nonce's
+// hash, so two connects started in one browser each keep their own.
+func setConnectCookie(writer http.ResponseWriter, broker, nonce string) {
+	sum := sha256.Sum256([]byte(nonce))
+	hash := hex.EncodeToString(sum[:])
+	cookie := &http.Cookie{
+		Name: connectCookiePrefix + hash[:16], Value: nonce, Path: connectCookiePath, MaxAge: connectCookieAge,
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+	}
+	if broker == domain.BrokerNative {
+		cookie.Name, cookie.Path, cookie.MaxAge = nativeCookiePrefix+hash[:16], nativeCookiePath, nativeCookieAge
+	}
+	http.SetCookie(writer, cookie)
+}
+
+// connectCallback is what a Composio or Pipedream callback brought: its
+// query, the state cookie named after the state, and the member's session.
+func connectCallback(request *http.Request) application.ConnectCallback {
+	query := request.URL.Query()
+	callback := application.ConnectCallback{
+		State: query.Get("state"), Status: query.Get("status"), AccountID: query.Get("connected_account_id"),
+	}
+	if callback.State != "" {
+		sum := sha256.Sum256([]byte(callback.State))
+		if cookie, err := request.Cookie(connectCookiePrefix + hex.EncodeToString(sum[:])[:16]); err == nil {
+			callback.CookieState = cookie.Value
+		}
+	}
+	if cookie, err := request.Cookie(authclient.AccessCookieName); err == nil {
+		callback.AccessCookie = cookie.Value
+	}
+	return callback
 }
 
 func (server *Server) listConnections(writer http.ResponseWriter, request *http.Request) {
