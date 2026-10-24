@@ -168,3 +168,37 @@ func TestDisagreementThatSettlesIsNotRecorded(t *testing.T) {
 		t.Fatalf("recorded %v", <-disagreements)
 	}
 }
+
+func TestDecideAnswersFromSpiceDBAndRecordsDisagreement(t *testing.T) {
+	shadow, disagreements := started(t, func(context.Context) (bool, error) { return true, nil })
+	allowed, err := shadow.Decide(context.Background(), ask, false)
+	if err != nil || !allowed {
+		t.Fatalf("Decide = %v, %v; want SpiceDB's true", allowed, err)
+	}
+	select {
+	case got := <-disagreements:
+		if got.Code || !got.SpiceDB {
+			t.Fatalf("disagreement = %+v", got)
+		}
+	default:
+		t.Fatal("the disagreement was not recorded at once")
+	}
+}
+
+func TestDecideRefusesWithoutAnAnswer(t *testing.T) {
+	shadow, _ := started(t, func(context.Context) (bool, error) { return true, errors.New("unavailable") })
+	if allowed, err := shadow.Decide(context.Background(), ask, true); err == nil || allowed {
+		t.Fatalf("Decide = %v, %v; want an error and no access", allowed, err)
+	}
+	unmapped, _ := started(t, nil)
+	unmapped.checks = func(access.Actor, string, string, string, spicedb.Object, bool) ([]spicedb.Check, bool) {
+		return nil, false
+	}
+	if _, err := unmapped.Decide(context.Background(), ask, true); !errors.Is(err, access.ErrNoAnswer) {
+		t.Fatalf("unmapped: %v, want ErrNoAnswer", err)
+	}
+	var off *Shadow
+	if _, err := off.Decide(context.Background(), ask, true); !errors.Is(err, access.ErrNoAnswer) {
+		t.Fatalf("nil shadow: %v, want ErrNoAnswer", err)
+	}
+}

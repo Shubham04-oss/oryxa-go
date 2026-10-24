@@ -91,6 +91,11 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		logger.Warn("FILES_EVENTS_QUEUE_URL is not set: files will not hear about organizations, members leaving them, or deleted teams")
 	}
 
+	closeEngine, err := withEngine(platform, service)
+	if err != nil {
+		return host.Service{}, err
+	}
+
 	server := httpserver.New(service, httpserver.Config{AllowedOrigins: config.AllowedOrigins}, logger)
 	logger.Info("files mounted", "bucket", config.BucketName)
 	return host.Service{
@@ -98,5 +103,6 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Routes:   server.Patterns(),
 		Timeouts: host.Timeouts{Read: 30 * time.Second, Write: 60 * time.Second},
 		Workers:  workers,
+		Close:    closeEngine,
 	}, nil
 }

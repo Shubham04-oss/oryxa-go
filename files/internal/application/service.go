@@ -80,8 +80,14 @@ type Service struct {
 	teams     Teams
 	decisions Recorder
 	shadow    access.Comparer
-	logger    *slog.Logger
-	now       func() time.Time
+	// engine, when set, decides canSee and canDelete from SpiceDB
+	// (ACCESS_ENGINE_FILES=spicedb), and relationships writes a file's place
+	// in it as the file is created or deleted, so the uploader can open it at
+	// once rather than when the projector catches up.
+	engine        access.Decider
+	relationships Relationships
+	logger        *slog.Logger
+	now           func() time.Time
 }
 
 // New builds the service. A nil decisions records nothing.
@@ -90,6 +96,21 @@ func New(store Store, blobs blob.Store, directory Directory, teams Teams, decisi
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return &Service{store: store, blobs: blobs, directory: directory, teams: teams, decisions: decisions, logger: logger, now: time.Now}
+}
+
+// Relationships keeps a file's relationships in SpiceDB as the file comes and
+// goes. The projector also writes them from the file's events; this only
+// makes them there sooner.
+type Relationships interface {
+	FileCreated(ctx context.Context, object domain.Object) error
+	FileDeleted(ctx context.Context, organizationID, fileID string) error
+}
+
+// WithEngine makes SpiceDB decide what canSee and canDelete answer, and
+// writes each file's relationships as it is created or deleted.
+func (s *Service) WithEngine(engine access.Decider, relationships Relationships) *Service {
+	s.engine, s.relationships = engine, relationships
+	return s
 }
 
 // WithShadow sets where the service's decisions are compared with SpiceDB.
@@ -216,6 +237,12 @@ func (s *Service) Create(ctx context.Context, credentials authclient.Credentials
 		_ = s.blobs.Delete(ctx, key)
 		return domain.Object{}, err
 	}
+	if s.relationships != nil {
+		// The file stands either way: its event brings the projector here too.
+		if err := s.relationships.FileCreated(ctx, object); err != nil {
+			s.logger.WarnContext(ctx, "file relationships not written to spicedb; the projector will", "file_id", object.ID, "error", err)
+		}
+	}
 	s.record(ctx, org, teams, object, access.ActionWrite)
 	return object, nil
 }
@@ -339,6 +366,11 @@ func (s *Service) Delete(ctx context.Context, credentials authclient.Credentials
 	}
 	if err := s.store.DeleteObject(ctx, organizationID, object.ID, deleted); err != nil {
 		return err
+	}
+	if s.relationships != nil {
+		if err := s.relationships.FileDeleted(ctx, organizationID, object.ID); err != nil {
+			s.logger.WarnContext(ctx, "file relationships not deleted from spicedb; the projector will", "file_id", object.ID, "error", err)
+		}
 	}
 	s.record(ctx, org, teams, object, access.ActionDelete)
 	return nil
@@ -519,9 +551,7 @@ func reason(org domain.OrgMembership, teams teamLookup, object domain.Object, ac
 // decide whether the caller may reach it, so a specialist's grant is enforced
 // here once and a list can't show what Get would refuse.
 func (s *Service) canSee(ctx context.Context, org domain.OrgMembership, teams teamLookup, object domain.Object) error {
-	err := s.see(org, teams, object)
-	s.compare(ctx, org, object, access.ActionRead, err)
-	return err
+	return s.decide(ctx, org, object, access.ActionRead, s.see(org, teams, object))
 }
 
 func (s *Service) see(org domain.OrgMembership, teams teamLookup, object domain.Object) error {
@@ -551,9 +581,7 @@ func (s *Service) see(org domain.OrgMembership, teams teamLookup, object domain.
 }
 
 func (s *Service) canDelete(ctx context.Context, org domain.OrgMembership, teams teamLookup, object domain.Object) error {
-	err := s.mayDelete(org, teams, object)
-	s.compare(ctx, org, object, access.ActionDelete, err)
-	return err
+	return s.decide(ctx, org, object, access.ActionDelete, s.mayDelete(org, teams, object))
 }
 
 func (s *Service) mayDelete(org domain.OrgMembership, teams teamLookup, object domain.Object) error {
@@ -580,16 +608,43 @@ func (s *Service) mayDelete(org domain.OrgMembership, teams teamLookup, object d
 	return domain.ErrNotFound
 }
 
-// compare asks SpiceDB in shadow what canSee or canDelete just decided; their
-// answer stands. A failure that decided nothing, such as teams being
-// unreachable, and a team check with no file behind it, aren't compared.
-func (s *Service) compare(ctx context.Context, org domain.OrgMembership, object domain.Object, action string, err error) {
-	if s.shadow == nil || object.ID == "" {
-		return
+// decide returns what the caller gets for action on object, given the code's
+// answer. With no engine the code's answer stands and SpiceDB is asked in
+// shadow. With one, SpiceDB decides but may only narrow: the caller gets in
+// when both SpiceDB and the code allow. A revoke reaches SpiceDB through the
+// projector a moment after the code sees it, so SpiceDB granting alone could
+// let a removed member in during that lag. Where SpiceDB has no answer (the
+// org agent) or the code decided nothing (teams unreachable, a team check
+// with no file behind it) the code's answer stands. A SpiceDB failure refuses.
+// Every difference is recorded by Decide.
+//
+// ponytail: a list still comes from SQL filtered by the code, so SpiceDB can
+// only narrow it; LookupResources replaces that once lists flip.
+func (s *Service) decide(ctx context.Context, org domain.OrgMembership, object domain.Object, action string, code error) error {
+	decided := code == nil || errors.Is(code, domain.ErrNotFound) || errors.Is(code, domain.ErrForbidden)
+	if s.engine == nil || object.ID == "" || !decided {
+		if decided && object.ID != "" && s.shadow != nil {
+			s.shadow.Compare(ctx, s.ask(org, object, action), code == nil)
+		}
+		return code
 	}
-	if err != nil && !errors.Is(err, domain.ErrNotFound) && !errors.Is(err, domain.ErrForbidden) {
-		return
+	allowed, err := s.engine.Decide(ctx, s.ask(org, object, action), code == nil)
+	switch {
+	case errors.Is(err, access.ErrNoAnswer):
+		return code
+	case err != nil:
+		return fmt.Errorf("decide access to file %s: %w", object.ID, err)
+	case code != nil:
+		return code
+	case allowed:
+		return nil
+	default:
+		return domain.ErrNotFound
 	}
+}
+
+// ask is a decision on object in the terms SpiceDB is asked about it.
+func (s *Service) ask(org domain.OrgMembership, object domain.Object, action string) access.Ask {
 	ask := access.Ask{
 		OrganizationID: object.OrganizationID, Service: "files", Action: action,
 		ResourceKind: "file", ResourceID: object.ID, UserID: org.UserID,
@@ -599,7 +654,7 @@ func (s *Service) compare(ctx context.Context, org domain.OrgMembership, object 
 	if org.Agent {
 		ask.AgentID = org.AgentID
 	}
-	s.shadow.Compare(ctx, ask, err == nil)
+	return ask
 }
 
 // teamLookup answers teamAccess for one team of the organization.
