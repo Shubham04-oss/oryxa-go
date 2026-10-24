@@ -115,6 +115,17 @@ func TeamCreated(org, team string) (Change, error) {
 	return Change{Organization: org, Touch: []Rel{rel("team", team, "org", "org", org)}}, nil
 }
 
+// TeamPlaced is a team created, with its parent when it has one. Teams knows
+// the parent as it creates the team; the event doesn't carry it.
+func TeamPlaced(org, team, parent string) (Change, error) {
+	change, err := TeamCreated(org, team)
+	if err != nil || parent == "" {
+		return change, err
+	}
+	change.Touch = append(change.Touch, rel("team", team, "parent", "team", parent))
+	return change, nil
+}
+
 // TeamDeleted drops the team, its members and its place under a parent. A
 // subteam's arrow to it goes with the subteam's own deletion.
 func TeamDeleted(org, team string) (Change, error) {
