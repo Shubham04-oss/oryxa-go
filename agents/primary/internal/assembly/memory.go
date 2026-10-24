@@ -37,6 +37,7 @@ func (krude *Krude) memoryBackend(ctx context.Context, settings serviceconfig.Co
 			AWS:      options.AWS,
 			MemoryID: settings.MemoryID,
 			Recalled: settings.MemoryRecalled,
+			Logger:   logger,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("agentcore memory: %w", err)

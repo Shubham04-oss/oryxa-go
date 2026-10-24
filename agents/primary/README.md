@@ -2330,7 +2330,9 @@ one is refused, not escaped.
   takes no filter, so all are read), their sessions and events, deleted at 15
   a second (DeleteEvent allows 20). One deadline covers both; what is left
   when it passes is said in the error, as Memory Bank's Forget does, and the
-  next Forget finds only that. Something already gone is forgotten.
+  next Forget finds only that. Something already gone is forgotten, and so is
+  an id the layout refuses (logged, not an error): Write refuses it too, so
+  nothing was ever kept under it, and an error would only be redelivered.
 
 **Unverified: does a `/` in the actor id make namespace segments?** The layout
 assumes that a record extracted into `/m/org_a/usr_1/primary/` is listed by
@@ -2355,12 +2357,11 @@ functions above change.
 | `AGENTS_PRIMARY_MEMORY_ID` | The AgentCore memory's id. Required whenever AgentCore is involved, ignored otherwise; the pairs also require `AGENTS_PRIMARY_MEMORY_AGENT_ENGINE` |
 
 The AWS region and credentials are the service's own (`AWS_REGION`, the task
-role). In a pair (`adkmemory.Shadow`), only the first answers searches and
-decides whether a call failed; the second is written and forgotten as well, and
-what it could not do is logged, never returned. A Forget the second could not
-finish is therefore not retried for it: after a member or organization is
-forgotten during a shadow period, check the logs for "the shadow memory did not
-forget" and run it again.
+role). In a pair (`adkmemory.Shadow`), only the first answers searches; both
+are written, and a write the second missed is logged, never returned. Forget
+is different: both are always asked, and a Forget either could not finish fails
+the call, so the cleanup queue retries it. Forgetting a member is owed wherever
+their memory is, and repeating it removes nothing more.
 
 **Rollout.**
 

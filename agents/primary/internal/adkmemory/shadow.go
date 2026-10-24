@@ -3,6 +3,7 @@ package adkmemory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"google.golang.org/adk/v2/memory"
@@ -14,9 +15,11 @@ import (
 // moving to it: secondary fills up with what is remembered from now on while
 // every search is still answered as before.
 //
-// Forget runs on both, so the secondary never keeps what the primary was
-// told to forget. Nothing secondary does fails a call: its errors are
-// logged, and the call's outcome is the primary's alone.
+// Forget runs on both and fails if either does: forgetting is owed to the
+// member wherever their memory is, and Forget is safe to repeat, so the
+// cleanup that asked retries until both are done. Nothing else the
+// secondary does fails a call: a write it missed or a search it is never
+// asked is logged at most.
 func Shadow(primary, secondary Backend, logger *slog.Logger) (Backend, error) {
 	if primary == nil || secondary == nil {
 		return nil, errors.New("adkmemory: a shadow needs a primary and a secondary backend")
@@ -51,12 +54,12 @@ func (s *shadow) Search(ctx context.Context, scope Scope, query string) ([]memor
 	return s.primary.Search(ctx, scope, query)
 }
 
-// Forget implements [Backend].
+// Forget implements [Backend]. Both are always asked, and what either could
+// not do is the call's error.
 func (s *shadow) Forget(ctx context.Context, organizationID, userID string) error {
 	err := s.primary.Forget(ctx, organizationID, userID)
 	if shadowErr := s.secondary.Forget(ctx, organizationID, userID); shadowErr != nil {
-		s.logger.WarnContext(ctx, "the shadow memory did not forget everything it was asked to",
-			"organization_id", organizationID, "error", shadowErr)
+		err = errors.Join(err, fmt.Errorf("shadow memory: %w", shadowErr))
 	}
 	return err
 }

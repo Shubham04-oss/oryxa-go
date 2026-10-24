@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -55,6 +56,8 @@ type AgentCoreMemoryOptions struct {
 	// Recalled is how many memories a search returns at most. Zero means
 	// defaultRecalled; anything above maxRecalled is maxRecalled.
 	Recalled int
+	// Logger notes a Forget for an id this layout cannot hold. Nil discards.
+	Logger *slog.Logger
 }
 
 // agentCoreAPI is the part of AgentCore Memory's data plane this backend
@@ -93,7 +96,8 @@ type AgentCoreMemory struct {
 	// deletingEvents paces DeleteEvent across every Forget at once.
 	deletingEvents *rate.Limiter
 	// now is the clock a turn with no time of its own is stamped with.
-	now func() time.Time
+	now    func() time.Time
+	logger *slog.Logger
 }
 
 var _ Backend = (*AgentCoreMemory)(nil)
@@ -117,6 +121,7 @@ func newAgentCoreMemory(api agentCoreAPI, options AgentCoreMemoryOptions) (*Agen
 		recalled:       int32(min(cmp.Or(options.Recalled, defaultRecalled), maxRecalled)),
 		deletingEvents: rate.NewLimiter(eventDeletesPerSecond, 1),
 		now:            time.Now,
+		logger:         cmp.Or(options.Logger, slog.New(slog.DiscardHandler)),
 	}, nil
 }
 
@@ -130,13 +135,17 @@ var actorSegment = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // renders it the way AgentCore does.
 const agentCoreNamespaceTemplate = "/m/{actorId}/"
 
+// errUnheld is an id this layout cannot hold, so nothing was ever kept
+// under it.
+var errUnheld = errors.New("adkmemory: an id AgentCore Memory cannot hold")
+
 // checkSegment refuses an id that cannot be one segment of an actor id.
 func checkSegment(name, value string) error {
 	switch {
 	case strings.Contains(value, "/"):
-		return fmt.Errorf("adkmemory: an AgentCore memory cannot hold a %s containing \"/\" (%q): it separates the parts of an actor id", name, value)
+		return fmt.Errorf("%w: a %s containing \"/\" (%q), which separates the parts of an actor id", errUnheld, name, value)
 	case !actorSegment.MatchString(value):
-		return fmt.Errorf("adkmemory: an AgentCore memory holds only letters, digits, \"_\" and \"-\" in a %s, not %q", name, value)
+		return fmt.Errorf("%w: a %s may hold only letters, digits, \"_\" and \"-\", not %q", errUnheld, name, value)
 	}
 	return nil
 }
@@ -342,8 +351,17 @@ func (store *AgentCoreMemory) Search(ctx context.Context, scope Scope, query str
 // Both are collected before anything is deleted, so deleting cannot move a
 // page under a listing. Everything runs under one deadline; what is left when
 // it passes is said in the error, and the next Forget finds only that.
+//
+// An id the layout refuses is forgotten at once: Write refuses it too, so
+// nothing was ever kept under it, and an error would only have the cleanup
+// that asked redeliver it forever.
 func (store *AgentCoreMemory) Forget(ctx context.Context, organizationID, userID string) error {
 	actorPrefix, namespacePath, err := agentCoreForgetting(organizationID, userID)
+	if errors.Is(err, errUnheld) {
+		store.logger.InfoContext(ctx, "nothing to forget in AgentCore Memory: no memory can be kept under this id",
+			"organization_id", organizationID, "reason", err)
+		return nil
+	}
 	if err != nil {
 		return err
 	}

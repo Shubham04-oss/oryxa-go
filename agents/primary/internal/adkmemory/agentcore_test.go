@@ -1,9 +1,11 @@
 package adkmemory
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sort"
 	"strconv"
@@ -289,11 +291,34 @@ func TestAgentCoreRefusesAScopeThatWouldBreakItsLayout(t *testing.T) {
 	if _, err := store.Search(context.Background(), bad, "anything"); err == nil {
 		t.Error("Search accepted a scope with a slash")
 	}
-	if err := store.Forget(context.Background(), "org/acme", ""); err == nil {
-		t.Error("Forget accepted an organization with a slash")
+}
+
+// Nothing can have been written under an id the layout refuses, so
+// forgetting one is done at once, and says so: an error would have the
+// cleanup queue redeliver it forever. It asks AgentCore nothing, so a "/"
+// cannot widen what it deletes.
+func TestAgentCoreForgetsAnIDItCouldNeverHoldAsForgotten(t *testing.T) {
+	api := newFakeAgentCore()
+	heldRecords(api, "mine", "/m/org/acme/usr_1/primary/", 1)
+	api.events["org/acme/usr_1/primary"] = map[string][]string{"t1": {"e1"}}
+	var logged bytes.Buffer
+	store, err := newAgentCoreMemory(api, AgentCoreMemoryOptions{MemoryID: testMemoryID, Logger: slog.New(slog.NewTextHandler(&logged, nil))})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := store.Forget(context.Background(), "org_acme", "usr/1"); err == nil {
-		t.Error("Forget accepted a member with a slash")
+	for _, ids := range [][2]string{{"org/acme", ""}, {"org", "acme/usr_1"}, {"org acme", ""}, {"org_acme", "usr:1"}} {
+		if err := store.Forget(context.Background(), ids[0], ids[1]); err != nil {
+			t.Errorf("Forget(%q, %q) = %v, want nothing to forget", ids[0], ids[1], err)
+		}
+	}
+	if len(api.listPaths) != 0 || len(api.batches) != 0 || len(api.deletedEvents) != 0 || len(api.records) != 1 {
+		t.Fatalf("listed %v, deleted %v and %v: an id the layout refuses reached AgentCore", api.listPaths, api.batches, api.deletedEvents)
+	}
+	if strings.Count(logged.String(), "nothing to forget") != 4 {
+		t.Fatalf("logged %q, want each one noted", logged.String())
+	}
+	if err := store.Forget(context.Background(), " ", ""); err == nil {
+		t.Fatal("forgetting with no organization was accepted")
 	}
 }
 

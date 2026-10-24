@@ -60,7 +60,7 @@ func TestShadowWritesBothAndAnswersFromThePrimary(t *testing.T) {
 	}
 }
 
-func TestShadowNeverFailsOnTheSecondary(t *testing.T) {
+func TestShadowWritesPastTheSecondary(t *testing.T) {
 	var calls []string
 	var logged bytes.Buffer
 	backend, err := Shadow(recording{name: "vertex", calls: &calls}, recording{name: "agentcore", calls: &calls, err: errors.New("throttled")},
@@ -68,15 +68,42 @@ func TestShadowNeverFailsOnTheSecondary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
-	if err := backend.Write(ctx, Scope{OrganizationID: "org_acme", UserID: "usr_1"}, nil); err != nil {
+	if err := backend.Write(context.Background(), Scope{OrganizationID: "org_acme", UserID: "usr_1"}, nil); err != nil {
 		t.Fatalf("Write = %v, want the secondary's failure only logged", err)
 	}
-	if err := backend.Forget(ctx, "org_acme", "usr_1"); err != nil {
-		t.Fatalf("Forget = %v, want the secondary's failure only logged", err)
+	if strings.Count(logged.String(), "throttled") != 1 {
+		t.Fatalf("logged %q, want the failure", logged.String())
 	}
-	if strings.Count(logged.String(), "throttled") != 2 {
-		t.Fatalf("logged %q, want both failures", logged.String())
+}
+
+// Forgetting is owed wherever the memory is, so a secondary that could not
+// forget fails the call, and the cleanup queue retries it; the primary is
+// asked all the same.
+func TestShadowForgetFailsWithTheSecondary(t *testing.T) {
+	var calls []string
+	throttled := errors.New("throttled")
+	backend, err := Shadow(recording{name: "vertex", calls: &calls}, recording{name: "agentcore", calls: &calls, err: throttled}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.Forget(context.Background(), "org_acme", "usr_1"); !errors.Is(err, throttled) {
+		t.Fatalf("Forget = %v, want the secondary's failure", err)
+	}
+	if !slices.Equal(calls, []string{"vertex forget org_acme", "agentcore forget org_acme"}) {
+		t.Fatalf("calls = %v, want both asked", calls)
+	}
+
+	calls = nil
+	down := errors.New("vertex is down")
+	backend, err = Shadow(recording{name: "vertex", calls: &calls, err: down}, recording{name: "agentcore", calls: &calls, err: throttled}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.Forget(context.Background(), "org_acme", ""); !errors.Is(err, down) || !errors.Is(err, throttled) {
+		t.Fatalf("Forget = %v, want both failures", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("calls = %v, want both asked", calls)
 	}
 }
 
