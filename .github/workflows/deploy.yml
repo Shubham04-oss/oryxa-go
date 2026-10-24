@@ -3,6 +3,10 @@
 # for Fargate, rolls ECS onto it, records the release on main and deploys
 # web-next's Worker. Infrastructure changes stay a manual `tofu apply`; see
 # deploy/README.md for this workflow's one-time setup.
+#
+# It runs on GitHub's machines, never on the self-hosted runners CI uses: those
+# persist between jobs and run pull requests' code, so a job there could read
+# this one's AWS credentials, Cloudflare token and deploy key (#461).
 
 name: Deploy
 
@@ -14,8 +18,7 @@ on:
   # Releases main's head on demand, such as a redeploy.
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: deploy-production
@@ -38,8 +41,10 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success')
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
     outputs:
       deploy: ${{ steps.scope.outputs.deploy }}
     steps:
@@ -75,11 +80,13 @@ jobs:
     name: Production
     needs: scope
     if: needs.scope.outputs.deploy == 'true'
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    # Arm, like the Fargate tasks, so the image builds natively.
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     environment: production
     permissions:
-      contents: write # records the release on main
+      # The release is recorded on main with RELEASE_DEPLOY_KEY, not this token.
+      contents: read
       id-token: write # assumes the deploy role through GitHub's OIDC
     steps:
       - name: Setup
