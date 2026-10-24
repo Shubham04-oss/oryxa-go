@@ -16,6 +16,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/batching/internal/domain"
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
+	systemone "github.com/Shubham04-oss/oryxa-go/internal/jev"
 )
 
 const (
@@ -25,7 +26,6 @@ const (
 	maxResponseBytes   = 1 << 20
 	maxErrorBytes      = 4 << 10
 	maxDiagnosticRunes = 256
-	systemOnePath      = "/v1/systemone"
 	laneQuestionID     = "batch_lane"
 	urgencyQuestionID  = "requires_prompt_attention"
 )
@@ -76,7 +76,7 @@ func New(client *http.Client, config Config) (*Classifier, error) {
 		return nil, errors.New("Jev classifier base URL must use HTTPS, except on localhost, since every request carries the API key")
 	}
 	return &Classifier{
-		client: client, endpoint: base.String() + systemOnePath,
+		client: client, endpoint: systemone.Endpoint(base.String()),
 		apiKey: strings.TrimSpace(config.APIKey), model: strings.TrimSpace(config.Model),
 		immediateProbability: config.ImmediateProbability, minimumConfidence: config.MinimumConfidence,
 	}, nil
@@ -177,6 +177,9 @@ func (classifier *Classifier) Classify(ctx context.Context, trigger appsv1.Trigg
 	}
 	if len(responseBody) > maxResponseBytes {
 		return domain.Classification{}, fmt.Errorf("decode Jev response: exceeds %d bytes", maxResponseBytes)
+	}
+	if responseBody, err = systemone.Unwrap(responseBody); err != nil {
+		return domain.Classification{}, err
 	}
 	var output response
 	if err := json.Unmarshal(responseBody, &output); err != nil {

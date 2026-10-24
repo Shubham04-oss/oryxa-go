@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/batching/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/jev"
 )
 
 // MaxJevTimeout is the longest BATCHING_JEV_TIMEOUT may be. A message is
@@ -89,7 +90,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	}
 	model := strings.TrimSpace(getenv("BATCHING_JEV_MODEL"))
 	if model == "" {
-		model = "jev-latest"
+		model = jev.ModelFor(baseURL)
 	}
 	config := Config{
 		EventsQueueURL:      strings.TrimSpace(getenv("BATCHING_EVENTS_QUEUE_URL")),

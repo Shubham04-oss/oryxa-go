@@ -27,7 +27,57 @@ const (
 	DefaultMaxAttempts = 4
 
 	systemOnePath = "/v1/systemone"
+	// workersAIRun marks a Cloudflare Workers AI model endpoint
+	// (…/ai/run/@cf/cloudflare/clef-flash). Cloudflare's Clef serves the same
+	// System One API there, so it stands in for Jev by address alone.
+	workersAIRun = "/ai/run/"
 )
+
+// Endpoint is where a System One request for base goes: TypeSafe's
+// /v1/systemone under base, or base itself when it is a Workers AI model
+// endpoint.
+func Endpoint(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if strings.Contains(base, workersAIRun) {
+		return base
+	}
+	return base + systemOnePath
+}
+
+// ModelFor is the model a request to base names when none is configured: a
+// Workers AI model's own name ("clef-flash" for …/@cf/cloudflare/clef-flash),
+// which is all Clef accepts, or [DefaultModel] for TypeSafe.
+func ModelFor(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if strings.Contains(base, workersAIRun) {
+		return base[strings.LastIndex(base, "/")+1:]
+	}
+	return DefaultModel
+}
+
+// Unwrap returns a System One response body, taken out of the envelope
+// Workers AI answers in ({"result": …, "success": …, "errors": […]}).
+// TypeSafe's bare response passes through unchanged.
+func Unwrap(data []byte) ([]byte, error) {
+	var envelope struct {
+		Result  json.RawMessage `json:"result"`
+		Success *bool           `json:"success"`
+		Errors  []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if json.Unmarshal(data, &envelope) != nil || envelope.Success == nil {
+		return data, nil
+	}
+	if !*envelope.Success {
+		messages := make([]string, 0, len(envelope.Errors))
+		for _, e := range envelope.Errors {
+			messages = append(messages, e.Message)
+		}
+		return nil, fmt.Errorf("jev: Workers AI refused the request: %s", strings.Join(messages, "; "))
+	}
+	return envelope.Result, nil
+}
 
 // Config configures a [Client].
 type Config struct {
@@ -87,7 +137,7 @@ func New(config Config) (*Client, error) {
 	}
 	model := strings.TrimSpace(config.Model)
 	if model == "" {
-		model = DefaultModel
+		model = ModelFor(base)
 	}
 	httpClient := config.HTTPClient
 	if httpClient == nil {
@@ -102,7 +152,7 @@ func New(config Config) (*Client, error) {
 		maxAttempts = DefaultMaxAttempts
 	}
 	return &Client{
-		http: httpClient, endpoint: parsed.String() + systemOnePath, apiKey: strings.TrimSpace(config.APIKey),
+		http: httpClient, endpoint: Endpoint(parsed.String()), apiKey: strings.TrimSpace(config.APIKey),
 		model: model, maxResponseBytes: maxResponseBytes, maxAttempts: maxAttempts,
 		wait: func(attempt int) time.Duration { return time.Duration(attempt*attempt) * 250 * time.Millisecond },
 	}, nil
@@ -277,6 +327,9 @@ func (c *Client) read(response *http.Response) (wireResponse, bool, error) {
 	}
 	if int64(len(data)) > c.maxResponseBytes {
 		return wireResponse{}, false, fmt.Errorf("jev: response is larger than %d bytes", c.maxResponseBytes)
+	}
+	if data, err = Unwrap(data); err != nil {
+		return wireResponse{}, false, err
 	}
 	var wire wireResponse
 	if err := json.Unmarshal(data, &wire); err != nil {

@@ -37,6 +37,16 @@ variable "gcp_region" {
   default     = "us-west1"
 }
 
+variable "jev_base_url" {
+  description = "Where Jev's System One requests go. Empty is TypeSafe. For Cloudflare's Clef, its Workers AI run endpoint, e.g. https://api.cloudflare.com/client/v4/accounts/<account>/ai/run/@cf/cloudflare/clef-flash, with a Cloudflare API token (Workers AI) stored as TYPESAFE_API_KEY."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.jev_base_url == "" || startswith(var.jev_base_url, "https://")
+    error_message = "jev_base_url must be HTTPS: every request carries the API key."
+  }
+}
+
 variable "knowledge_judge" {
   description = "What judges whether a connected app's document is worth indexing: jev (TypeSafe; put TYPESAFE_API_KEY first), gemini (var.model), or off."
   type        = string
