@@ -938,7 +938,7 @@ comparing. Five switches, one per service, all `code` until set:
 | `ACCESS_ENGINE_RAG` | corpora |
 | `ACCESS_ENGINE_KNOWLEDGE` | knowledge sources |
 | `ACCESS_ENGINE_APPS` | connections |
-| `ACCESS_ENGINE_TEAMS` | teams (PR #454, not merged yet) |
+| `ACCESS_ENGINE_TEAMS` | teams |
 
 Each is `code` (or unset) or `spicedb`; anything else refuses to start. A
 switched service only **narrows**: it allows when both its code and SpiceDB
