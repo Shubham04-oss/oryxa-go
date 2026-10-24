@@ -91,14 +91,17 @@ func TestEachEndpointIsRateLimitedOnItsOwn(t *testing.T) {
 	h := newHarness(t)
 	busy := h.connectionEndpoint("github", "apc_1", "mem_1", githubTrigger)
 	quiet := h.connectionEndpoint("github", "apc_2", "mem_2", githubTrigger)
-	unsigned := []byte(`{"id":"x"}`)
+	body := []byte(`{"id":"issue-1"}`)
+	signed := func(endpoint Created, i int) *httptest.ResponseRecorder {
+		return h.deliver(endpoint.Endpoint.ID, githubDelivery(endpoint.Hook.Secret, fmt.Sprintf("d-%d", i), "issues", body), body)
+	}
 
 	for i := range RatePerSecond {
-		if response := h.deliver(busy.Endpoint.ID, nil, unsigned); response.Code != http.StatusUnauthorized {
-			t.Fatalf("delivery %d inside the rate = %d, want 401 (it is unsigned)", i+1, response.Code)
+		if response := signed(busy, i); response.Code != http.StatusOK {
+			t.Fatalf("delivery %d inside the rate = %d %s, want 200", i+1, response.Code, response.Body)
 		}
 	}
-	response := h.deliver(busy.Endpoint.ID, nil, unsigned)
+	response := signed(busy, RatePerSecond)
 	if response.Code != http.StatusTooManyRequests || errorCode(t, response) != "rate_limited" {
 		t.Fatalf("delivery %d = %d %s, want 429 rate_limited", RatePerSecond+1, response.Code, response.Body)
 	}
@@ -106,18 +109,38 @@ func TestEachEndpointIsRateLimitedOnItsOwn(t *testing.T) {
 		t.Errorf("Retry-After = %q, want 1", response.Header().Get("Retry-After"))
 	}
 	// Another endpoint has its own budget.
-	if response := h.deliver(quiet.Endpoint.ID, nil, unsigned); response.Code != http.StatusUnauthorized {
-		t.Fatalf("another endpoint = %d, want 401, not rate limited", response.Code)
-	}
-	// A genuine delivery is refused as well while the endpoint is over its rate.
-	body := []byte(`{"id":"issue-1"}`)
-	if response := h.deliver(busy.Endpoint.ID, githubDelivery(busy.Hook.Secret, "d-1", "issues", body), body); response.Code != http.StatusTooManyRequests {
-		t.Fatalf("a genuine delivery past the rate = %d, want 429", response.Code)
+	if response := signed(quiet, 0); response.Code != http.StatusOK {
+		t.Fatalf("another endpoint = %d, want 200, not rate limited", response.Code)
 	}
 	// A second later the bucket is full again.
 	h.clock.Advance(time.Second)
-	if response := h.deliver(busy.Endpoint.ID, githubDelivery(busy.Hook.Secret, "d-1", "issues", body), body); response.Code != http.StatusOK {
+	if response := signed(busy, RatePerSecond); response.Code != http.StatusOK {
 		t.Fatalf("a second later = %d %s, want 200", response.Code, response.Body)
+	}
+}
+
+// Unsigned junk is refused before it spends the endpoint's rate, so a flood
+// of it at Slack's public URL, which every org shares, cannot starve Slack's
+// own deliveries (#475).
+func TestAnUnsignedFloodDoesNotRateLimitSignedSlackDeliveries(t *testing.T) {
+	h, surface := surfaceHarness(t)
+	junk := mentionBody("EvJunk")
+	forged := slackDelivery("not-the-signing-secret-0123456789", h.clock.Now(), junk)
+	for i := range 10 * RatePerSecond {
+		header := forged
+		if i%2 == 0 {
+			header = nil
+		}
+		if response := h.post(eventsPath, header, junk); response.Code != http.StatusUnauthorized {
+			t.Fatalf("junk %d = %d, want 401", i+1, response.Code)
+		}
+	}
+	body := mentionBody("EvReal")
+	if response := h.post(eventsPath, slackDelivery(surfaceSecret, h.clock.Now(), body), body); response.Code != http.StatusOK {
+		t.Fatalf("a signed delivery after the flood = %d %s, want 200", response.Code, response.Body)
+	}
+	if len(surface.deliveries()) != 1 {
+		t.Fatalf("the surface was handed %d deliveries, want 1", len(surface.deliveries()))
 	}
 }
 

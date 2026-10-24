@@ -57,15 +57,7 @@ func (h ingress) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	log := s.logger.With("endpoint_id", endpoint.ID, "toolkit", endpoint.Toolkit)
 
-	// 2. The endpoint's own rate.
-	if !s.limiter.allow(endpoint.ID) {
-		log.WarnContext(ctx, "webhook endpoint rate limited")
-		writer.Header().Set("Retry-After", "1")
-		writeError(writer, http.StatusTooManyRequests, "rate_limited", "too many requests; retry")
-		return
-	}
-
-	// 3. The body, at most MaxBodyBytes.
+	// 2. The body, at most MaxBodyBytes.
 	body, err := io.ReadAll(io.LimitReader(request.Body, MaxBodyBytes+1))
 	switch {
 	case err != nil:
@@ -77,21 +69,31 @@ func (h ingress) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	d := newDelivery(request.Header, body)
 
-	// 4. The unsigned handshakes, each in its narrow window: Microsoft
+	// 3. The unsigned handshakes, each in its narrow window: Microsoft
 	// Graph's validation, and the verification token Notion sends once.
 	if s.unsignedHandshake(ctx, writer, request, endpoint, d, now, log) {
 		return
 	}
 
-	// 5. The signature or token.
+	// 4. The signature or token.
 	if err := s.verify(ctx, endpoint, d, now); err != nil {
 		refused(ctx, writer, log, err)
 		return
 	}
 
-	// 6. The timestamp, against the scheme's tolerance.
+	// 5. The timestamp, against the scheme's tolerance.
 	if err := checkTolerance(endpoint.Scheme.Verify, d, now); err != nil {
 		refused(ctx, writer, log, err)
+		return
+	}
+
+	// 6. The endpoint's own rate, spent only by verified deliveries, so
+	// unsigned junk cannot starve the app's own (#475). Refusing junk costs
+	// an HMAC over a capped body, and opened secrets are cached.
+	if !s.limiter.allow(endpoint.ID) {
+		log.WarnContext(ctx, "webhook endpoint rate limited")
+		writer.Header().Set("Retry-After", "1")
+		writeError(writer, http.StatusTooManyRequests, "rate_limited", "too many requests; retry")
 		return
 	}
 
