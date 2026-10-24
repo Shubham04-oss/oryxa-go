@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/genai"
 
@@ -433,5 +434,74 @@ func TestAThreadStillAnswersAfterAnInterruptedCallWithNoID(t *testing.T) {
 	assertInterrupted(t, contents[2], "list_tools")
 	if got := text(contents[3]); got != "Are you there?" {
 		t.Fatalf("last turn = %q, want the member's new message", got)
+	}
+}
+
+func eventOf(author string, content *genai.Content) *session.Event {
+	event := session.NewEvent(context.Background(), "run-1")
+	event.Author, event.Content = author, content
+	return event
+}
+
+func TestInterruptedCallEventsAnswersOnlyTheCallsNothingAnswers(t *testing.T) {
+	ctx := context.Background()
+	calls := eventOf("planner", functionCalls(
+		&genai.FunctionCall{ID: "adk-1", Name: "list_tools"},
+		&genai.FunctionCall{ID: "adk-2", Name: "send_message"},
+		&genai.FunctionCall{Name: "no_id"},
+	))
+	calls.Branch, calls.IsolationScope = "krude.planner@1", "scope-1"
+	events := []*session.Event{
+		eventOf("user", genai.NewContentFromText("go", genai.RoleUser)),
+		calls,
+		eventOf("planner", functionResults(&genai.FunctionResponse{ID: "adk-1", Name: "list_tools", Response: map[string]any{}})),
+	}
+
+	repairs := InterruptedCallEvents(ctx, events)
+
+	if len(repairs) != 1 {
+		t.Fatalf("repairs = %d, want one for the call event", len(repairs))
+	}
+	repair := repairs[0]
+	if repair.Author != "planner" || repair.Branch != calls.Branch || repair.IsolationScope != calls.IsolationScope ||
+		repair.InvocationID != InterruptedCallsInvocation {
+		t.Fatalf("repair = %+v, want the call's author, branch and scope", repair)
+	}
+	assertInterrupted(t, repair.Content, "send_message")
+	if repair.Content.Parts[0].FunctionResponse.ID != "adk-2" {
+		t.Fatalf("repair answers %q, want adk-2", repair.Content.Parts[0].FunctionResponse.ID)
+	}
+	// Once stored, there is nothing more to answer.
+	if again := InterruptedCallEvents(ctx, append(events, repair)); len(again) != 0 {
+		t.Fatalf("a repaired thread got %d more repairs", len(again))
+	}
+}
+
+func TestInterruptedCallEventsLeavesWhatWaitsOnTheMember(t *testing.T) {
+	ctx := context.Background()
+	confirmation := eventOf(RootName, functionCalls(&genai.FunctionCall{ID: "adk-confirm", Name: "adk_request_confirmation"}))
+	confirmation.LongRunningToolIDs = []string{"adk-confirm"}
+	credential := eventOf(RootName, functionCalls(&genai.FunctionCall{ID: "adk-cred", Name: "adk_request_credential"}))
+	longRunning := eventOf(RootName, functionCalls(&genai.FunctionCall{ID: "adk-long", Name: "render_report"}))
+	longRunning.LongRunningToolIDs = []string{"adk-long"}
+
+	if repairs := InterruptedCallEvents(ctx, []*session.Event{confirmation, credential, longRunning}); len(repairs) != 0 {
+		t.Fatalf("repairs = %+v, want none for calls waiting on the member", repairs)
+	}
+}
+
+func TestInterruptedCallEventsLeavesCallsACompactionCovers(t *testing.T) {
+	ctx := context.Background()
+	old := eventOf(RootName, functionCalls(&genai.FunctionCall{ID: "adk-old", Name: "send_message"}))
+	compaction := eventOf("user", nil)
+	compaction.Timestamp = old.Timestamp.Add(time.Second)
+	compaction.Actions.Compaction = &session.EventCompaction{StartTimestamp: old.Timestamp, EndTimestamp: old.Timestamp}
+	recent := eventOf(RootName, functionCalls(&genai.FunctionCall{ID: "adk-new", Name: "send_message"}))
+	recent.Timestamp = old.Timestamp.Add(2 * time.Second)
+
+	repairs := InterruptedCallEvents(ctx, []*session.Event{old, compaction, recent})
+
+	if len(repairs) != 1 || repairs[0].Content.Parts[0].FunctionResponse.ID != "adk-new" {
+		t.Fatalf("repairs = %+v, want only the call after the compaction", repairs)
 	}
 }

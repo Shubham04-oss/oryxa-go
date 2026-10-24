@@ -291,13 +291,30 @@ func (run *Run) prepare(ctx context.Context, message string, input RunInput) err
 			}
 			run.stateDelta[stateWakeup] = input.Wakeup
 		}
-		return nil
+		return service.answerInterruptedCalls(ctx, stored, history)
 	}
 	content, err := answerContent(input.Confirmations, pending)
 	if err != nil {
 		return err
 	}
 	run.content = content
+	return service.answerInterruptedCalls(ctx, stored, history)
+}
+
+// answerInterruptedCalls stores, in the thread the run now holds and before
+// the agent reads it, a response for every call an earlier run left
+// unanswered when it was cut off: that the call was interrupted and may or
+// may not have taken effect (agents.InterruptedCallEvents). ADK would
+// otherwise leave such a call out of what the model reads, and the model
+// could make it again. A call waiting on the member's confirmation is left
+// for the member to answer. Once stored, a call is answered, so a later run
+// finds nothing to add.
+func (service *Service) answerInterruptedCalls(ctx context.Context, stored session.Session, history []*session.Event) error {
+	for _, repair := range agents.InterruptedCallEvents(ctx, history) {
+		if err := service.sessions.AppendEvent(ctx, stored, repair); err != nil {
+			return fmt.Errorf("answer an interrupted call: %w", err)
+		}
+	}
 	return nil
 }
 
