@@ -87,7 +87,7 @@ func validRequest() Request {
 func newService(run *fakeRun, member bool) (*Service, *fakeThreads, *fakeEdge) {
 	fakes := &fakeThreads{run: run}
 	edge := &fakeEdge{results: make(chan Result, 4)}
-	return New(fakes, fakeMembers{member: member}, edge, nil), fakes, edge
+	return New(fakes, fakeMembers{member: member}, &fakeRooms{in: true}, edge, nil), fakes, edge
 }
 
 func receive(t *testing.T, edge *fakeEdge) Result {

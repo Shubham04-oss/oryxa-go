@@ -17,6 +17,7 @@ import (
 type fakeRepository struct {
 	workflows  map[string]Workflow
 	executions map[string]Execution
+	claims     int
 }
 
 func newFakeRepository() *fakeRepository {
@@ -126,6 +127,7 @@ func (repo *fakeRepository) ClaimExecution(_ context.Context, scope Scope, id, e
 	if execution.Status != ExecutionQueued {
 		return execution, false, nil
 	}
+	repo.claims++
 	execution.Status, execution.ExternalID = ExecutionRunning, externalID
 	execution.StartedAt = time.Unix(3, 0).UTC()
 	repo.executions[id] = execution
@@ -140,6 +142,21 @@ func (repo *fakeRepository) FinishExecution(_ context.Context, scope Scope, id s
 	execution.CompletedAt = time.Unix(4, 0).UTC()
 	repo.executions[id] = execution
 	return execution, nil
+}
+
+// AbandonExecution treats every running execution as on a live lease.
+func (repo *fakeRepository) AbandonExecution(_ context.Context, scope Scope, id, errorText string) (Execution, bool, error) {
+	execution, err := repo.GetExecution(context.Background(), scope, id)
+	if err != nil {
+		return Execution{}, false, err
+	}
+	if execution.Status != ExecutionQueued {
+		return execution, false, nil
+	}
+	execution.Status, execution.Error = ExecutionFailed, errorText
+	execution.CompletedAt = time.Unix(4, 0).UTC()
+	repo.executions[id] = execution
+	return execution, true, nil
 }
 
 type fakeTeams struct{ team agentteams.Team }
@@ -235,7 +252,10 @@ func TestAnAssignmentThatDidNotCompleteFailsTheExecution(t *testing.T) {
 		{[]string{"needs_input"}, ExecutionFailed},
 		{[]string{"failed"}, ExecutionFailed},
 		{[]string{"something_new"}, ExecutionFailed},
-		{[]string{"blocked", "needs_confirmation"}, ExecutionNeedsConfirmation},
+		// A waiting confirmation never hides an assignment that failed.
+		{[]string{"blocked", "needs_confirmation"}, ExecutionFailed},
+		{[]string{"needs_confirmation", "failed"}, ExecutionFailed},
+		{[]string{"completed", "needs_confirmation"}, ExecutionNeedsConfirmation},
 	} {
 		service, _, _, _, delegator := workflowHarness(t)
 		var results []primaryagents.SystemDelegationResult
@@ -301,5 +321,108 @@ func TestWorkflowValidationKeepsSchedulesAndAssignmentsBounded(t *testing.T) {
 				t.Fatalf("error=%v", err)
 			}
 		})
+	}
+}
+
+func TestAPartlyFailedExecutionNamesWhatAwaitsConfirmation(t *testing.T) {
+	status, text := executionOutcome([]primaryagents.SystemDelegationResult{
+		{AgentID: "agt_sales", Status: "needs_confirmation"},
+		{AgentID: "agt_legal", Status: "failed"},
+		{AgentID: "agt_ops", Status: "completed"},
+	})
+	want := "1 of 3 workflow assignments did not complete (agt_legal); 1 await confirmation (agt_sales)"
+	if status != ExecutionFailed || text != want {
+		t.Fatalf("status=%q text=%q, want %q %q", status, text, ExecutionFailed, want)
+	}
+}
+
+// TestAnExecutionQueuedBeforeItsWorkflowWasDisabledFails: Start queued the
+// row, then the workflow was disabled before Step Functions delivered it.
+// The execution settles as failed with the reason, rather than staying
+// queued for good, and the worker still sees ErrDisabled.
+func TestAnExecutionQueuedBeforeItsWorkflowWasDisabledFails(t *testing.T) {
+	service, repo, _, _, delegator := workflowHarness(t)
+	scope := Scope{OrganizationID: "org_1", UserID: "user_1"}
+	workflow, err := service.Create(context.Background(), scope, CreateInput{Name: "Pipeline", TeamID: "atm_1", Assignments: []Assignment{{AgentID: "agt_sales", Task: "Review pipeline"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := service.Start(context.Background(), scope, workflow.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled := StatusDisabled
+	if _, err := service.Update(context.Background(), scope, workflow.ID, UpdateInput{Status: &disabled}); err != nil {
+		t.Fatal(err)
+	}
+	execution, err := service.Execute(context.Background(), Dispatch{
+		ExecutionID: started.ID, WorkflowID: workflow.ID, OrganizationID: "org_1", OwnerUserID: "user_1", ExternalID: started.ExternalID,
+	})
+	if !errors.Is(err, ErrDisabled) || workflowErrorCode(err) != "WorkflowDisabled" {
+		t.Fatalf("error = %v", err)
+	}
+	if execution.Status != ExecutionFailed || repo.executions[started.ID].Status != ExecutionFailed || repo.executions[started.ID].Error == "" {
+		t.Fatalf("execution=%+v stored=%+v", execution, repo.executions[started.ID])
+	}
+	// Work that never ran is failed without being claimed: no attempt and
+	// no start time.
+	if repo.claims != 0 || !repo.executions[started.ID].StartedAt.IsZero() {
+		t.Fatalf("an abandoned execution was claimed: claims=%d stored=%+v", repo.claims, repo.executions[started.ID])
+	}
+	if delegator.input.TeamID != "" {
+		t.Fatalf("a disabled workflow delegated %+v", delegator.input)
+	}
+
+	// A later delivery of the same task reports the settled execution.
+	again, err := service.Execute(context.Background(), Dispatch{
+		ExecutionID: started.ID, WorkflowID: workflow.ID, OrganizationID: "org_1", OwnerUserID: "user_1",
+	})
+	if err != nil || again.Status != ExecutionFailed {
+		t.Fatalf("redelivery: execution=%+v error=%v", again, err)
+	}
+}
+
+// TestADisabledWorkflowLeavesARunningExecutionToItsOwner: while another
+// delivery holds the execution, disabling the workflow does not fail it
+// underneath that delivery.
+func TestADisabledWorkflowLeavesARunningExecutionToItsOwner(t *testing.T) {
+	service, repo, _, _, _ := workflowHarness(t)
+	scope := Scope{OrganizationID: "org_1", UserID: "user_1"}
+	workflow, _ := service.Create(context.Background(), scope, CreateInput{Name: "Pipeline", TeamID: "atm_1", Assignments: []Assignment{{AgentID: "agt_sales", Task: "Review pipeline"}}})
+	started, err := service.Start(context.Background(), scope, workflow.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.ClaimExecution(context.Background(), scope, started.ID, "", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	disabled := StatusDisabled
+	if _, err := service.Update(context.Background(), scope, workflow.ID, UpdateInput{Status: &disabled}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Execute(context.Background(), Dispatch{ExecutionID: started.ID, WorkflowID: workflow.ID, OrganizationID: "org_1", OwnerUserID: "user_1"}); !errors.Is(err, ErrInProgress) {
+		t.Fatalf("error = %v", err)
+	}
+	if repo.executions[started.ID].Status != ExecutionRunning {
+		t.Fatalf("stored = %+v", repo.executions[started.ID])
+	}
+}
+
+// TestADeletedWorkflowsDispatchReportsNotFound: deleting a workflow takes its
+// executions with it, so there is nothing left to settle.
+func TestADeletedWorkflowsDispatchReportsNotFound(t *testing.T) {
+	service, repo, _, _, _ := workflowHarness(t)
+	scope := Scope{OrganizationID: "org_1", UserID: "user_1"}
+	workflow, _ := service.Create(context.Background(), scope, CreateInput{Name: "Pipeline", TeamID: "atm_1", Assignments: []Assignment{{AgentID: "agt_sales", Task: "Review pipeline"}}})
+	started, err := service.Start(context.Background(), scope, workflow.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Delete(context.Background(), scope, workflow.ID); err != nil {
+		t.Fatal(err)
+	}
+	delete(repo.executions, started.ID) // ON DELETE CASCADE
+	if _, err := service.Execute(context.Background(), Dispatch{ExecutionID: started.ID, WorkflowID: workflow.ID, OrganizationID: "org_1", OwnerUserID: "user_1"}); !errors.Is(err, ErrNotFound) || workflowErrorCode(err) != "WorkflowNotFound" {
+		t.Fatalf("error = %v", err)
 	}
 }

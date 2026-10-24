@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"google.golang.org/adk/v2/agent"
@@ -121,6 +122,12 @@ type Config struct {
 	Logger     *slog.Logger
 	// Drain is the process's, shared with every engine (threads.Config.Drain).
 	Drain *threads.Drain
+	// RunTimeout bounds one run of any of these agents, as it bounds the
+	// primary's (threads.Config.RunTimeout). The leases of the work that
+	// starts specialist runs (deliveries, wake-ups, workflows) are sized
+	// from the same setting; left zero, runs fall back to the threads
+	// default, which those leases do not follow.
+	RunTimeout time.Duration
 }
 
 // Run is the execution handle returned to HTTP. *threads.Run implements it.
@@ -150,6 +157,7 @@ type Service struct {
 	prices     *pricing.Table
 	logger     *slog.Logger
 	drain      *threads.Drain
+	runTimeout time.Duration
 }
 
 func New(config Config) (*Service, error) {
@@ -172,7 +180,7 @@ func New(config Config) (*Service, error) {
 	return &Service{
 		repository: config.Repository, factory: config.Factory, unattended: config.Unattended, sessions: config.Sessions,
 		artifacts: config.Artifacts, memory: config.Memory, runs: config.Runs,
-		prices: config.Prices, logger: logger, drain: config.Drain,
+		prices: config.Prices, logger: logger, drain: config.Drain, runTimeout: config.RunTimeout,
 	}, nil
 }
 
@@ -451,7 +459,7 @@ func (service *Service) engineIn(definition Definition, profile UnattendedProfil
 	engine, err := threads.New(threads.Config{
 		AppName: application, Agent: built, Unattended: unattended, UnattendedTools: runprofile.Toolset(profile),
 		Sessions: service.sessions, Artifacts: service.artifacts, Memory: service.memory, Runs: service.runs,
-		Prices: service.prices, Logger: service.logger, Drain: service.drain,
+		Prices: service.prices, Logger: service.logger, Drain: service.drain, RunTimeout: service.runTimeout,
 		InitialState: state,
 	})
 	if err != nil {
