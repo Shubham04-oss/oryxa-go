@@ -46,6 +46,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/secretshares"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/slackrouter"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/subagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/surfaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
@@ -144,6 +145,12 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 	}
 	if err := surfaces.NewStore(platform.Database).Migrate(ctx); err != nil {
 		return fmt.Errorf("migrate the Slack surfaces: %w", err)
+	}
+	// The sub-agents single-agent Krude starts. The table exists whether or
+	// not AGENTS_PRIMARY_SINGLE_AGENT is on, so turning it on is a setting
+	// and never a migration.
+	if err := subagents.NewPostgresStore(platform.Database).Migrate(ctx); err != nil {
+		return fmt.Errorf("migrate sub-agents: %w", err)
 	}
 	shares, err := secretshares.New(platform.Database, unavailableSealer{}, nil)
 	if err != nil {
@@ -376,6 +383,14 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		Directory: organizationDirectory, Context: organizationContext, AgentSystem: agentSystemBinding, Tokens: memberTokens,
 	}
 	assemblyOptions.Policy = workspacePolicy
+	if settings.SingleAgent {
+		// A sub-agent's transcript is a session of its own, which is not a
+		// thread: its sessions report no lifecycle events.
+		assemblyOptions.Subagents = &assembly.SubagentStorage{
+			Store:    subagents.NewPostgresStore(platform.Database),
+			Sessions: sessionStore.Sessions(),
+		}
+	}
 	// interactionService and teamspaceService are concrete *Service pointers,
 	// nil when TEAMS_URL is unset. Boxed directly into these interface fields
 	// they would leave Build seeing a configured-but-nil collaborator rather
@@ -418,8 +433,16 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	// Every run this process holds is tracked in one drain, whichever engine
 	// started it, so that stopping the process lets them finish first.
 	runDrain := threads.NewDrain()
+	// Every engine a primary agent's runs go through shares the process's
+	// sub-agents, when single-agent Krude has them; a nil *Manager is left
+	// out, or the interface would hold it.
+	var runSubagents threads.Subagents
+	if krude.Subagents != nil {
+		runSubagents = krude.Subagents
+	}
 	service, err := threads.New(threads.Config{
 		Drain:      runDrain,
+		Subagents:  runSubagents,
 		AppName:    agents.RootName,
 		Agent:      krude.Root,
 		Unattended: krude.Unattended,
@@ -481,6 +504,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		},
 		Sessions: sessions, Artifacts: krude.Artifacts, Memory: krude.Memory,
 		Runs: runstore.New(platform.Database), Prices: priceTable, Logger: logger, Drain: runDrain,
+		Subagents: runSubagents,
 	})
 	if err != nil {
 		closeAll()

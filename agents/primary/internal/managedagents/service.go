@@ -121,6 +121,10 @@ type Config struct {
 	Logger     *slog.Logger
 	// Drain is the process's, shared with every engine (threads.Config.Drain).
 	Drain *threads.Drain
+	// Subagents is the process's, shared with every engine
+	// (threads.Config.Subagents); nil unless single-agent Krude starts
+	// sub-agents, which only the primary's agent does.
+	Subagents threads.Subagents
 }
 
 // Run is the execution handle returned to HTTP. *threads.Run implements it.
@@ -150,6 +154,7 @@ type Service struct {
 	prices     *pricing.Table
 	logger     *slog.Logger
 	drain      *threads.Drain
+	subagents  threads.Subagents
 }
 
 func New(config Config) (*Service, error) {
@@ -172,7 +177,7 @@ func New(config Config) (*Service, error) {
 	return &Service{
 		repository: config.Repository, factory: config.Factory, unattended: config.Unattended, sessions: config.Sessions,
 		artifacts: config.Artifacts, memory: config.Memory, runs: config.Runs,
-		prices: config.Prices, logger: logger, drain: config.Drain,
+		prices: config.Prices, logger: logger, drain: config.Drain, subagents: config.Subagents,
 	}, nil
 }
 
@@ -452,7 +457,7 @@ func (service *Service) engineIn(definition Definition, profile UnattendedProfil
 		AppName: application, Agent: built, Unattended: unattended, UnattendedTools: runprofile.Toolset(profile),
 		Sessions: service.sessions, Artifacts: service.artifacts, Memory: service.memory, Runs: service.runs,
 		Prices: service.prices, Logger: service.logger, Drain: service.drain,
-		InitialState: state,
+		InitialState: state, Subagents: service.subagents,
 	})
 	if err != nil {
 		return nil, err

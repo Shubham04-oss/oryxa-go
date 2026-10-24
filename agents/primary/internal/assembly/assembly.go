@@ -19,6 +19,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/artifact"
+	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/tool"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adkmemory"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
@@ -31,6 +33,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/ragclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/subagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/usage"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
@@ -72,6 +75,18 @@ type Options struct {
 	// Teamspaces is the shared collaboration ledger. When nil, agents cannot
 	// participate as team whisperers or contributed specialists.
 	Teamspaces agents.TeamspaceService
+	// Subagents is where single-agent Krude's sub-agents are kept. With
+	// Settings' SingleAgent on and this set, Krude is given spawn_agent and
+	// the tools beside it, and Krude.Subagents runs them; otherwise neither.
+	Subagents *SubagentStorage
+}
+
+// SubagentStorage is what single-agent Krude's sub-agents are kept in: their
+// records, and a session service for their transcripts that reports no
+// session lifecycle events, since a sub-agent's session is not a thread.
+type SubagentStorage struct {
+	Store    subagents.Store
+	Sessions session.Service
 }
 
 // MemberTokens is auth's agent-token exchange, which mints a member's agent
@@ -135,6 +150,10 @@ type Krude struct {
 	// the organization each run belongs to. It is nil unless Settings names
 	// an agent engine, and then Krude has no memory at all.
 	Memory *adkmemory.Service
+	// Subagents runs single-agent Krude's sub-agents, and is what each run
+	// opens its scope on (threads.Config.Subagents). It is nil unless
+	// Settings' SingleAgent is on and Options name SubagentStorage.
+	Subagents *subagents.Manager
 
 	// router and toolboxes are kept so persistent specialist definitions can
 	// receive the same models and member-scoped tools as the primary agent.
@@ -161,6 +180,13 @@ type Krude struct {
 	// (agents.SingleAgentRoot) rather than with its sub-agents (agents.Root):
 	// Settings' SingleAgent. Every other build is the same either way.
 	singleAgent bool
+	// subagentTools are the tools single-agent Root manages its sub-agents
+	// with, when it has them (Subagents).
+	subagentTools   []tool.Tool
+	subagentBuilder subagents.Builder
+	// readOnlyKnowledge is the knowledge toolbox without scheduling an
+	// extraction, as unattended runs have it; nil without rag.
+	readOnlyKnowledge *agents.Toolbox
 
 	// closers stops everything Build opened, kept in the order Build opened
 	// them. Close runs them in reverse — the same order devui's own defers
@@ -365,6 +391,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 			}
 			unattended = append(unattended, readOnlyKnowledge)
 			unattendedQuiet = append(unattendedQuiet, readOnlyKnowledge)
+			krude.readOnlyKnowledge = &readOnlyKnowledge
 			logger.InfoContext(ctx, "knowledge toolbox", "url", settings.RagURL)
 		}
 	}
@@ -418,7 +445,17 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 	krude.deliveryThinking = settings.DeliveryThinking
 	krude.singleAgent = settings.SingleAgent
 	if settings.SingleAgent {
-		logger.InfoContext(ctx, "Krude runs as one agent with web_search and plan, and no sub-agents")
+		if options.Subagents == nil {
+			logger.InfoContext(ctx, "Krude runs as one agent with web_search and plan, and no sub-agents")
+		} else {
+			sandbox := agents.SandboxToolbox(sandboxTools)
+			if err := krude.startSubagents(settings, *options.Subagents, &sandbox, logger); err != nil {
+				return fail("sub-agents", err)
+			}
+			logger.InfoContext(ctx, "Krude runs as one agent with web_search and plan, and starts sub-agents of its own",
+				"subagent_tools", strings.Join(krude.subagentFamilies(), ","), "per_run", settings.SubagentsPerRun,
+				"per_process", settings.SubagentsPerProcess, "ttl", settings.SubagentTTL)
+		}
 	}
 	if settings.DeliveryThinking != "" {
 		logger.InfoContext(ctx, "runs delivering an agent request think at a set level; every other run as its model does by default",
@@ -516,12 +553,51 @@ func (krude *Krude) ManagedRoom(spec agents.ManagedSpec) (agent.Agent, error) {
 	return agents.ManagedRoom(krude.router, krude.room, spec)
 }
 
+// startSubagents sets up single-agent Krude's sub-agents: the manager that
+// runs them, on the lite model with the read-only knowledge and apps
+// toolboxes, web_search and the conversation's sandbox, and the tools Root
+// manages them with.
+func (krude *Krude) startSubagents(settings serviceconfig.Config, storage SubagentStorage, sandbox *agents.Toolbox, logger *slog.Logger) error {
+	builder, err := agents.SubagentBuilder(krude.router, agents.SubagentToolboxes{
+		Knowledge: krude.readOnlyKnowledge,
+		Apps:      krude.readOnlyApps,
+		Sandbox:   sandbox,
+	})
+	if err != nil {
+		return err
+	}
+	manager, err := subagents.New(subagents.Config{
+		Store: storage.Store, Sessions: storage.Sessions, Builder: builder,
+		PerRun: settings.SubagentsPerRun, PerProcess: settings.SubagentsPerProcess, TTL: settings.SubagentTTL,
+		Logger: logger,
+	})
+	if err != nil {
+		return err
+	}
+	tools, err := manager.Tools()
+	if err != nil {
+		return err
+	}
+	krude.Subagents, krude.subagentTools, krude.subagentBuilder = manager, tools, builder
+	return nil
+}
+
+// subagentFamilies are the tool families a sub-agent can be given here.
+func (krude *Krude) subagentFamilies() []string {
+	if krude.subagentBuilder == nil {
+		return nil
+	}
+	return krude.subagentBuilder.Families()
+}
+
 // buildAgents builds Krude, for every kind of run, from the router and the
 // toolboxes Build gathered.
 func (krude *Krude) buildAgents() error {
 	buildRoot := agents.Root
 	if krude.singleAgent {
-		buildRoot = agents.SingleAgentRoot
+		buildRoot = func(router *modelrouter.Router, toolboxes []agents.Toolbox, remembers bool) (agent.Agent, error) {
+			return agents.SingleAgentRoot(router, toolboxes, remembers, krude.subagentTools...)
+		}
 	}
 	root, err := buildRoot(krude.router, krude.toolboxes, krude.Memory != nil)
 	if err != nil {
