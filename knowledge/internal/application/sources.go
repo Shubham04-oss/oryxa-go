@@ -181,6 +181,7 @@ func (s *Service) register(ctx context.Context, credentials authclient.Credentia
 	if err := s.store.CreateSource(ctx, source, nil); err != nil {
 		return domain.Source{}, err
 	}
+	s.sourceRegistered(ctx, source)
 	s.logger.InfoContext(ctx, "source registered",
 		"source_id", source.ID, "organization_id", organizationID, "provider", provider)
 	return source, nil
@@ -266,11 +267,10 @@ func (s *Service) Sources(ctx context.Context, credentials authclient.Credential
 // the caller nothing they did not know, and a source outside a specialist's
 // grant looks the same as one that does not exist.
 //
-// SpiceDB is asked the same in shadow, as action; this answer stands.
+// SpiceDB is asked the same, as action: in shadow, or, with an engine, as a
+// second gate the caller must also pass (decisions.go).
 func (s *Service) mayRead(ctx context.Context, caller domain.OrgMembership, source domain.Source, action string) error {
-	err := decide(caller, source)
-	s.compare(ctx, caller, source, action, err)
-	return err
+	return s.decide(ctx, caller, source, action, decide(caller, source))
 }
 
 func decide(caller domain.OrgMembership, source domain.Source) error {

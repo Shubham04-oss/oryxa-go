@@ -75,7 +75,7 @@ var sourceQueries = map[string]func(context.Context, *pgxpool.Pool, string, *Wor
 	},
 	"knowledge": func(ctx context.Context, pool *pgxpool.Pool, org string, world *World) error {
 		return scan(ctx, pool, `SELECT id, organization_id, connection_id, created_by
-			FROM knowledge_sources WHERE status <> 'removed' AND ($1 = '' OR organization_id = $1)`, org, func(rows pgx.Rows) error {
+			FROM knowledge_sources WHERE ($1 = '' OR organization_id = $1)`, org, func(rows pgx.Rows) error {
 			var row Source
 			err := rows.Scan(&row.ID, &row.Org, &row.Connection, &row.CreatedBy)
 			world.Sources = append(world.Sources, row)

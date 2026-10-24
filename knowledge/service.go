@@ -103,7 +103,11 @@ type Dependencies struct {
 	Recorder application.Recorder
 	// Shadow compares access decisions with SpiceDB; nil compares nothing.
 	Shadow access.Comparer
-	Logger *slog.Logger
+	// Engine and Relationships switch source access to SpiceDB (see
+	// application.Dependencies); nil keeps the code deciding.
+	Engine        access.Decider
+	Relationships application.Relationships
+	Logger        *slog.Logger
 }
 
 // Config is what a host tells knowledge about itself.
@@ -148,17 +152,19 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 	}
 
 	app := application.New(application.Dependencies{
-		Store:      dependencies.Store,
-		Directory:  dependencies.Directory,
-		Apps:       dependencies.Apps,
-		Policy:     dependencies.Policy,
-		Grants:     dependencies.Grants,
-		Extractors: extractors,
-		Originals:  dependencies.Originals,
-		Judge:      dependencies.Judge,
-		Recorder:   dependencies.Recorder,
-		Shadow:     dependencies.Shadow,
-		Logger:     logger,
+		Store:         dependencies.Store,
+		Directory:     dependencies.Directory,
+		Apps:          dependencies.Apps,
+		Policy:        dependencies.Policy,
+		Grants:        dependencies.Grants,
+		Extractors:    extractors,
+		Originals:     dependencies.Originals,
+		Judge:         dependencies.Judge,
+		Recorder:      dependencies.Recorder,
+		Shadow:        dependencies.Shadow,
+		Engine:        dependencies.Engine,
+		Relationships: dependencies.Relationships,
+		Logger:        logger,
 	}, application.Config{
 		ServiceName: Name, FullSweepInterval: config.FullSweepInterval, OriginalsBucket: config.OriginalsBucket,
 	})
