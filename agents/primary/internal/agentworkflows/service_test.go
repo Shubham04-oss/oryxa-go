@@ -17,6 +17,7 @@ import (
 type fakeRepository struct {
 	workflows  map[string]Workflow
 	executions map[string]Execution
+	claims     int
 }
 
 func newFakeRepository() *fakeRepository {
@@ -126,6 +127,7 @@ func (repo *fakeRepository) ClaimExecution(_ context.Context, scope Scope, id, e
 	if execution.Status != ExecutionQueued {
 		return execution, false, nil
 	}
+	repo.claims++
 	execution.Status, execution.ExternalID = ExecutionRunning, externalID
 	execution.StartedAt = time.Unix(3, 0).UTC()
 	repo.executions[id] = execution
@@ -140,6 +142,21 @@ func (repo *fakeRepository) FinishExecution(_ context.Context, scope Scope, id s
 	execution.CompletedAt = time.Unix(4, 0).UTC()
 	repo.executions[id] = execution
 	return execution, nil
+}
+
+// AbandonExecution treats every running execution as on a live lease.
+func (repo *fakeRepository) AbandonExecution(_ context.Context, scope Scope, id, errorText string) (Execution, bool, error) {
+	execution, err := repo.GetExecution(context.Background(), scope, id)
+	if err != nil {
+		return Execution{}, false, err
+	}
+	if execution.Status != ExecutionQueued {
+		return execution, false, nil
+	}
+	execution.Status, execution.Error = ExecutionFailed, errorText
+	execution.CompletedAt = time.Unix(4, 0).UTC()
+	repo.executions[id] = execution
+	return execution, true, nil
 }
 
 type fakeTeams struct{ team agentteams.Team }
@@ -346,6 +363,11 @@ func TestAnExecutionQueuedBeforeItsWorkflowWasDisabledFails(t *testing.T) {
 	}
 	if execution.Status != ExecutionFailed || repo.executions[started.ID].Status != ExecutionFailed || repo.executions[started.ID].Error == "" {
 		t.Fatalf("execution=%+v stored=%+v", execution, repo.executions[started.ID])
+	}
+	// Work that never ran is failed without being claimed: no attempt and
+	// no start time.
+	if repo.claims != 0 || !repo.executions[started.ID].StartedAt.IsZero() {
+		t.Fatalf("an abandoned execution was claimed: claims=%d stored=%+v", repo.claims, repo.executions[started.ID])
 	}
 	if delegator.input.TeamID != "" {
 		t.Fatalf("a disabled workflow delegated %+v", delegator.input)

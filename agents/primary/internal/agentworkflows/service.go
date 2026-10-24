@@ -39,6 +39,9 @@ type Repository interface {
 	ListExecutions(context.Context, Scope, string, int) ([]Execution, error)
 	MarkExecutionQueued(context.Context, Scope, string, string) (Execution, error)
 	ClaimExecution(context.Context, Scope, string, string, time.Duration) (Execution, bool, error)
+	// AbandonExecution fails, in one step, an execution still queued or on
+	// an expired lease, and reports whether it did.
+	AbandonExecution(context.Context, Scope, string, string) (Execution, bool, error)
 	FinishExecution(context.Context, Scope, string, ExecutionStatus, json.RawMessage, string) (Execution, error)
 }
 
@@ -342,13 +345,13 @@ func (service *Service) Execute(ctx context.Context, dispatch Dispatch) (Executi
 	executionID := strings.TrimSpace(dispatch.ExecutionID)
 	workflow, err := service.Get(ctx, scope, strings.TrimSpace(dispatch.WorkflowID))
 	if errors.Is(err, ErrNotFound) {
-		return service.abandon(ctx, scope, executionID, dispatch.ExternalID, err, "the workflow was deleted before this execution ran")
+		return service.abandon(ctx, scope, executionID, err, "the workflow was deleted before this execution ran")
 	}
 	if err != nil {
 		return Execution{}, err
 	}
 	if workflow.Status != StatusActive {
-		return service.abandon(ctx, scope, executionID, dispatch.ExternalID, ErrDisabled, "the workflow was disabled before this execution ran")
+		return service.abandon(ctx, scope, executionID, ErrDisabled, "the workflow was disabled before this execution ran")
 	}
 	if executionID == "" {
 		executionID, err = newID("awx")
@@ -431,16 +434,17 @@ func executionOutcome(results []primaryagents.SystemDelegationResult) (Execution
 
 // abandon settles an execution whose workflow can no longer run: disabled,
 // or deleted, after Start (or a schedule) queued it. Left alone it would
-// stay queued for good. It claims the execution first, so it never fails one
-// another delivery is still running, and returns cause so the caller (the
-// Step Functions worker) reports the matching failure code. A scheduled
-// dispatch that never created a row has nothing to settle.
-func (service *Service) abandon(ctx context.Context, scope Scope, executionID, externalID string, cause error, reason string) (Execution, error) {
+// stay queued for good. It fails the execution in one step, without
+// claiming it, so work that never ran records no attempt, start time or
+// started event, and one another delivery holds on a live lease is left to
+// it. It returns cause so the caller (the Step Functions worker) reports the
+// matching failure code. A scheduled dispatch that never created a row has
+// nothing to settle.
+func (service *Service) abandon(ctx context.Context, scope Scope, executionID string, cause error, reason string) (Execution, error) {
 	if executionID == "" {
 		return Execution{}, cause
 	}
-	ctx = context.WithoutCancel(ctx)
-	current, claimed, err := service.repository.ClaimExecution(ctx, scope, executionID, strings.TrimSpace(externalID), service.lease())
+	current, settled, err := service.repository.AbandonExecution(context.WithoutCancel(ctx), scope, executionID, reason)
 	if errors.Is(err, ErrNotFound) {
 		// A deleted workflow takes its executions with it.
 		return Execution{}, cause
@@ -448,15 +452,14 @@ func (service *Service) abandon(ctx context.Context, scope Scope, executionID, e
 	if err != nil {
 		return Execution{}, errors.Join(cause, err)
 	}
-	if !claimed {
+	if !settled {
 		if current.Status == ExecutionRunning {
 			return current, ErrInProgress
 		}
 		// Already settled, by an earlier delivery: report what it was.
 		return current, nil
 	}
-	failed, err := service.repository.FinishExecution(ctx, scope, executionID, ExecutionFailed, nil, reason)
-	return failed, errors.Join(cause, err)
+	return current, cause
 }
 
 // lease is how long one delivery holds an execution it claimed.
