@@ -335,10 +335,10 @@ func TestWebSearchListsItsGroundingSources(t *testing.T) {
 func TestKrudeKeepsItsPlanInTheThread(t *testing.T) {
 	calls := [][]*genai.FunctionCall{
 		{{ID: "p1", Name: planName, Args: map[string]any{"action": "set", "steps": []any{"Find the invoice", "Draft  the\nreply", "Ask for approval"}}}},
-		{{ID: "p2", Name: planName, Args: map[string]any{"action": "update", "step": 1, "status": "in_progress"}}},
-		{{ID: "p3", Name: planName, Args: map[string]any{"action": "update", "step": 2, "status": "in_progress"}}},
-		{{ID: "p4", Name: planName, Args: map[string]any{"action": "update", "step": 1, "status": "done"}}},
-		{{ID: "p5", Name: planName, Args: map[string]any{"action": "update", "step": 3, "status": "dropped"}}},
+		{{ID: "p2", Name: planName, Args: map[string]any{"action": "update", "updates": []any{map[string]any{"step": 1, "status": "in_progress"}}}}},
+		{{ID: "p3", Name: planName, Args: map[string]any{"action": "update", "updates": []any{map[string]any{"step": 2, "status": "in_progress"}}}}},
+		{{ID: "p4", Name: planName, Args: map[string]any{"action": "update", "updates": []any{map[string]any{"step": 1, "status": "done"}}}}},
+		{{ID: "p5", Name: planName, Args: map[string]any{"action": "update", "updates": []any{map[string]any{"step": 3, "status": "dropped"}}}}},
 	}
 	var responses []string
 	step := 0

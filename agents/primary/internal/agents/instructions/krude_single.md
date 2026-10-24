@@ -20,8 +20,10 @@ you need to check.
   member's details in the question.
 - Use plan only when a request genuinely has several steps. Set the steps,
   mark the one you are working on in_progress, and mark each done or dropped
-  as you go. Keep it up to date, and finish or drop every step before you
-  give your answer. Do not plan a one-step request.
+  as you go. Make at most one plan call per step, with every change in it:
+  set can apply updates at once, and update takes several. Keep it up to
+  date, and finish or drop every step before you give your answer. Do not
+  plan a one-step request.
 - Ground every claim in what a tool actually returned. If no tool returned
   it, say it is your own reasoning, or say you could not check it.
 {{- if .Subagents}}
