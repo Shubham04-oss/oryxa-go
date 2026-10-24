@@ -26,6 +26,16 @@ const (
 	LiveBackendCloudflare = "cloudflare"
 )
 
+// The memory backends AGENTS_PRIMARY_MEMORY_BACKEND names. Each of the two
+// pairs answers from the first and also writes to (and forgets from) the
+// second, for the dual-write period of a move from one to the other.
+const (
+	MemoryBackendVertex                = "vertex"
+	MemoryBackendAgentCore             = "agentcore"
+	MemoryBackendVertexShadowAgentCore = "vertex+agentcore"
+	MemoryBackendAgentCoreShadowVertex = "agentcore+vertex"
+)
+
 // ArtifactR2 is the R2 bucket artifacts are written to and its S3 API
 // credentials.
 type ArtifactR2 struct {
@@ -189,6 +199,15 @@ type Config struct {
 	MemoryAgentEngine string
 	MemoryRecalled    int
 	MemoryLocation    string
+	// MemoryBackend is where memory is kept: MemoryBackendVertex (the
+	// default, and what an unset variable means) is Memory Bank as
+	// MemoryAgentEngine describes it; MemoryBackendAgentCore is Bedrock
+	// AgentCore Memory, in AWSRegion, with MemoryID; the two pairs answer
+	// from the first and shadow-write to the second.
+	MemoryBackend string
+	// MemoryID is the AgentCore memory's id, required when MemoryBackend
+	// involves AgentCore and ignored otherwise.
+	MemoryID string
 	// ArtifactBucket is the S3 bucket artifacts are kept in. Without it they
 	// are held in memory and go with the process.
 	ArtifactBucket string
@@ -401,6 +420,10 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	memoryBackend, memoryID, err := memorySettings(getenv)
+	if err != nil {
+		return Config{}, err
+	}
 	wakeupMaxWait, err := secondsValue(getenv, "AGENTS_WAKEUP_MAX_WAIT_SECONDS", 2*time.Minute, 10*time.Second, 24*time.Hour)
 	if err != nil {
 		return Config{}, err
@@ -476,6 +499,8 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		MemoryAgentEngine:          strings.TrimSpace(getenv("AGENTS_PRIMARY_MEMORY_AGENT_ENGINE")),
 		MemoryRecalled:             memoryRecalled,
 		MemoryLocation:             valueOrDefault(getenv, "AGENTS_PRIMARY_MEMORY_LOCATION", googleCloudLocation),
+		MemoryBackend:              memoryBackend,
+		MemoryID:                   memoryID,
 		ArtifactBucket:             strings.TrimSpace(getenv("AGENTS_PRIMARY_ARTIFACT_BUCKET")),
 		S3Endpoint:                 artifactEndpoint(getenv),
 		ArtifactR2:                 artifactR2,
@@ -545,6 +570,31 @@ func slackConsentSettings(getenv func(string) string) (bool, []byte, error) {
 		}
 	}
 	return true, key, nil
+}
+
+// memorySettings reads which backend keeps memory and, when it involves
+// AgentCore, the memory's id. Unset is MemoryBackendVertex, which is
+// Memory Bank exactly as before the setting existed.
+func memorySettings(getenv func(string) string) (backend, memoryID string, err error) {
+	backend = valueOrDefault(getenv, "AGENTS_PRIMARY_MEMORY_BACKEND", MemoryBackendVertex)
+	switch backend {
+	case MemoryBackendVertex:
+		return backend, "", nil
+	case MemoryBackendAgentCore, MemoryBackendVertexShadowAgentCore, MemoryBackendAgentCoreShadowVertex:
+	default:
+		return "", "", fmt.Errorf("AGENTS_PRIMARY_MEMORY_BACKEND must be %s, %s, %s or %s",
+			MemoryBackendVertex, MemoryBackendAgentCore, MemoryBackendVertexShadowAgentCore, MemoryBackendAgentCoreShadowVertex)
+	}
+	memoryID = strings.TrimSpace(getenv("AGENTS_PRIMARY_MEMORY_ID"))
+	if memoryID == "" {
+		return "", "", fmt.Errorf("AGENTS_PRIMARY_MEMORY_ID is required when AGENTS_PRIMARY_MEMORY_BACKEND is %s: it names the AgentCore memory", backend)
+	}
+	if backend != MemoryBackendAgentCore && strings.TrimSpace(getenv("AGENTS_PRIMARY_MEMORY_AGENT_ENGINE")) == "" {
+		// A pair with Memory Bank in it and no engine would be one backend
+		// passing for two.
+		return "", "", fmt.Errorf("AGENTS_PRIMARY_MEMORY_AGENT_ENGINE is required when AGENTS_PRIMARY_MEMORY_BACKEND is %s: it names the Memory Bank half", backend)
+	}
+	return backend, memoryID, nil
 }
 
 // thinkingLevels are the thinking levels a setting may name: Gemini 3's, as
