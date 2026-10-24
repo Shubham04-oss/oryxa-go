@@ -531,7 +531,8 @@ export class SandboxDO extends DurableObject<Env> {
       member: context.member,
       exp,
     });
-    const base = new URL(this.env.EDGE_PUBLIC_URL || "https://edge.oryxa.in");
+    // No fallback for previews: one on the edge's own host could set cookies for oryxa.in.
+    const base = new URL(what.t === "preview" ? this.env.EDGE_PREVIEW_URL : this.env.EDGE_PUBLIC_URL || "https://edge.oryxa.in");
     base.protocol = `${scheme}:`;
     const path = what.t === "preview" ? `/p/${token}/` : `/t/${token}`;
     const query = size && (size.cols || size.rows) ? `?cols=${size.cols ?? 120}&rows=${size.rows ?? 32}` : "";
@@ -646,15 +647,23 @@ async function kernelCall(workspace: Workspace, port: number, path: string, body
 }
 
 // PREVIEW_STRIPPED are response headers a preview may not send. Every org's
-// previews share the edge's origin, so a page a dev server serves must not
-// set cookies there or widen a service worker's scope over it.
+// previews share the preview host's origin, so a page a dev server serves
+// must not set cookies there or widen a service worker's scope over it.
 const PREVIEW_STRIPPED = ["set-cookie", "set-cookie2", "service-worker-allowed"];
 
+// PREVIEW_CSP runs a preview in an opaque origin even when it is opened in a
+// tab of its own, as web-next's iframe already does (the same sandbox
+// flags): its script cannot read or set cookies, storage or service workers
+// on the preview host (#474).
+export const PREVIEW_CSP = "sandbox allow-scripts allow-forms allow-popups";
+
 // previewResponse passes a sandbox server's answer on without the headers
-// above, keeping a WebSocket upgrade (a dev server's hot reload) working.
+// above and with PREVIEW_CSP added to any policy it sent, keeping a
+// WebSocket upgrade (a dev server's hot reload) working.
 export function previewResponse(answer: Response): Response {
   const headers = new Headers(answer.headers);
   for (const name of PREVIEW_STRIPPED) headers.delete(name);
+  headers.append("content-security-policy", PREVIEW_CSP);
   return new Response(answer.body, { status: answer.status, statusText: answer.statusText, headers, webSocket: answer.webSocket });
 }
 

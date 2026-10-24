@@ -91,14 +91,17 @@ func TestEachEndpointIsRateLimitedOnItsOwn(t *testing.T) {
 	h := newHarness(t)
 	busy := h.connectionEndpoint("github", "apc_1", "mem_1", githubTrigger)
 	quiet := h.connectionEndpoint("github", "apc_2", "mem_2", githubTrigger)
-	unsigned := []byte(`{"id":"x"}`)
+	body := []byte(`{"id":"issue-1"}`)
+	signed := func(endpoint Created, i int) *httptest.ResponseRecorder {
+		return h.deliver(endpoint.Endpoint.ID, githubDelivery(endpoint.Hook.Secret, fmt.Sprintf("d-%d", i), "issues", body), body)
+	}
 
 	for i := range RatePerSecond {
-		if response := h.deliver(busy.Endpoint.ID, nil, unsigned); response.Code != http.StatusUnauthorized {
-			t.Fatalf("delivery %d inside the rate = %d, want 401 (it is unsigned)", i+1, response.Code)
+		if response := signed(busy, i); response.Code != http.StatusOK {
+			t.Fatalf("delivery %d inside the rate = %d %s, want 200", i+1, response.Code, response.Body)
 		}
 	}
-	response := h.deliver(busy.Endpoint.ID, nil, unsigned)
+	response := signed(busy, RatePerSecond)
 	if response.Code != http.StatusTooManyRequests || errorCode(t, response) != "rate_limited" {
 		t.Fatalf("delivery %d = %d %s, want 429 rate_limited", RatePerSecond+1, response.Code, response.Body)
 	}
@@ -106,18 +109,69 @@ func TestEachEndpointIsRateLimitedOnItsOwn(t *testing.T) {
 		t.Errorf("Retry-After = %q, want 1", response.Header().Get("Retry-After"))
 	}
 	// Another endpoint has its own budget.
-	if response := h.deliver(quiet.Endpoint.ID, nil, unsigned); response.Code != http.StatusUnauthorized {
-		t.Fatalf("another endpoint = %d, want 401, not rate limited", response.Code)
-	}
-	// A genuine delivery is refused as well while the endpoint is over its rate.
-	body := []byte(`{"id":"issue-1"}`)
-	if response := h.deliver(busy.Endpoint.ID, githubDelivery(busy.Hook.Secret, "d-1", "issues", body), body); response.Code != http.StatusTooManyRequests {
-		t.Fatalf("a genuine delivery past the rate = %d, want 429", response.Code)
+	if response := signed(quiet, 0); response.Code != http.StatusOK {
+		t.Fatalf("another endpoint = %d, want 200, not rate limited", response.Code)
 	}
 	// A second later the bucket is full again.
 	h.clock.Advance(time.Second)
-	if response := h.deliver(busy.Endpoint.ID, githubDelivery(busy.Hook.Secret, "d-1", "issues", body), body); response.Code != http.StatusOK {
+	if response := signed(busy, RatePerSecond); response.Code != http.StatusOK {
 		t.Fatalf("a second later = %d %s, want 200", response.Code, response.Body)
+	}
+}
+
+// Unsigned junk is refused before it spends the endpoint's rate, so a flood
+// of it at Slack's public URL, which every org shares, cannot starve Slack's
+// own deliveries (#475). The flooding address is turned away on its own.
+func TestAnUnsignedFloodDoesNotRateLimitSignedSlackDeliveries(t *testing.T) {
+	h, surface := surfaceHarness(t)
+	junk := mentionBody("EvJunk")
+	for i := range 10 * RatePerSecond {
+		header := http.Header{}
+		if i%2 == 0 {
+			header = slackDelivery("not-the-signing-secret-0123456789", h.clock.Now(), junk)
+		}
+		header.Set("CF-Connecting-IP", "203.0.113.7")
+		want := http.StatusUnauthorized
+		if i >= RefusalsPerSecond {
+			want = http.StatusTooManyRequests
+		}
+		if response := h.post(eventsPath, header, junk); response.Code != want {
+			t.Fatalf("junk %d = %d, want %d", i+1, response.Code, want)
+		}
+	}
+	for i := range RatePerSecond {
+		body := mentionBody(fmt.Sprintf("EvReal%d", i))
+		header := slackDelivery(surfaceSecret, h.clock.Now(), body)
+		header.Set("CF-Connecting-IP", "198.51.100.1")
+		if response := h.post(eventsPath, header, body); response.Code != http.StatusOK {
+			t.Fatalf("signed delivery %d during the flood = %d %s, want 200", i+1, response.Code, response.Body)
+		}
+	}
+	if len(surface.deliveries()) != RatePerSecond {
+		t.Fatalf("the surface was handed %d deliveries, want %d", len(surface.deliveries()), RatePerSecond)
+	}
+	// A second later the flooding address may try again.
+	h.clock.Advance(time.Second)
+	if response := h.post(eventsPath, http.Header{"Cf-Connecting-Ip": {"203.0.113.7"}}, junk); response.Code != http.StatusUnauthorized {
+		t.Fatalf("junk a second later = %d, want 401", response.Code)
+	}
+}
+
+// An app delivers for many orgs from the same addresses, so one endpoint
+// refusing them (an org's wrong secret) does not turn them away from another.
+func TestRefusalsAtOneEndpointDoNotBlockAnother(t *testing.T) {
+	h := newHarness(t)
+	broken := h.connectionEndpoint("github", "apc_1", "mem_1", githubTrigger)
+	healthy := h.connectionEndpoint("github", "apc_2", "mem_2", githubTrigger)
+	body := []byte(`{"id":"issue-1"}`)
+	for range RefusalsPerSecond {
+		h.deliver(broken.Endpoint.ID, githubDelivery("a-stale-secret-0123456789abcdef", "d-1", "issues", body), body)
+	}
+	if response := h.deliver(broken.Endpoint.ID, githubDelivery(broken.Hook.Secret, "d-1", "issues", body), body); response.Code != http.StatusTooManyRequests {
+		t.Fatalf("the refusing endpoint = %d, want 429", response.Code)
+	}
+	if response := h.deliver(healthy.Endpoint.ID, githubDelivery(healthy.Hook.Secret, "d-1", "issues", body), body); response.Code != http.StatusOK {
+		t.Fatalf("another endpoint from the same address = %d %s, want 200", response.Code, response.Body)
 	}
 }
 
