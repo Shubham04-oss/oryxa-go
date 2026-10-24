@@ -41,6 +41,15 @@ const (
 	eventDeletesPerSecond = 15
 )
 
+// agentCoreForgetTimeout bounds one Forget. Events go one at a time at
+// eventDeletesPerSecond, so this is about 1,800 of them; a busy organization
+// may hold more, and what is left is deleted by the next delivery, which
+// starts where this one stopped because what it deleted is gone. It is twice
+// Memory Bank's minute and well inside the five minutes the cleanup queue
+// gives one delivery for every forgetter (internal/inbound handlingTimeout),
+// Memory Bank's half of a shadow and the threads after it included.
+const agentCoreForgetTimeout = 2 * time.Minute
+
 // primaryAgent is the actor-id segment of a member's primary agent, whose
 // scope carries no agent id. A specialist cannot be named it.
 const primaryAgent = "primary"
@@ -91,7 +100,7 @@ type AgentCoreMemory struct {
 	memoryID string
 	recalled int32
 	// forgetTimeout is what one Forget allows itself, listing included; zero
-	// means defaultForgetTimeout.
+	// means agentCoreForgetTimeout.
 	forgetTimeout time.Duration
 	// deletingEvents paces DeleteEvent across every Forget at once.
 	deletingEvents *rate.Limiter
@@ -365,7 +374,7 @@ func (store *AgentCoreMemory) Forget(ctx context.Context, organizationID, userID
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(ctx, cmp.Or(store.forgetTimeout, defaultForgetTimeout))
+	ctx, cancel := context.WithTimeout(ctx, cmp.Or(store.forgetTimeout, agentCoreForgetTimeout))
 	defer cancel()
 	records := store.forgetRecords(ctx, namespacePath)
 	if ctx.Err() != nil {
@@ -474,89 +483,108 @@ func (store *AgentCoreMemory) deleteBatches(ctx context.Context, records []types
 	return failed, nil
 }
 
-// agentCoreEvent names one short-term event.
-type agentCoreEvent struct {
-	actor, session, id string
-}
-
 // forgetEvents deletes every short-term event of the actors under
 // actorPrefix, paced under DeleteEvent's quota.
+//
+// It goes a session at a time: a session's events are listed, then deleted,
+// before the next session is listed. Stopped by its deadline, it has deleted
+// whole sessions as it went, so the next Forget lists only what is left
+// rather than everything again, and each delivery gets further than the last.
 func (store *AgentCoreMemory) forgetEvents(ctx context.Context, actorPrefix string) error {
-	events, listing := store.listEvents(ctx, actorPrefix)
+	actors, err := store.listActors(ctx, actorPrefix)
+	if err != nil {
+		return err
+	}
 	forgot := 0
+	// failure is the first event that would not go. The rest are still
+	// deleted, so one that keeps failing does not hold back every retry.
 	var failure error
-	for _, event := range events {
+	for _, actor := range actors {
+		sessions, err := store.listSessions(ctx, actor)
+		if err != nil {
+			return forgotEvents(forgot, errors.Join(failure, err))
+		}
+		for _, sessionID := range sessions {
+			// The whole session is listed before any of it is deleted, so
+			// deleting cannot move a page under the listing.
+			events, err := store.listEvents(ctx, actor, sessionID)
+			if err != nil {
+				return forgotEvents(forgot, errors.Join(failure, err))
+			}
+			deleted, failed, err := store.deleteEvents(ctx, actor, sessionID, events)
+			forgot += deleted
+			if err != nil {
+				return forgotEvents(forgot, errors.Join(failure, err))
+			}
+			failure = cmp.Or(failure, failed)
+		}
+	}
+	if failure != nil {
+		return forgotEvents(forgot, failure)
+	}
+	return nil
+}
+
+// forgotEvents is why forgetting events stopped, and how far it got.
+func forgotEvents(forgot int, err error) error {
+	return fmt.Errorf("forgot %d memory events before stopping: %w", forgot, err)
+}
+
+// listEvents returns the ids of one session's events.
+func (store *AgentCoreMemory) listEvents(ctx context.Context, actor, sessionID string) ([]string, error) {
+	var events []string
+	var token *string
+	for {
+		page, err := store.api.ListEvents(ctx, &bedrockagentcore.ListEventsInput{
+			MemoryId:        aws.String(store.memoryID),
+			ActorId:         aws.String(actor),
+			SessionId:       aws.String(sessionID),
+			IncludePayloads: aws.Bool(false),
+			NextToken:       token,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list memory events to forget: %w", err)
+		}
+		for _, event := range page.Events {
+			if event.EventId != nil {
+				events = append(events, *event.EventId)
+			}
+		}
+		token = page.NextToken
+		if aws.ToString(token) == "" {
+			return events, nil
+		}
+	}
+}
+
+// deleteEvents deletes one session's events, paced under DeleteEvent's
+// quota, and returns how many are gone and why the first that would not go
+// did not. An event already gone is forgotten all the same. It stops, with
+// stopped, only when the time allowed runs out.
+func (store *AgentCoreMemory) deleteEvents(ctx context.Context, actor, sessionID string, events []string) (deleted int, failed, stopped error) {
+	for _, id := range events {
 		if err := store.deletingEvents.Wait(ctx); err != nil {
 			// Wait refuses at once when the deadline would pass before the
 			// next delete may go.
-			failure = cmp.Or(context.Cause(ctx), err)
-			break
+			return deleted, failed, cmp.Or(context.Cause(ctx), err)
 		}
 		_, err := store.api.DeleteEvent(ctx, &bedrockagentcore.DeleteEventInput{
 			MemoryId:  aws.String(store.memoryID),
-			ActorId:   aws.String(event.actor),
-			SessionId: aws.String(event.session),
-			EventId:   aws.String(event.id),
+			ActorId:   aws.String(actor),
+			SessionId: aws.String(sessionID),
+			EventId:   aws.String(id),
 		})
 		var gone *types.ResourceNotFoundException
 		switch {
 		case err == nil, errors.As(err, &gone):
-			// Gone already is forgotten all the same.
-			forgot++
+			deleted++
 		case ctx.Err() != nil:
-		case failure == nil:
-			failure = fmt.Errorf("forget memory event %s: %w", event.id, err)
-		}
-		if ctx.Err() != nil {
-			failure = context.Cause(ctx)
-			break
+			return deleted, failed, context.Cause(ctx)
+		case failed == nil:
+			failed = fmt.Errorf("forget memory event %s: %w", id, err)
 		}
 	}
-	if forgot == len(events) {
-		return listing
-	}
-	return errors.Join(listing, fmt.Errorf("forgot %d of %d memory events: %w", forgot, len(events), failure))
-}
-
-// listEvents collects the events of every actor under actorPrefix. A listing
-// that breaks off returns what it found with the error.
-func (store *AgentCoreMemory) listEvents(ctx context.Context, actorPrefix string) ([]agentCoreEvent, error) {
-	actors, err := store.listActors(ctx, actorPrefix)
-	var events []agentCoreEvent
-	if err != nil {
-		return nil, err
-	}
-	for _, actor := range actors {
-		sessions, err := store.listSessions(ctx, actor)
-		if err != nil {
-			return events, err
-		}
-		for _, sessionID := range sessions {
-			var token *string
-			for {
-				page, err := store.api.ListEvents(ctx, &bedrockagentcore.ListEventsInput{
-					MemoryId:        aws.String(store.memoryID),
-					ActorId:         aws.String(actor),
-					SessionId:       aws.String(sessionID),
-					IncludePayloads: aws.Bool(false),
-					NextToken:       token,
-				})
-				if err != nil {
-					return events, fmt.Errorf("list memory events to forget: %w", err)
-				}
-				for _, event := range page.Events {
-					if event.EventId != nil {
-						events = append(events, agentCoreEvent{actor: actor, session: sessionID, id: *event.EventId})
-					}
-				}
-				token = page.NextToken
-				if aws.ToString(token) == "" {
-					break
-				}
-			}
-		}
-	}
-	return events, nil
+	return deleted, failed, nil
 }
 
 // listActors returns the memory's actors whose id starts with prefix.

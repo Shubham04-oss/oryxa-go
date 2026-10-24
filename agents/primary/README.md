@@ -2330,7 +2330,12 @@ one is refused, not escaped.
   takes no filter, so all are read), their sessions and events, deleted at 15
   a second (DeleteEvent allows 20). One deadline covers both; what is left
   when it passes is said in the error, as Memory Bank's Forget does, and the
-  next Forget finds only that. Something already gone is forgotten, and so is
+  next Forget finds only that. Events go a session at a time, listed then
+  deleted, so a Forget cut short has removed whole sessions and the next one
+  starts on what is left. The deadline is two minutes (about 1,800 events),
+  inside the five the cleanup queue gives one delivery for every forgetter; a
+  busier organization takes a few deliveries. Something already gone is
+  forgotten, and so is
   an id the layout refuses (logged, not an error): Write refuses it too, so
   nothing was ever kept under it, and an error would only be redelivered.
 
@@ -2379,6 +2384,17 @@ their memory is, and repeating it removes nothing more.
    Not built yet.
 5. Set `agentcore_memory_backend = "agentcore"`, then remove the Vertex agent
    engine, `memory_agent_engine` and the workload's Memory Bank grant.
+
+**Rolling back** at any step before 5's removal: set
+`agentcore_memory_backend = "vertex"` and apply. The task goes back to Memory
+Bank alone (`AGENTS_PRIMARY_MEMORY_BACKEND=vertex`, no memory id), while the
+AgentCore memory, its key and the task's grant stay, so going forward again is
+one apply. What AgentCore was told meanwhile stays in it, unread. A member or
+organization forgotten while on `vertex` is forgotten only in Memory Bank, so
+rerun those cleanups before moving forward again. Turning
+`agentcore_memory_enabled` off instead is not a rollback: tofu refuses it while
+the memory's key has `prevent_destroy`, and past that it would delete the
+memory and everything in it.
 
 **Infrastructure** (`deploy/production/agentcore_memory.tf`; the owner
 applies it, CD never does). With `agentcore_memory_enabled = true` it creates

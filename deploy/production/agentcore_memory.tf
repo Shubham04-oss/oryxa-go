@@ -17,22 +17,24 @@ variable "agentcore_memory_enabled" {
 }
 
 variable "agentcore_memory_backend" {
-  description = "AGENTS_PRIMARY_MEMORY_BACKEND once agentcore_memory_enabled is on: vertex+agentcore (Memory Bank answers, AgentCore is written beside it), agentcore+vertex (the reverse), or agentcore (AgentCore alone). Both pairs need memory_agent_engine."
+  description = "AGENTS_PRIMARY_MEMORY_BACKEND once agentcore_memory_enabled is on: vertex+agentcore (Memory Bank answers, AgentCore is written beside it), agentcore+vertex (the reverse), agentcore (AgentCore alone), or vertex (back to Memory Bank alone, keeping the AgentCore memory, its key and the task's grant, so moving forward again is one apply). Every value but agentcore needs memory_agent_engine."
   type        = string
   default     = "vertex+agentcore"
   validation {
-    condition     = contains(["vertex+agentcore", "agentcore+vertex", "agentcore"], var.agentcore_memory_backend)
-    error_message = "agentcore_memory_backend is vertex+agentcore, agentcore+vertex or agentcore."
+    condition     = contains(["vertex+agentcore", "agentcore+vertex", "agentcore", "vertex"], var.agentcore_memory_backend)
+    error_message = "agentcore_memory_backend is vertex+agentcore, agentcore+vertex, agentcore or vertex."
   }
 }
 
 locals {
   agentcore_memory = var.agentcore_memory_enabled ? 1 : 0
-  # What the oryxa task reads (agents/primary/internal/serviceconfig).
-  agentcore_memory_environment = var.agentcore_memory_enabled ? {
-    AGENTS_PRIMARY_MEMORY_BACKEND = var.agentcore_memory_backend
-    AGENTS_PRIMARY_MEMORY_ID      = aws_bedrockagentcore_memory.krude[0].id
-  } : {}
+  # What the oryxa task reads (agents/primary/internal/serviceconfig). vertex
+  # is the rollback: Memory Bank alone, as with the memory off, so the id is
+  # left out (the service ignores it there anyway).
+  agentcore_memory_environment = var.agentcore_memory_enabled ? merge(
+    { AGENTS_PRIMARY_MEMORY_BACKEND = var.agentcore_memory_backend },
+    var.agentcore_memory_backend == "vertex" ? {} : { AGENTS_PRIMARY_MEMORY_ID = aws_bedrockagentcore_memory.krude[0].id },
+  ) : {}
 }
 
 # What members told Krude is theirs, so it is under a key of this deployment's

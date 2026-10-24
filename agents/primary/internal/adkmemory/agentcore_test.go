@@ -188,6 +188,16 @@ func (f *fakeAgentCore) DeleteEvent(ctx context.Context, input *bedrockagentcore
 		return nil, &types.ResourceNotFoundException{Message: aws.String("no such event")}
 	}
 	f.deletedEvents = append(f.deletedEvents, aws.ToString(input.ActorId)+"|"+aws.ToString(input.SessionId)+"|"+id)
+	// A deleted event is no longer listed, and a session or actor left with
+	// none is not either.
+	actor, sessionID := aws.ToString(input.ActorId), aws.ToString(input.SessionId)
+	f.events[actor][sessionID] = slices.DeleteFunc(slices.Clone(f.events[actor][sessionID]), func(held string) bool { return held == id })
+	if len(f.events[actor][sessionID]) == 0 {
+		delete(f.events[actor], sessionID)
+	}
+	if len(f.events[actor]) == 0 {
+		delete(f.events, actor)
+	}
 	return &bedrockagentcore.DeleteEventOutput{EventId: input.EventId}, nil
 }
 
@@ -651,28 +661,88 @@ func TestAgentCoreForgetTakesAnEventAlreadyGoneAsForgotten(t *testing.T) {
 	}
 }
 
-func TestAgentCoreForgetStopsAtItsDeadlineAndSaysWhatItLeft(t *testing.T) {
-	api := newFakeAgentCore()
-	sessions := map[string][]string{}
-	for i := range 10 {
-		sessions["t1"] = append(sessions["t1"], fmt.Sprintf("e%d", i))
-	}
-	api.events["org_acme/usr_1/primary"] = sessions
-	deletes := 0
-	api.deletingEvent = func(ctx context.Context) error {
-		deletes++
-		if deletes <= 3 {
-			return nil
+// heldEvents puts sessions sessions of perSession events each under actor.
+func heldEvents(api *fakeAgentCore, actor string, sessions, perSession int) {
+	held := map[string][]string{}
+	for session := range sessions {
+		for event := range perSession {
+			id := fmt.Sprintf("s%d-e%d", session, event)
+			held[fmt.Sprintf("t%d", session)] = append(held[fmt.Sprintf("t%d", session)], id)
 		}
-		<-ctx.Done()
-		return ctx.Err()
+	}
+	api.events[actor] = held
+}
+
+// Stopped by its deadline, Forget says how far it got, and has deleted what
+// it got through: the next Forget finds only what is left and finishes it,
+// rather than starting over. Events go a session at a time, so a delivery
+// cut short still leaves whole sessions gone.
+func TestAgentCoreForgetInterruptedByItsDeadlineMakesProgress(t *testing.T) {
+	api := newFakeAgentCore()
+	heldEvents(api, "org_acme/usr_1/primary", 3, 4)
+	heldEvents(api, "org_acme/usr_2/primary", 2, 3)
+	allowed := 5
+	api.deletingEvent = func(ctx context.Context) error {
+		if allowed == 0 {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		allowed--
+		return nil
 	}
 	store := agentCoreWith(t, api)
 	store.forgetTimeout = 50 * time.Millisecond
-	err := store.Forget(context.Background(), "org_acme", "usr_1")
-	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "forgot 3 of 10 memory events") {
-		t.Fatalf("Forget = %v, want it to stop at its deadline having forgotten 3 of 10", err)
+
+	err := store.Forget(context.Background(), "org_acme", "")
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "forgot 5 memory events before stopping") {
+		t.Fatalf("first Forget = %v, want it stopped at its deadline after 5", err)
 	}
+	if left := len(api.events["org_acme/usr_1/primary"]); left != 2 {
+		t.Fatalf("%d of usr_1's sessions left after the first Forget, want its first gone and the second begun", left)
+	}
+
+	allowed = 1 << 20
+	if err := store.Forget(context.Background(), "org_acme", ""); err != nil {
+		t.Fatalf("second Forget = %v, want it to finish", err)
+	}
+	if len(api.events) != 0 {
+		t.Fatalf("events left after the retry: %v", api.events)
+	}
+	if len(api.deletedEvents) != 18 {
+		t.Fatalf("%d deletes for 18 events: the retry went over what was already gone", len(api.deletedEvents))
+	}
+}
+
+// One event that will not go fails the Forget, but not the events after it,
+// so every retry still gets further.
+func TestAgentCoreForgetKeepsGoingPastAnEventItCannotDelete(t *testing.T) {
+	api := newFakeAgentCore()
+	heldEvents(api, "org_acme/usr_1/primary", 2, 3)
+	failing := errors.New("internal error")
+	api.deletingEvent = func(context.Context) error { return nil }
+	stuck := &stuckEvent{fakeAgentCore: api, id: "s0-e1", err: failing}
+	store := agentCoreWith(t, stuck)
+	err := store.Forget(context.Background(), "org_acme", "usr_1")
+	if !errors.Is(err, failing) || !strings.Contains(err.Error(), "forgot 5 memory events before stopping") {
+		t.Fatalf("Forget = %v, want the one failure after forgetting the other 5", err)
+	}
+	if len(api.events) != 1 || len(api.events["org_acme/usr_1/primary"]["t0"]) != 1 {
+		t.Fatalf("left %v, want only the stuck event", api.events)
+	}
+}
+
+// stuckEvent fails every delete of one event.
+type stuckEvent struct {
+	*fakeAgentCore
+	id  string
+	err error
+}
+
+func (s *stuckEvent) DeleteEvent(ctx context.Context, input *bedrockagentcore.DeleteEventInput, _ ...func(*bedrockagentcore.Options)) (*bedrockagentcore.DeleteEventOutput, error) {
+	if aws.ToString(input.EventId) == s.id {
+		return nil, s.err
+	}
+	return s.fakeAgentCore.DeleteEvent(ctx, input)
 }
 
 func TestAgentCoreForgetReportsAFailedListing(t *testing.T) {
