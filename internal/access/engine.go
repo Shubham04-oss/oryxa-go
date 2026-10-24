@@ -39,4 +39,10 @@ var ErrNoAnswer = errors.New("spicedb has no answer for this decision")
 // ErrNoAnswer means no decision: the caller refuses.
 type Decider interface {
 	Decide(ctx context.Context, ask Ask, codeAllowed bool) (allowed bool, err error)
+	// DecideMany decides a list's asks, of one organization, in one round
+	// trip, and answers what the caller gets for each: allowed only when both
+	// the code and SpiceDB allow, the code's answer where SpiceDB has none.
+	// Differences are recorded as Decide records them. An error is no
+	// decision for any of them: the caller refuses the list.
+	DecideMany(ctx context.Context, asks []Ask, codeAllowed []bool) (allowed []bool, err error)
 }

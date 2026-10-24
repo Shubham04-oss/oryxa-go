@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -35,9 +36,11 @@ const (
 	Settle = 5 * time.Second
 )
 
-// Checker answers whether every check holds. An error is no answer.
+// Checker answers whether every check holds, or, with CheckEach, each one.
+// An error is no answer.
 type Checker interface {
 	Check(ctx context.Context, organizationID string, checks []spicedb.Check) (bool, error)
+	CheckEach(ctx context.Context, organizationID string, checks []spicedb.Check) ([]bool, error)
 }
 
 // Recorder keeps disagreements; *access.Log is one.
@@ -226,6 +229,64 @@ func (shadow *Shadow) Decide(ctx context.Context, ask access.Ask, codeAllowed bo
 	return answer, nil
 }
 
+// DecideMany is Decide for a list: every modelled ask's checks go to SpiceDB
+// in one CheckEach, and each answer is narrowed by the code's as a caller of
+// Decide narrows it (access.Decider).
+func (shadow *Shadow) DecideMany(ctx context.Context, asks []access.Ask, codeAllowed []bool) ([]bool, error) {
+	if len(asks) != len(codeAllowed) {
+		return nil, fmt.Errorf("%d asks, %d code answers", len(asks), len(codeAllowed))
+	}
+	allowed := slices.Clone(codeAllowed)
+	if shadow == nil || len(asks) == 0 {
+		return allowed, nil
+	}
+	// asked is one modelled ask, and where its checks are in all.
+	type asked struct{ ask, from, to int }
+	var (
+		all     []spicedb.Check
+		modeled []asked
+	)
+	for i, ask := range asks {
+		if ask.OrganizationID != asks[0].OrganizationID {
+			return nil, errors.New("spicedb is asked about one organization at a time")
+		}
+		checks, ok := shadow.checks(ask.Actor, ask.UserID, ask.AgentID, ask.Action,
+			spicedb.Object{Type: ask.ResourceKind, ID: ask.ResourceID}, ask.Limited)
+		if !ok || len(checks) == 0 {
+			shadow.count(ctx, ask, "skipped")
+			continue
+		}
+		modeled = append(modeled, asked{i, len(all), len(all) + len(checks)})
+		all = append(all, checks...)
+	}
+	if len(modeled) == 0 {
+		return allowed, nil
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, DecideTimeout)
+	answers, err := shadow.checker.CheckEach(checkCtx, asks[0].OrganizationID, all)
+	cancel()
+	if err == nil && len(answers) != len(all) {
+		err = fmt.Errorf("spicedb answered %d of %d checks", len(answers), len(all))
+	}
+	if err != nil {
+		for _, m := range modeled {
+			shadow.count(ctx, asks[m.ask], "unanswered")
+		}
+		return nil, fmt.Errorf("spicedb did not decide: %w", err)
+	}
+	for _, m := range modeled {
+		ask, code := asks[m.ask], codeAllowed[m.ask]
+		answer := !slices.Contains(answers[m.from:m.to], false)
+		if answer != code {
+			shadow.disagree(ctx, ask, code, answer, all[m.from:m.to])
+		} else {
+			shadow.count(ctx, ask, "agreed")
+		}
+		allowed[m.ask] = code && answer
+	}
+	return allowed, nil
+}
+
 func (shadow *Shadow) count(ctx context.Context, ask access.Ask, outcome string) {
 	if shadow.outcomes != nil {
 		shadow.outcomes.Add(ctx, 1, metric.WithAttributes(attribute.String("service", ask.Service), attribute.String("outcome", outcome)))
@@ -259,6 +320,32 @@ func (client Client) consistency(ctx context.Context, org string) *v1.Consistenc
 
 // Check asks every check in one CheckBulkPermissions call.
 func (client Client) Check(ctx context.Context, org string, checks []spicedb.Check) (bool, error) {
+	answers, err := client.CheckEach(ctx, org, checks)
+	if err != nil {
+		return false, err
+	}
+	return !slices.Contains(answers, false), nil
+}
+
+// bulkLimit bounds one CheckBulkPermissions, so a long list takes a few calls
+// rather than one SpiceDB might refuse as too large.
+const bulkLimit = 1000
+
+// CheckEach answers each check, in CheckBulkPermissions calls of bulkLimit.
+func (client Client) CheckEach(ctx context.Context, org string, checks []spicedb.Check) ([]bool, error) {
+	consistency := client.consistency(ctx, org)
+	answers := make([]bool, 0, len(checks))
+	for chunk := range slices.Chunk(checks, bulkLimit) {
+		chunkAnswers, err := client.checkBulk(ctx, consistency, chunk)
+		if err != nil {
+			return nil, err
+		}
+		answers = append(answers, chunkAnswers...)
+	}
+	return answers, nil
+}
+
+func (client Client) checkBulk(ctx context.Context, consistency *v1.Consistency, checks []spicedb.Check) ([]bool, error) {
 	items := make([]*v1.CheckBulkPermissionsRequestItem, len(checks))
 	for i, check := range checks {
 		items[i] = &v1.CheckBulkPermissionsRequestItem{
@@ -268,28 +355,28 @@ func (client Client) Check(ctx context.Context, org string, checks []spicedb.Che
 		}
 	}
 	response, err := client.SpiceDB.CheckBulkPermissions(ctx, &v1.CheckBulkPermissionsRequest{
-		Consistency: client.consistency(ctx, org),
+		Consistency: consistency,
 		Items:       items,
 	})
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if len(response.Pairs) != len(items) {
-		return false, fmt.Errorf("spicedb answered %d of %d checks", len(response.Pairs), len(items))
+		return nil, fmt.Errorf("spicedb answered %d of %d checks", len(response.Pairs), len(items))
 	}
-	allowed := true
-	for _, pair := range response.Pairs {
+	answers := make([]bool, len(items))
+	for i, pair := range response.Pairs {
 		if failed := pair.GetError(); failed != nil {
-			return false, errors.New(failed.GetMessage())
+			return nil, errors.New(failed.GetMessage())
 		}
 		switch pair.GetItem().GetPermissionship() {
 		case v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION:
+			answers[i] = true
 		case v1.CheckPermissionResponse_PERMISSIONSHIP_NO_PERMISSION:
-			allowed = false
 		default:
 			// Conditional on a caveat's context, which the shadow doesn't pass.
-			return false, errors.New("spicedb answered conditionally")
+			return nil, errors.New("spicedb answered conditionally")
 		}
 	}
-	return allowed, nil
+	return answers, nil
 }

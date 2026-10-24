@@ -95,6 +95,38 @@ func (s *Service) decide(ctx context.Context, caller domain.OrgMembership, sourc
 	}
 }
 
+// decideMany is decide for a listing, with one round trip to SpiceDB for all
+// of it: codes are the code's answers, and each comes back as decide would
+// answer it.
+func (s *Service) decideMany(ctx context.Context, caller domain.OrgMembership, sources []domain.Source, action string, codes []error) ([]error, error) {
+	if s.engine == nil {
+		for i, source := range sources {
+			codes[i] = s.decide(ctx, caller, source, action, codes[i])
+		}
+		return codes, nil
+	}
+	var (
+		asks    []access.Ask
+		allowed []bool
+		rows    []int
+	)
+	for i, source := range sources {
+		if codes[i] == nil || errors.Is(codes[i], domain.ErrNotFound) || errors.Is(codes[i], domain.ErrForbidden) {
+			asks, allowed, rows = append(asks, s.ask(caller, source, action)), append(allowed, codes[i] == nil), append(rows, i)
+		}
+	}
+	allowed, err := s.engine.DecideMany(ctx, asks, allowed)
+	if err != nil {
+		return nil, fmt.Errorf("decide access to %d sources: %w", len(asks), err)
+	}
+	for j, i := range rows {
+		if codes[i] == nil && !allowed[j] {
+			codes[i] = domain.ErrNotFound
+		}
+	}
+	return codes, nil
+}
+
 // ask is a decision on a source in the terms SpiceDB is asked about it.
 func (s *Service) ask(caller domain.OrgMembership, source domain.Source, action string) access.Ask {
 	ask := access.Ask{

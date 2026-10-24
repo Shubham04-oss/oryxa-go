@@ -768,29 +768,35 @@ func (actor teamActor) canManage() bool {
 }
 
 func (s *Service) summarizeTeams(ctx context.Context, org domain.OrgMembership, teams []domain.Team) ([]TeamSummary, error) {
-	summaries := make([]TeamSummary, 0, len(teams))
-	for _, team := range teams {
-		membership, membershipErr := s.store.Membership(ctx, team.ID, org.UserID)
-		onTeam := membershipErr == nil
-		if membershipErr != nil && !errors.Is(membershipErr, domain.ErrNotFound) {
-			return nil, membershipErr
-		}
-		// The query already kept the caller to teams the code lets them see;
-		// the engine may only narrow that.
-		see, err := s.decide(ctx, org, team, access.ActionRead, true)
-		if err != nil {
+	// The query already kept the caller to teams the code lets them see; the
+	// engine may only narrow that. Seeing each team and managing it are
+	// asked together, in one round trip for the whole list.
+	memberships := make([]*domain.Membership, len(teams))
+	asks, allowed := make([]access.Ask, 2*len(teams)), make([]bool, 2*len(teams))
+	for i, team := range teams {
+		membership, err := s.store.Membership(ctx, team.ID, org.UserID)
+		switch {
+		case err == nil:
+			memberships[i] = &membership
+		case !errors.Is(err, domain.ErrNotFound):
 			return nil, err
 		}
-		if !see {
+		asks[i], allowed[i] = teamAsk(org, team, access.ActionRead), true
+		asks[len(teams)+i] = teamAsk(org, team, access.ActionWrite)
+		allowed[len(teams)+i] = domain.CanManageTeam(org, membership.Role)
+	}
+	allowed, err := s.decideMany(ctx, asks, allowed)
+	if err != nil {
+		return nil, err
+	}
+	summaries := make([]TeamSummary, 0, len(teams))
+	for i, team := range teams {
+		if !allowed[i] {
 			continue
 		}
-		manage, err := s.decide(ctx, org, team, access.ActionWrite, domain.CanManageTeam(org, membership.Role))
-		if err != nil {
-			return nil, err
-		}
-		summary := TeamSummary{Team: team, CanManage: manage}
-		if onTeam {
-			summary.Role = membership.Role
+		summary := TeamSummary{Team: team, CanManage: allowed[len(teams)+i]}
+		if memberships[i] != nil {
+			summary.Role = memberships[i].Role
 		}
 		summaries = append(summaries, summary)
 	}

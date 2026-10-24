@@ -16,11 +16,29 @@ type decider struct {
 	answer bool
 	err    error
 	code   []bool
+	// singles and batches count Decide and DecideMany calls.
+	singles, batches int
 }
 
 func (d *decider) Decide(_ context.Context, _ access.Ask, codeAllowed bool) (bool, error) {
+	d.singles++
 	d.code = append(d.code, codeAllowed)
 	return d.answer, d.err
+}
+
+// DecideMany answers as *shadow.Shadow does: answer narrows the code's, no
+// answer leaves the code's, and any other error fails the batch.
+func (d *decider) DecideMany(_ context.Context, asks []access.Ask, codeAllowed []bool) ([]bool, error) {
+	d.batches++
+	d.code = append(d.code, codeAllowed...)
+	if d.err != nil && !errors.Is(d.err, access.ErrNoAnswer) {
+		return nil, d.err
+	}
+	allowed := make([]bool, len(asks))
+	for i := range asks {
+		allowed[i] = codeAllowed[i] && (d.answer || d.err != nil)
+	}
+	return allowed, nil
 }
 
 type written struct {
@@ -100,5 +118,36 @@ func TestRelationshipsFollowTheFile(t *testing.T) {
 	}
 	if len(rels.created) != 1 || rels.created[0] != created.ID || len(rels.deleted) != 1 || rels.deleted[0] != created.ID {
 		t.Fatalf("created %v, deleted %v", rels.created, rels.deleted)
+	}
+}
+
+// A list asks the engine once, for every file on it: SpiceDB narrows it and
+// its failure fails it.
+func TestAListIsDecidedInOneCall(t *testing.T) {
+	ctx := context.Background()
+	store, blobs := newFakeStore(), blob.NewMemory()
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		if _, err := testService(store, blobs).Create(ctx, creds("user-owner"), "org_1", given(CreateInput{Filename: name, ContentType: "text/plain", Content: []byte("a")})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list := func(engine *decider) ([]domain.Object, error) {
+		return testService(store, blobs).WithEngine(engine, nil).List(ctx, creds("user-owner"), "org_1", ListFilter{})
+	}
+	allow := &decider{answer: true}
+	if listed, err := list(allow); err != nil || len(listed) != 3 {
+		t.Fatalf("List = %d files, %v; want 3", len(listed), err)
+	}
+	if allow.batches != 1 || allow.singles != 0 || len(allow.code) != 3 {
+		t.Fatalf("engine asked %d batches, %d singles, about %d files; want 1 batch of 3", allow.batches, allow.singles, len(allow.code))
+	}
+	if listed, err := list(&decider{answer: false}); err != nil || len(listed) != 0 {
+		t.Fatalf("SpiceDB refused every file, but List = %d files, %v", len(listed), err)
+	}
+	if listed, err := list(&decider{err: access.ErrNoAnswer}); err != nil || len(listed) != 3 {
+		t.Fatalf("with no answer the code's list should stand: %d files, %v", len(listed), err)
+	}
+	if _, err := list(&decider{answer: true, err: errors.New("spicedb unavailable")}); err == nil {
+		t.Fatal("a SpiceDB failure listed files")
 	}
 }
