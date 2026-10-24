@@ -518,6 +518,9 @@ resource "aws_ecs_task_definition" "oryxa" {
       # capability goes, so nothing in the container can gain it.
       linuxParameters = {
         capabilities = {
+          # ECS reads the definition back with an empty add; naming it keeps
+          # every plan from replacing the task definition over nothing.
+          add  = []
           drop = ["AUDIT_WRITE", "CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "MKNOD", "NET_BIND_SERVICE", "NET_RAW", "SETFCAP", "SETPCAP", "SYS_CHROOT"]
         }
       }
