@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/access/spicedb/projector"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 	"github.com/Shubham04-oss/oryxa-go/teams/internal/application"
@@ -77,11 +78,19 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		logger.Warn("TEAMS_EVENTS_QUEUE_URL is not set: teams will not hear about new, renamed or deleted organizations, or members leaving them")
 	}
 
+	engine, err := projector.OpenEngine(platform, Name)
+	if err != nil {
+		return host.Service{}, err
+	}
+	if engine != nil {
+		service.WithEngine(engine.Decider, relationships{engine})
+	}
 	server := httpserver.New(service, httpserver.Config{AllowedOrigins: config.AllowedOrigins}, logger)
 	return host.Service{
 		Handler:  server,
 		Routes:   server.Patterns(),
 		Timeouts: host.Timeouts{Read: 15 * time.Second, Write: 30 * time.Second},
 		Workers:  workers,
+		Close:    engine.Close,
 	}, nil
 }

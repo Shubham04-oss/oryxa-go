@@ -20,3 +20,18 @@ func TestSourceRegisteredMatchesTheReconcile(t *testing.T) {
 		t.Fatal("a source with no organization was accepted")
 	}
 }
+
+// A subteam is written with its parent, which the event can't give.
+func TestTeamPlacedWritesTheParent(t *testing.T) {
+	change, err := TeamPlaced("acme", "payments", "eng")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Rel{rel("team", "payments", "org", "org", "acme"), rel("team", "payments", "parent", "team", "eng")}
+	if !slices.Equal(change.Touch, want) {
+		t.Fatalf("touch = %+v", change.Touch)
+	}
+	if root, _ := TeamPlaced("acme", "eng", ""); len(root.Touch) != 1 {
+		t.Fatalf("a root team: %+v", root.Touch)
+	}
+}
