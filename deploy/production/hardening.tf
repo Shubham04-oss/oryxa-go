@@ -297,6 +297,22 @@ variable "signin_requests_per_period" {
   }
 }
 
+# Slack's two delivery routes at the edge (#475). apps spends an endpoint's
+# rate only on verified deliveries, but nothing else stops one address from
+# flooding these public URLs with junk. Slack's own egress is spread over many
+# addresses, so a per-IP limit well above any one of them leaves it alone.
+# No host condition: app.*/v1/* reaches the same tasks as api.
+variable "slack_requests_per_period" {
+  description = "How many POSTs to Slack's delivery routes one client IP may make in 60 seconds, at one Cloudflare data center, before it is blocked for 1 minute (deploy/production/hardening.tf)."
+  type        = number
+  default     = 600
+
+  validation {
+    condition     = var.slack_requests_per_period >= 1
+    error_message = "slack_requests_per_period is at least 1."
+  }
+}
+
 resource "cloudflare_ruleset" "rate_limits" {
   zone_id     = data.cloudflare_zone.main.zone_id
   name        = "${local.name} rate limits"
@@ -315,6 +331,18 @@ resource "cloudflare_ruleset" "rate_limits" {
       period              = 60
       requests_per_period = var.signin_requests_per_period
       mitigation_timeout  = 600
+    }
+    }, {
+    ref         = "limit_slack_deliveries"
+    description = "Slack event and interactivity deliveries, per client IP"
+    action      = "block"
+    enabled     = true
+    expression  = "(http.request.method eq \"POST\" and starts_with(http.request.uri.path, \"/v1/apps/slack/\"))"
+    ratelimit = {
+      characteristics     = ["cf.colo.id", "ip.src"]
+      period              = 60
+      requests_per_period = var.slack_requests_per_period
+      mitigation_timeout  = 60
     }
   }]
 }

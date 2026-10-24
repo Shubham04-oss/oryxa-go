@@ -76,8 +76,9 @@ type Service struct {
 	values            map[string]string
 	surfaceDeadline   time.Duration
 
-	limiter *limiter
-	opened  openedCache
+	limiter  *limiter
+	refusals *limiter
+	opened   openedCache
 }
 
 // New assembles hooks. It checks its configuration and touches nothing.
@@ -140,6 +141,7 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		}
 	}
 	service.limiter = newLimiter(RatePerSecond, time.Second, func() time.Time { return service.now() })
+	service.refusals = newLimiter(RefusalsPerSecond, time.Second, func() time.Time { return service.now() })
 	return service, nil
 }
 

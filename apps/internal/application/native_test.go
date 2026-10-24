@@ -52,11 +52,11 @@ func TestANativeToolkitConnectsThroughTheIntegrationsService(t *testing.T) {
 		t.Fatalf("BrokerFor() = %q, %v", broker, err)
 	}
 	connection, redirect, err := h.service.Connect(context.Background(), memberToken, "org_1",
-		ConnectInput{Toolkit: "github", ReturnTo: "https://app.oryxa.test/settings"})
+		ConnectInput{BrowserNonce: "nonce-1", Toolkit: "github", ReturnTo: "https://app.oryxa.test/settings"})
 	if err != nil || redirect != "https://github.com/login/oauth/authorize?state=s" || connection.ID != "" {
 		t.Fatalf("Connect() = %+v, %q, %v", connection, redirect, err)
 	}
-	want := nativeclient.ConnectRequest{Org: "org_1", Member: "user-1", App: "github", Level: "personal", ReturnTo: "https://app.oryxa.test/settings"}
+	want := nativeclient.ConnectRequest{Org: "org_1", Member: "user-1", App: "github", Level: "personal", ReturnTo: "https://app.oryxa.test/settings", BrowserHash: hashState("nonce-1")}
 	if len(*received) != 1 || (*received)[0] != want {
 		t.Fatalf("integrations received %+v, want %+v", *received, want)
 	}
@@ -96,7 +96,7 @@ func TestANativeConnectSaysWhyTheServiceRefused(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			h, _ := nativeHarness(t, testCase.status, testCase.body)
-			if _, _, err := h.service.Connect(context.Background(), memberToken, "org_1", ConnectInput{Toolkit: "github"}); !errors.Is(err, testCase.want) {
+			if _, _, err := h.service.Connect(context.Background(), memberToken, "org_1", ConnectInput{BrowserNonce: "nonce-1", Toolkit: "github"}); !errors.Is(err, testCase.want) {
 				t.Fatalf("Connect() error = %v, want %v", err, testCase.want)
 			}
 		})
@@ -116,7 +116,7 @@ func TestOnlyNamedAndUnpinnedToolkitsGoNative(t *testing.T) {
 	if broker, err := h.service.BrokerFor(context.Background(), "github"); err != nil || broker != domain.BrokerComposio {
 		t.Fatalf("a pinned toolkit = %q, %v, want composio", broker, err)
 	}
-	if _, _, err := h.service.Connect(context.Background(), memberToken, "org_1", ConnectInput{Toolkit: "github"}); err != nil {
+	if _, _, err := h.service.Connect(context.Background(), memberToken, "org_1", ConnectInput{BrowserNonce: "nonce-1", Toolkit: "github"}); err != nil {
 		t.Fatalf("a pinned toolkit's connect = %v", err)
 	}
 	if len(*received) != 0 {

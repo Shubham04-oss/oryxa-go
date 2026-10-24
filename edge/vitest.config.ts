@@ -30,6 +30,7 @@ export default defineConfig({
                 ENVIRONMENT: "test",
                 EDGE_URL_SIGNING_KEY: "test-signing-key-test-signing-key-0123456789",
                 EDGE_PUBLIC_URL: "https://edge.test",
+                EDGE_PREVIEW_URL: "https://preview.test",
               },
             },
           }),
