@@ -41,6 +41,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	if config.ConsentPassagesOnly {
 		t.Fatal("passage-only consent grounding must default off")
 	}
+	if config.SingleAgent {
+		t.Fatal("single-agent Krude must default off: Krude is built as before until a deployment turns it on")
+	}
 	if config.AppsURL != "" || config.RagURL != "" || config.KnowledgeURL != "" || config.TeamsURL != "" || config.AuthURL != "" || config.ServiceKeyID != "" {
 		t.Fatalf("apps config = %+v", config)
 	}
@@ -77,6 +80,19 @@ func TestConsentPassagesOnlyIsAnExplicitBooleanOptIn(t *testing.T) {
 	}
 	if _, err := FromEnv(env(map[string]string{key: "sometimes"})); err == nil || !strings.Contains(err.Error(), key) {
 		t.Fatalf("invalid passage-only value: %v", err)
+	}
+}
+
+func TestSingleAgentIsAnExplicitBooleanOptIn(t *testing.T) {
+	const key = "AGENTS_PRIMARY_SINGLE_AGENT"
+	for value, want := range map[string]bool{"": false, "false": false, "0": false, "true": true, " TRUE ": true, "1": true} {
+		config, err := FromEnv(env(map[string]string{key: value}))
+		if err != nil || config.SingleAgent != want {
+			t.Errorf("%q: single agent = %v, err = %v; want %v", value, config.SingleAgent, err, want)
+		}
+	}
+	if _, err := FromEnv(env(map[string]string{key: "on"})); err == nil || !strings.Contains(err.Error(), key) {
+		t.Fatalf("invalid single-agent value: %v", err)
 	}
 }
 
