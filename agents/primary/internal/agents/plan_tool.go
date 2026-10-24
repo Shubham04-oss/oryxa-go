@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 	"unicode/utf8"
 
 	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
 )
@@ -79,10 +82,15 @@ func (sessionPlanStore) save(ctx agent.Context, steps []planStep) error {
 }
 
 type planArgs struct {
-	Action string   `json:"action" jsonschema:"set: replace the plan with steps, all pending (an empty list clears it). update: change one step's status. read: return the plan."`
-	Steps  []string `json:"steps,omitempty" jsonschema:"For set: the steps in order, each one short line."`
-	Step   int      `json:"step,omitempty" jsonschema:"For update: the step's number, counting from 1."`
-	Status string   `json:"status,omitempty" jsonschema:"For update: pending, in_progress, done or dropped. Marking a step in_progress moves any other in-progress step back to pending."`
+	Action  string       `json:"action" jsonschema:"set: replace the plan with steps, all pending (an empty list clears it), then apply any updates. update: apply updates to the plan. read: return the plan."`
+	Steps   []string     `json:"steps,omitempty" jsonschema:"For set: the steps in order, each one short line."`
+	Updates []planUpdate `json:"updates,omitempty" jsonschema:"For update, or set: status changes applied in order, all in this one call."`
+}
+
+// planUpdate is one status change a plan call makes.
+type planUpdate struct {
+	Step   int    `json:"step" jsonschema:"The step's number, counting from 1."`
+	Status string `json:"status" jsonschema:"pending, in_progress, done or dropped. Marking a step in_progress moves any other in-progress step back to pending."`
 }
 
 type planResult struct {
@@ -93,24 +101,105 @@ type planResult struct {
 }
 
 // planTool is Krude's own todo list for the thread: it sets the steps, marks
-// one in progress, done or dropped, and reads the list back. It is
+// them in progress, done or dropped, and reads the list back. It is
 // deterministic and calls no model.
-func planTool(store planStore) func() (tool.Tool, error) {
+//
+// ADK runs the function calls of one model response concurrently, each
+// over the same committed state with a state delta of its own, and merges
+// the deltas last write wins. Two plan calls in one response would each
+// load the same plan and save all of it, so one would silently lose the
+// other's change. So one call carries every change (a set with its updates,
+// or several updates), and calls guards against the rest: a second plan
+// call in the same response is refused, telling the model to combine them.
+func planTool(store planStore, calls *planCalls) func() (tool.Tool, error) {
 	return func() (tool.Tool, error) {
 		return functiontool.New(functiontool.Config{
 			Name:        planName,
-			Description: "Your own todo list for this conversation, for a request with several real steps. set replaces it with new steps, update marks one step in_progress, done or dropped, and read returns it. Finish or drop every step before you give your answer.",
+			Description: "Your own todo list for this conversation, for a request with several real steps. set replaces it with new steps (and can apply updates at once), update applies one or more status changes (in_progress, done, dropped or pending), and read returns it. Make at most one plan call per step: put every change in that one call, since a second plan call alongside it is refused. Finish or drop every step before you give your answer.",
 		}, func(ctx agent.Context, args planArgs) (planResult, error) {
+			if calls.refused(ctx.FunctionCallID()) {
+				return planResult{}, errors.New("this was a second plan call in the same step, and it was not applied; make one plan call that carries every change (set with updates, or update with several updates)")
+			}
 			return runPlan(ctx, store, args)
 		})
 	}
 }
 
+// planCalls finds the plan calls that are not the first in their model
+// response, which the plan tool refuses. Its afterModel runs on every model
+// response Krude gets, after ADK has given each function call its id and
+// before it runs any of them.
+type planCalls struct {
+	mu      sync.Mutex
+	pending map[string]time.Time
+}
+
+// planCallsKept bounds how long a refusal waits for its call: one whose run
+// stopped before the call ran is forgotten after it.
+const planCallsKept = time.Hour
+
+func newPlanCalls() *planCalls {
+	return &planCalls{pending: map[string]time.Time{}}
+}
+
+func (p *planCalls) afterModel(_ agent.Context, response *model.LLMResponse, responseErr error) (*model.LLMResponse, error) {
+	if responseErr != nil || response == nil || response.Partial || response.Content == nil {
+		return nil, nil
+	}
+	var extra []string
+	first := true
+	for _, part := range response.Content.Parts {
+		if part == nil || part.FunctionCall == nil || part.FunctionCall.Name != planName {
+			continue
+		}
+		if !first {
+			extra = append(extra, part.FunctionCall.ID)
+		}
+		first = false
+	}
+	if len(extra) == 0 {
+		return nil, nil
+	}
+	now := time.Now()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for id, at := range p.pending {
+		if now.Sub(at) > planCallsKept {
+			delete(p.pending, id)
+		}
+	}
+	for _, id := range extra {
+		p.pending[id] = now
+	}
+	return nil, nil
+}
+
+// refused reports whether the call with id is one afterModel found was not
+// the first plan call of its response, and forgets it.
+func (p *planCalls) refused(id string) bool {
+	if id == "" {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, ok := p.pending[id]; ok {
+		delete(p.pending, id)
+		return true
+	}
+	return false
+}
+
 func runPlan(ctx agent.Context, store planStore, args planArgs) (planResult, error) {
+	if len(args.Updates) > maxPlanSteps {
+		return planResult{}, fmt.Errorf("one call makes at most %d updates", maxPlanSteps)
+	}
 	switch strings.TrimSpace(args.Action) {
 	case "set":
 		steps, err := newPlan(args.Steps)
 		if err != nil {
+			return planResult{}, err
+		}
+		if steps, err = applyUpdates(steps, args.Updates); err != nil {
 			return planResult{}, err
 		}
 		if err := store.save(ctx, steps); err != nil {
@@ -118,11 +207,14 @@ func runPlan(ctx agent.Context, store planStore, args planArgs) (planResult, err
 		}
 		return describePlan(steps), nil
 	case "update":
+		if len(args.Updates) == 0 {
+			return planResult{}, errors.New("update needs at least one entry in updates")
+		}
 		steps, err := store.load(ctx)
 		if err != nil {
 			return planResult{}, err
 		}
-		if steps, err = updatePlan(steps, args.Step, args.Status); err != nil {
+		if steps, err = applyUpdates(steps, args.Updates); err != nil {
 			return planResult{}, err
 		}
 		if err := store.save(ctx, steps); err != nil {
@@ -155,6 +247,17 @@ func newPlan(texts []string) ([]planStep, error) {
 			return nil, fmt.Errorf("step %d is longer than %d characters", i+1, maxPlanStepRunes)
 		}
 		steps = append(steps, planStep{Step: i + 1, Text: text, Status: stepPending})
+	}
+	return steps, nil
+}
+
+// applyUpdates applies updates to steps in order, all or none.
+func applyUpdates(steps []planStep, updates []planUpdate) ([]planStep, error) {
+	for _, update := range updates {
+		var err error
+		if steps, err = updatePlan(steps, update.Step, update.Status); err != nil {
+			return nil, err
+		}
 	}
 	return steps, nil
 }

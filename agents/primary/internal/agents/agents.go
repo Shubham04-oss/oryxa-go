@@ -219,8 +219,9 @@ func SingleAgentRoot(router *modelrouter.Router, toolboxes []Toolbox, remembers 
 	if err != nil {
 		return nil, err
 	}
+	plans := newPlanCalls()
 	webSearch := func() (tool.Tool, error) { return webSearchTool(router.For(modelrouter.RoleResearch)) }
-	builders := []func() (tool.Tool, error){catalog.listTool, catalog.loadTool, userDetailsTool, currentScreenTool, webSearch, planTool(sessionPlanStore{}), loadArtifactsTool, saveArtifactTool}
+	builders := []func() (tool.Tool, error){catalog.listTool, catalog.loadTool, userDetailsTool, currentScreenTool, webSearch, planTool(sessionPlanStore{}, plans), loadArtifactsTool, saveArtifactTool}
 	if remembers {
 		builders = append(builders, loadMemoryTool)
 	}
@@ -234,6 +235,9 @@ func SingleAgentRoot(router *modelrouter.Router, toolboxes []Toolbox, remembers 
 		Model:               router.Answer(modelrouter.RoleChat),
 		InstructionProvider: instructionFrom(singleInstruction, catalog, false),
 		BeforeToolCallbacks: []llmagent.BeforeToolCallback{recordRunSource},
+		// Marks every plan call after the first in one response, for the
+		// plan tool to refuse (planTool says why).
+		AfterModelCallbacks: []llmagent.AfterModelCallback{plans.afterModel},
 		Tools:               tools,
 		Toolsets:            []tool.Toolset{catalog.loaded()},
 	})
