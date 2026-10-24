@@ -681,3 +681,191 @@ func TestARunningRecordNothingWorksOnReadsAsStopped(t *testing.T) {
 		t.Fatalf("status = %+v, %v", status, err)
 	}
 }
+
+// TestTheSandboxIsNeverGivenBesideARead: code in the sandbox can reach the
+// network, so a sub-agent that could read private or planted text never has
+// it; a sandbox sub-agent alone may compute.
+func TestTheSandboxIsNeverGivenBesideARead(t *testing.T) {
+	m := newTestManager(t, answer("Computed."))
+	ctx, _ := m.run(t, context.Background(), "run_1")
+	for _, read := range []string{ToolKnowledge, ToolAppsRead, ToolWebSearch} {
+		if _, err := m.spawn(ctx, testBrief(true, read, ToolSandbox)); err == nil || !strings.Contains(err.Error(), "can reach the network") {
+			t.Fatalf("%s beside the sandbox = %v", read, err)
+		}
+	}
+	view, err := m.spawn(ctx, testBrief(true, ToolSandbox))
+	if err != nil || view.State != StateDone || !slices.Equal(view.Tools, []string{ToolSandbox}) {
+		t.Fatalf("the sandbox alone = %+v, %v", view, err)
+	}
+	if len(m.builder.built) != 1 {
+		t.Fatalf("built %d sub-agents, want only the sandbox-only one", len(m.builder.built))
+	}
+}
+
+// TestWebSearchCountsAgainstTheBudget: the model calls web_search makes for
+// a sub-agent count against its budget and its totals, as its own do.
+func TestWebSearchCountsAgainstTheBudget(t *testing.T) {
+	respond := func(_ context.Context, request *model.LLMRequest) (*genai.Content, error) {
+		if hasFunctionResponse(request, ToolWebSearch) {
+			return genai.NewContentFromText("It costs $4.", genai.RoleModel), nil
+		}
+		return call(ToolWebSearch, map[string]any{}), nil
+	}
+	m := newTestManager(t, respond)
+	search := &fakeModel{respond: answer("$4, per the vendor.")}
+	m.builder.search = search
+	ctx, _ := m.run(t, context.Background(), "run_1")
+
+	in := testBrief(true, ToolWebSearch)
+	in.Budget = Budget{ModelCalls: 5}
+	view, err := m.spawn(ctx, in)
+	if err != nil || view.State != StateDone || view.ModelCalls != 3 {
+		t.Fatalf("view = %+v, %v; want done after its two calls and web_search's one", view, err)
+	}
+	if record := m.store.record(t, view.ID); record.TotalTokens != 45 {
+		t.Fatalf("recorded tokens = %d, want web_search's call among them", record.TotalTokens)
+	}
+
+	in.Budget = Budget{ModelCalls: 2}
+	view, err = m.spawn(ctx, in)
+	if err != nil || view.State != StateFailed || !strings.Contains(view.Error, "budget of model calls (2)") {
+		t.Fatalf("view = %+v, %v; want the budget spent by its call and web_search's", view, err)
+	}
+	if calls := len(search.requests()); calls != 2 {
+		t.Fatalf("web_search model calls = %d, want 2: one per spawn", calls)
+	}
+}
+
+// TestOneResponseMakesAtMostFewCalls: a response asking for more function
+// calls than maxCallsPerResponse runs only the first ones.
+func TestOneResponseMakesAtMostFewCalls(t *testing.T) {
+	content := &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{genai.NewPartFromText("Searching.")}}
+	for i := range maxCallsPerResponse + 3 {
+		content.Parts = append(content.Parts, &genai.Part{FunctionCall: &genai.FunctionCall{Name: ToolWebSearch, Args: map[string]any{"n": i}}})
+	}
+	capped, err := capCalls(nil, &model.LLMResponse{Content: content}, nil)
+	if err != nil || capped == nil {
+		t.Fatalf("capped = %v, %v", capped, err)
+	}
+	calls := 0
+	for _, part := range capped.Content.Parts {
+		if part.FunctionCall != nil {
+			calls++
+		}
+	}
+	if calls != maxCallsPerResponse || capped.Content.Parts[0].Text != "Searching." || len(content.Parts) != maxCallsPerResponse+4 {
+		t.Fatalf("kept %d calls of %d parts", calls, len(capped.Content.Parts))
+	}
+	if kept, _ := capCalls(nil, &model.LLMResponse{Content: call(ToolWebSearch, nil)}, nil); kept != nil {
+		t.Fatal("a response within the cap was rewritten")
+	}
+}
+
+// TestAnAssignmentFitsTheTimeItsRunHasLeft: a run with a deadline gives a
+// sub-agent no more than its time left less the time Krude needs to answer,
+// says so, and starts none when too little is left.
+func TestAnAssignmentFitsTheTimeItsRunHasLeft(t *testing.T) {
+	m := newTestManager(t, blocking)
+	m.margin, m.minTurn = 100*time.Millisecond, 50*time.Millisecond
+	runContext, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	ctx, _ := m.run(t, runContext, "run_1")
+	m.minute = time.Hour
+	view, err := m.spawn(ctx, testBrief(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.State != StateFailed || !strings.Contains(view.Error, "time its run had left") || !strings.Contains(view.Note, "this run has left") {
+		t.Fatalf("view = %+v", view)
+	}
+	if runContext.Err() != nil {
+		t.Fatal("the sub-agent used the whole run, leaving Krude no time to answer")
+	}
+
+	short, cancelShort := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	defer cancelShort()
+	shortCtx, _ := m.run(t, short, "run_2")
+	if _, err := m.spawn(shortCtx, testBrief(true)); err == nil || !strings.Contains(err.Error(), "too little time left") {
+		t.Fatalf("spawn with too little time = %v", err)
+	}
+}
+
+// TestMessagesItNeverReadAreRecorded: messages queued to a working
+// sub-agent that is stopped before reading them are named in its record.
+func TestMessagesItNeverReadAreRecorded(t *testing.T) {
+	m := newTestManager(t, blocking)
+	ctx, _ := m.run(t, context.Background(), "run_1")
+	view, err := m.spawn(ctx, testBrief(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []string{"Also check B.", "And C."} {
+		if _, err := m.message(ctx, messageArgs{ID: view.ID, Message: message}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stopped, err := m.stop(ctx, stopArgs{ID: view.ID})
+	if err != nil || stopped.State != StateStopped || !strings.Contains(stopped.Error, "2 message(s) you sent while it worked were not read") {
+		t.Fatalf("stopped = %+v, %v", stopped, err)
+	}
+}
+
+// TestTheSweeperRemovesExpiredSubAgentsEverywhere: Sweep removes every
+// thread's expired sub-agents with their transcripts, records as stopped
+// the running ones a dead process left, and leaves alone the ones working.
+func TestTheSweeperRemovesExpiredSubAgentsEverywhere(t *testing.T) {
+	m := newTestManager(t, answer("Done."), func(config *Config) { config.TTL = time.Hour })
+	ctx, _ := m.run(t, context.Background(), "run_1")
+	done, err := m.spawn(ctx, testBrief(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _ := m.run(t, context.Background(), "run_2")
+	other.thread = "thread_2"
+	otherDone, err := m.spawn(other, testBrief(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.model.mu.Lock()
+	m.model.respond = blocking
+	m.model.mu.Unlock()
+	working, err := m.spawn(ctx, testBrief(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := m.clock.Now()
+	left := Record{
+		ID: "sa_left", Thread: testThread, ParentRunID: "run_0", Objective: "x", State: StateRunning,
+		BudgetModelCalls: 1, BudgetMinutes: 1, CreatedAt: now, UpdatedAt: now.Add(-staleRunningAfter - time.Minute), ExpiresAt: now.Add(48 * time.Hour),
+	}
+	if err := m.store.Create(context.Background(), left); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, stopped, err := m.Sweep(context.Background())
+	if err != nil || removed != 0 || stopped != 1 {
+		t.Fatalf("an early sweep = %d removed, %d stopped, %v; want only the left-over one stopped", removed, stopped, err)
+	}
+	if record := m.store.record(t, "sa_left"); record.State != StateStopped {
+		t.Fatalf("left over = %+v", record)
+	}
+	m.clock.advance(time.Hour + time.Minute)
+	removed, stopped, err = m.Sweep(context.Background())
+	if err != nil || removed != 3 || stopped != 0 {
+		t.Fatalf("sweep = %d removed, %d stopped, %v; want both done ones and the stopped one removed", removed, stopped, err)
+	}
+	for _, id := range []string{done.ID, otherDone.ID} {
+		if _, err := m.store.Get(context.Background(), testThread, id); err == nil {
+			t.Fatalf("%s outlived its expiry", id)
+		}
+	}
+	if _, err := m.sessions.Get(context.Background(), &session.GetRequest{AppName: AppName, UserID: "member_1", SessionID: "thread_2/" + otherDone.ID}); err == nil {
+		t.Fatal("an expired sub-agent's transcript outlived the sweep")
+	}
+	if record := m.store.record(t, working.ID); record.State != StateRunning {
+		t.Fatalf("a working sub-agent was swept: %+v", record)
+	}
+	stop := m.StartSweeping()
+	stop()
+	stop()
+}

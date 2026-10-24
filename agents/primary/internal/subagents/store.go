@@ -111,6 +111,10 @@ type Store interface {
 	// ListMember lists a member's records in an organization, or every
 	// member's when userID is empty, for forgetting them.
 	ListMember(ctx context.Context, organizationID, userID string) ([]Record, error)
+	// ListSweepable lists, at most limit of them, the records not running
+	// that expired before expiredBefore, and the running ones last written
+	// before staleBefore, in every thread.
+	ListSweepable(ctx context.Context, expiredBefore, staleBefore time.Time, limit int) ([]Record, error)
 	Delete(ctx context.Context, ids ...string) error
 }
 
@@ -175,6 +179,12 @@ func (store *PostgresStore) ListMember(ctx context.Context, organizationID, user
 	}
 	return store.query(ctx, `SELECT `+columns+` FROM agents_primary.subagents
 		WHERE organization_id=$1 AND user_id=$2 ORDER BY created_at, id`, organizationID, userID)
+}
+
+func (store *PostgresStore) ListSweepable(ctx context.Context, expiredBefore, staleBefore time.Time, limit int) ([]Record, error) {
+	return store.query(ctx, `SELECT `+columns+` FROM agents_primary.subagents
+		WHERE (state <> 'running' AND expires_at < $1) OR (state = 'running' AND updated_at < $2)
+		ORDER BY updated_at, id LIMIT $3`, expiredBefore, staleBefore, limit)
 }
 
 func (store *PostgresStore) Update(ctx context.Context, record Record, from ...string) error {

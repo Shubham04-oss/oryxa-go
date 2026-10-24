@@ -20,8 +20,9 @@ import (
 
 // The tools of each family a sub-agent may be given, by name, and no
 // others: a toolbox that gains a tool does not give it to sub-agents until
-// it is listed here. None sends, posts or changes anything outside the
-// conversation's sandbox, and none asks the member to confirm, which nobody
+// it is listed here. The reads send, post and change nothing; the sandbox
+// runs code, network included, which is why a brief has it alone
+// (subagents' checkBrief). None asks the member to confirm, which nobody
 // could do for a sub-agent.
 var (
 	subagentKnowledgeTools = []string{"knowledge_collections", "knowledge_search", "knowledge_sources"}
@@ -34,7 +35,7 @@ var (
 // SubagentToolboxes are what single-agent Krude's sub-agents may be given,
 // each nil when this deployment has none: the knowledge and apps toolboxes
 // as unattended runs have them, read-only, and the conversation's sandbox,
-// the toolset Krude's own sandbox toolbox has.
+// the toolset Krude's own sandbox toolbox has, which is not.
 type SubagentToolboxes struct {
 	Knowledge *Toolbox
 	Apps      *Toolbox
@@ -87,6 +88,9 @@ func (b *subagentBuilder) Build(worker spawned.Worker) (agent.Agent, error) {
 	tools := slices.Clone(worker.Own)
 	var toolboxes []Toolbox
 	available := b.Families()
+	if slices.Contains(worker.Tools, spawned.ToolSandbox) && len(worker.Tools) > 1 {
+		return nil, errors.New("a sub-agent with the sandbox has no other tools: code there can reach the network")
+	}
 	for _, family := range worker.Tools {
 		if !slices.Contains(available, family) {
 			return nil, fmt.Errorf("a sub-agent cannot have %q here", family)
@@ -104,7 +108,11 @@ func (b *subagentBuilder) Build(worker spawned.Worker) (agent.Agent, error) {
 			toolboxes = append(toolboxes, box)
 			allowed = append(allowed, subagentSandboxTools...)
 		case spawned.ToolWebSearch:
-			search, err := webSearchTool(b.research)
+			research := b.research
+			if worker.Meter != nil {
+				research = worker.Meter(research)
+			}
+			search, err := webSearchTool(research)
 			if err != nil {
 				return nil, err
 			}

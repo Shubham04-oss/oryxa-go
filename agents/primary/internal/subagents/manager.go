@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"iter"
 	"log/slog"
 	"strings"
 	"sync"
@@ -36,7 +37,7 @@ import (
 const workerInstruction = `You are a sub-agent that Krude, a member's assistant, started for one assignment. Your brief is your first message, and it is all you know: you do not see the conversation, the member, or anything Krude found. Work on your own with the tools you have, and give as your final answer what the brief's Return asks for, in that shape.
 
 - If something only Krude or the member could tell you blocks the work, call ask_parent with one clear question instead of guessing, and stop. Krude's answer comes as your next message. Never ask about anything you can find out yourself.
-- You read and you compute. You never send, post, publish or change anything outside your sandbox, and you have no tool that could. If the work needs a change made, say in your result what should change, and Krude will decide.
+- You never send, post, publish or change anything for the member, and never use a tool to reach anyone or anything your brief did not name. If the work needs a change made, say in your result what should change, and Krude will decide.
 - Your model calls and minutes are limited. Use only the tools the objective needs, and answer as soon as you can.
 - Say where each fact came from (a document, an app record, a web page) so Krude can check it, and say plainly what you could not find.
 - A later message from Krude may ask a follow-up. Answer it from what you already found, and do more work only where it needs it.`
@@ -47,6 +48,7 @@ var (
 	errStopped     = errors.New("Krude stopped it")
 	errBudgetCalls = errors.New("it used its whole budget of model calls")
 	errBudgetTime  = errors.New("it ran past its budget of minutes")
+	errRunTime     = errors.New("it ran out of the time its run had left")
 	errNoScope     = errors.New("sub-agents work only inside one of your runs")
 	errRunEnding   = errors.New("this run is ending, so it cannot start a sub-agent")
 )
@@ -58,6 +60,31 @@ const stopWait = 30 * time.Second
 // writeTimeout bounds one write of a record a sub-agent makes after the
 // context it worked on is gone.
 const writeTimeout = 10 * time.Second
+
+// answerMargin is the time an assignment leaves Krude before its run's
+// deadline, to read what the sub-agent returned and answer; minTurnTime is
+// the least an assignment is started with.
+const (
+	answerMargin = time.Minute
+	minTurnTime  = 20 * time.Second
+)
+
+// maxCallsPerResponse bounds the function calls a sub-agent's one model
+// response may make: the rest are dropped before they run, so that one
+// response cannot spend a whole budget of web searches at once.
+const maxCallsPerResponse = 4
+
+// staleRunningAfter is how long after its last write a running record is
+// taken to be left over from a process that died: longer than any one
+// assignment, and than the progress notes that keep a live one current.
+const staleRunningAfter = time.Duration(MaxMinutes)*time.Minute + 10*time.Minute
+
+// sweepEvery is how often the sweeper removes expired sub-agents, and
+// sweepBatch how many it takes on at a time.
+const (
+	sweepEvery = 10 * time.Minute
+	sweepBatch = 200
+)
 
 // Config is what a Manager runs with.
 type Config struct {
@@ -88,8 +115,12 @@ type Manager struct {
 	logger     *slog.Logger
 	tracer     trace.Tracer
 	now        func() time.Time
-	// minute is how long a budget's minute lasts: a minute, but for tests.
+	// minute is how long a budget's minute lasts, and margin the time an
+	// assignment leaves its run to answer: a minute each, but for tests.
 	minute time.Duration
+	margin time.Duration
+	// minTurn is the least time an assignment is started with.
+	minTurn time.Duration
 
 	// mu guards running, every scope's children and closed, and every
 	// child's pending, exiting and question.
@@ -134,6 +165,8 @@ func New(config Config) (*Manager, error) {
 		tracer:     otel.Tracer("github.com/Shubham04-oss/oryxa-go/agents/primary/internal/subagents"),
 		now:        time.Now,
 		minute:     time.Minute,
+		margin:     answerMargin,
+		minTurn:    minTurnTime,
 		running:    map[string]*child{},
 	}, nil
 }
@@ -213,11 +246,17 @@ type child struct {
 	// earlier assignments.
 	calls  atomic.Int64
 	before int
+	// until is when its assignments must end, so that the run that set it
+	// working has time left to answer; zero for a run with no deadline.
+	until time.Time
 }
 
-func newChild(base context.Context, id string, scope *runScope) *child {
+func (m *Manager) newChild(base context.Context, id string, scope *runScope) *child {
 	ctx, cancel := context.WithCancelCause(context.WithoutCancel(base))
 	c := &child{id: id, scope: scope, ctx: ctx, cancel: cancel, finished: make(chan struct{})}
+	if deadline, ok := base.Deadline(); ok {
+		c.until = deadline.Add(-m.margin)
+	}
 	c.stopRun = context.AfterFunc(scope.ctx, func() { cancel(errParentEnded) })
 	return c
 }
@@ -296,11 +335,25 @@ func (m *Manager) work(c *child, record Record, content *genai.Content) {
 			record = ended
 			record.State, record.Question, record.Result, record.FullResult = StateRunning, "", "", ""
 			record.Progress = "reading your reply"
+			// A live record is kept current, so the sweeper never takes it
+			// for one a dead process left.
+			writeContext, cancel := context.WithTimeout(context.WithoutCancel(c.ctx), writeTimeout)
+			if err := m.store.SetProgress(writeContext, record.ID, record.Progress, record.ModelCalls, record.ExpiresAt); err != nil {
+				m.logger.WarnContext(writeContext, "note a sub-agent's progress", "subagent_id", record.ID, "error", err)
+			}
+			cancel()
 			continue
 		}
+		unread := len(c.pending)
+		c.pending = nil
 		c.exiting = true
 		m.mu.Unlock()
 		record = ended
+		if unread > 0 {
+			// It stopped or failed before it read what Krude sent: say so,
+			// rather than let those messages vanish.
+			record.Error = oneLine(fmt.Sprintf("%s; %d message(s) you sent while it worked were not read", record.Error, unread), maxErrorRunes)
+		}
 		writeContext, cancel := context.WithTimeout(context.WithoutCancel(c.ctx), writeTimeout)
 		if err := m.store.Update(writeContext, record, StateRunning); err != nil {
 			m.logger.ErrorContext(writeContext, "record how a sub-agent's work ended", "subagent_id", record.ID, "error", err)
@@ -317,6 +370,11 @@ func (m *Manager) turn(c *child, record *Record, content *genai.Content) Record 
 	budget := time.Duration(record.BudgetMinutes) * m.minute
 	ctx, cancel := context.WithTimeoutCause(c.ctx, budget, errBudgetTime)
 	defer cancel()
+	if !c.until.IsZero() && c.until.Before(time.Now().Add(budget)) {
+		var cancelRun context.CancelFunc
+		ctx, cancelRun = context.WithDeadlineCause(ctx, c.until, errRunTime)
+		defer cancelRun()
+	}
 	ctx, span := m.tracer.Start(ctx, "subagent.turn", trace.WithAttributes(
 		attribute.String("oryxa.subagent.id", record.ID),
 		attribute.String("oryxa.thread.id", record.Thread.ID),
@@ -358,6 +416,9 @@ func (m *Manager) turn(c *child, record *Record, content *genai.Content) Record 
 	case ctx.Err() != nil && errors.Is(context.Cause(ctx), errBudgetTime):
 		ended.State = StateFailed
 		ended.Error = fmt.Sprintf("%s (%d) before it finished", errBudgetTime, record.BudgetMinutes)
+	case ctx.Err() != nil && errors.Is(context.Cause(ctx), errRunTime):
+		ended.State = StateFailed
+		ended.Error = errRunTime.Error() + " before it finished, so that you could still answer"
 	case failure != nil:
 		ended.State, ended.Error = StateFailed, oneLine("it ran into an error: "+failure.Error(), maxErrorRunes)
 	default:
@@ -382,8 +443,11 @@ func (m *Manager) drive(ctx context.Context, c *child, record *Record, spent *us
 		Thread:      record.Thread,
 		Own:         []tool.Tool{ask},
 		BeforeModel: []llmagent.BeforeModelCallback{countCall(c, record.BudgetModelCalls)},
-		AfterModel:  []llmagent.AfterModelCallback{countUsage(spent)},
+		AfterModel:  []llmagent.AfterModelCallback{countUsage(spent), capCalls},
 		AfterTool:   []llmagent.AfterToolCallback{m.noteProgress(c, record.ID)},
+		Meter: func(llm model.LLM) model.LLM {
+			return metered{LLM: llm, child: c, budget: record.BudgetModelCalls, spent: spent}
+		},
 	})
 	if err != nil {
 		return "", fmt.Errorf("build the sub-agent: %w", err)
@@ -418,6 +482,66 @@ func countCall(c *child, budget int) llmagent.BeforeModelCallback {
 			return nil, errBudgetCalls
 		}
 		return nil, nil
+	}
+}
+
+// capCalls keeps the first maxCallsPerResponse function calls of a
+// response and drops the rest before any runs.
+func capCalls(_ agent.Context, response *model.LLMResponse, responseErr error) (*model.LLMResponse, error) {
+	if responseErr != nil || response == nil || response.Content == nil {
+		return nil, nil
+	}
+	calls := 0
+	for _, part := range response.Content.Parts {
+		if part != nil && part.FunctionCall != nil {
+			calls++
+		}
+	}
+	if calls <= maxCallsPerResponse {
+		return nil, nil
+	}
+	capped := *response
+	content := *response.Content
+	content.Parts = nil
+	kept := 0
+	for _, part := range response.Content.Parts {
+		if part != nil && part.FunctionCall != nil {
+			if kept == maxCallsPerResponse {
+				continue
+			}
+			kept++
+		}
+		content.Parts = append(content.Parts, part)
+	}
+	capped.Content = &content
+	return &capped, nil
+}
+
+// metered is the model of an agent a sub-agent's tool runs, web_search's:
+// each of its calls counts against the sub-agent's budget, the one past it
+// is refused, and what it spends is on the sub-agent's totals. The model it
+// wraps is the router's, counted on the run as every call is.
+type metered struct {
+	model.LLM
+	child  *child
+	budget int
+	spent  *usage.Counter
+}
+
+func (m metered) GenerateContent(ctx context.Context, request *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		if m.child.calls.Add(1) > int64(m.budget) {
+			yield(nil, errBudgetCalls)
+			return
+		}
+		for response, err := range m.LLM.GenerateContent(ctx, request, stream) {
+			if err == nil && response != nil && !response.Partial {
+				m.spent.Add(WorkerName, response.UsageMetadata)
+			}
+			if !yield(response, err) {
+				return
+			}
+		}
 	}
 }
 

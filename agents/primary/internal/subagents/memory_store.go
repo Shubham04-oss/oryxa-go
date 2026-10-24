@@ -54,6 +54,19 @@ func (s *MemoryStore) ListMember(_ context.Context, organizationID, userID strin
 	}), nil
 }
 
+func (s *MemoryStore) ListSweepable(_ context.Context, expiredBefore, staleBefore time.Time, limit int) ([]Record, error) {
+	records := s.filter(func(record Record) bool {
+		if record.State == StateRunning {
+			return record.UpdatedAt.Before(staleBefore)
+		}
+		return record.ExpiresAt.Before(expiredBefore)
+	})
+	if len(records) > limit {
+		records = records[:limit]
+	}
+	return records, nil
+}
+
 func (s *MemoryStore) filter(keep func(Record) bool) []Record {
 	s.mu.Lock()
 	defer s.mu.Unlock()

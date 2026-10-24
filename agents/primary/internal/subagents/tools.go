@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/genai"
@@ -31,7 +32,7 @@ const maxListed = 32
 func (m *Manager) Tools() ([]tool.Tool, error) {
 	spawn, err := functiontool.New(functiontool.Config{
 		Name:        SpawnToolName,
-		Description: "Starts a sub-agent on one assignment from a complete brief, and returns its id, or with wait true its result. It sees only the brief and the files you hand it, works with the read-only tools you allow it, and never sends, posts or changes anything. Start several in one turn for independent questions; they work at the same time.",
+		Description: "Starts a sub-agent on one assignment from a complete brief, and returns its id, or with wait true its result. It sees only the brief and the files you hand it, and works with the tools you allow it: reads that send, post and change nothing, or the sandbox on its own. Start several in one turn for independent questions; they work at the same time.",
 	}, func(ctx agent.Context, args Brief) (View, error) {
 		return m.spawn(ctx, args)
 	})
@@ -150,7 +151,13 @@ func (m *Manager) spawn(ctx agent.Context, in Brief) (View, error) {
 		BudgetModelCalls: checked.budget.ModelCalls, BudgetMinutes: checked.budget.Minutes,
 		CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(m.ttl),
 	}
-	c := newChild(ctx, id, scope)
+	c := m.newChild(ctx, id, scope)
+	if note, err := m.timeLeft(c, checked.budget.Minutes); err != nil {
+		c.discard()
+		return View{}, err
+	} else if note != "" {
+		checked.notes = append(checked.notes, note)
+	}
 	if err := m.reserve(c); err != nil {
 		c.discard()
 		return View{}, err
@@ -300,7 +307,13 @@ func (m *Manager) message(ctx agent.Context, in messageArgs) (View, error) {
 	}
 	record = m.keepResult(ctx, record)
 	from := record.State
-	c := newChild(ctx, id, scope)
+	c := m.newChild(ctx, id, scope)
+	timeNote, err := m.timeLeft(c, record.BudgetMinutes)
+	if err != nil {
+		records.Unlock()
+		c.discard()
+		return View{}, err
+	}
 	if err := m.reserve(c); err != nil {
 		records.Unlock()
 		c.discard()
@@ -323,11 +336,32 @@ func (m *Manager) message(ctx agent.Context, in messageArgs) (View, error) {
 	m.logState(ctx, record)
 	m.start(c, record, messageContent([]string{text}))
 	if in.Wait {
-		return m.await(ctx, c, thread, id)
+		view, err := m.await(ctx, c, thread, id)
+		if err == nil && timeNote != "" {
+			view.Note = timeNote + " " + view.Note
+		}
+		return view, err
 	}
 	view := viewOf(record, now)
-	view.Note = "It is working on your message. Read it later with agent_status."
+	view.Note = strings.TrimSpace(timeNote + " It is working on your message. Read it later with agent_status.")
 	return view, nil
+}
+
+// timeLeft says how an assignment of minutes fits the time c's run has left:
+// a note when it gets less than its budget, and an error when it would get
+// too little to be worth starting.
+func (m *Manager) timeLeft(c *child, minutes int) (string, error) {
+	if c.until.IsZero() {
+		return "", nil
+	}
+	left := time.Until(c.until)
+	if left < m.minTurn {
+		return "", errors.New("this run has too little time left for a sub-agent to work and for you to answer; do this yourself, or tell the member it needs another message")
+	}
+	if left < time.Duration(minutes)*m.minute {
+		return fmt.Sprintf("It has about %s, not %d minutes: that is what this run has left, less the time you need to answer.", left.Round(time.Second), minutes), nil
+	}
+	return "", nil
 }
 
 // queue hands text to the child working on id in this process, if there is
@@ -461,16 +495,16 @@ func (m *Manager) stop(ctx agent.Context, in stopArgs) (View, error) {
 	return viewOf(record, m.now()), nil
 }
 
-// sweep removes the thread's sub-agents that expired more than a TTL ago,
-// with their transcripts: agent_status has said they expired for that long.
-// It is best effort.
+// sweep removes the thread's expired sub-agents, with their transcripts,
+// as the process's sweeper (Sweep) does everywhere, so a thread in use
+// never waits on it. It is best effort.
 func (m *Manager) sweep(ctx context.Context, thread Thread) {
 	records, err := m.store.List(ctx, thread)
 	if err != nil {
 		m.logger.WarnContext(ctx, "list a thread's sub-agents to sweep", "thread_id", thread.ID, "error", err)
 		return
 	}
-	cutoff := m.now().Add(-m.ttl)
+	cutoff := m.now()
 	var gone []Record
 	for _, record := range records {
 		if record.State != StateRunning && record.ExpiresAt.Before(cutoff) {
@@ -508,6 +542,71 @@ func (m *Manager) deleteSession(ctx context.Context, record Record) error {
 		return fmt.Errorf("delete a sub-agent's session: %w", err)
 	}
 	return nil
+}
+
+// Sweep removes, everywhere, the sub-agents past their expiry with their
+// transcripts, and records as stopped the running ones a dead process left
+// (last written longer ago than any assignment can run). It reports how
+// many it removed and stopped. Replicas may sweep at once: each removal is
+// safe to repeat.
+func (m *Manager) Sweep(ctx context.Context) (removed, stopped int, err error) {
+	now := m.now()
+	records, err := m.store.ListSweepable(ctx, now, now.Add(-staleRunningAfter), sweepBatch)
+	if err != nil {
+		return 0, 0, err
+	}
+	var gone []Record
+	for _, record := range records {
+		if record.State != StateRunning {
+			gone = append(gone, record)
+			continue
+		}
+		if c, _ := m.active(record.ID); c != nil {
+			continue
+		}
+		lock := m.recordsOf(record.Thread)
+		lock.Lock()
+		m.markStopped(ctx, record, "its run ended before it finished")
+		lock.Unlock()
+		stopped++
+	}
+	if err := m.remove(ctx, gone); err != nil {
+		return 0, stopped, err
+	}
+	return len(gone), stopped, nil
+}
+
+// StartSweeping runs Sweep every sweepEvery until stop is called, which
+// waits for a sweep under way to end.
+func (m *Manager) StartSweeping() (stop func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(sweepEvery)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			removed, stopped, err := m.Sweep(ctx)
+			switch {
+			case err != nil && ctx.Err() == nil:
+				m.logger.WarnContext(ctx, "sweep expired sub-agents", "error", err)
+			case removed > 0 || stopped > 0:
+				m.logger.InfoContext(ctx, "swept sub-agents", "removed", removed, "stopped", stopped)
+			}
+		}
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			cancel()
+			<-done
+		})
+	}
 }
 
 // ForgetThread removes a thread's sub-agents and their transcripts, for a

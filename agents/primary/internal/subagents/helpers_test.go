@@ -19,6 +19,7 @@ import (
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 )
 
 func (s *MemoryStore) record(t *testing.T, id string) Record {
@@ -116,8 +117,9 @@ func (m *fakeModel) GenerateContent(ctx context.Context, request *model.LLMReque
 	return func(yield func(*model.LLMResponse, error) bool) {
 		m.mu.Lock()
 		m.calls = append(m.calls, request)
+		respond := m.respond
 		m.mu.Unlock()
-		content, err := m.respond(ctx, request)
+		content, err := respond(ctx, request)
 		if err != nil {
 			yield(nil, err)
 			return
@@ -178,8 +180,10 @@ type fakeBuilder struct {
 	llm      model.LLM
 	families []string
 	extra    []tool.Tool
-	mu       sync.Mutex
-	built    []Worker
+	// search, when set, answers web_search for a worker allowed it.
+	search model.LLM
+	mu     sync.Mutex
+	built  []Worker
 }
 
 func (b *fakeBuilder) Families() []string { return b.families }
@@ -188,11 +192,30 @@ func (b *fakeBuilder) Build(worker Worker) (agent.Agent, error) {
 	b.mu.Lock()
 	b.built = append(b.built, worker)
 	b.mu.Unlock()
+	tools := append(slices.Clone(worker.Own), b.extra...)
+	if b.search != nil && slices.Contains(worker.Tools, ToolWebSearch) {
+		// web_search as the real builder makes it: an agent of its own, on
+		// a model the worker's Meter wraps.
+		searcher := worker.Meter(b.search)
+		search, err := functiontool.New(functiontool.Config{Name: ToolWebSearch, Description: "Searches the web."}, func(ctx agent.Context, _ struct{}) (map[string]any, error) {
+			for response, err := range searcher.GenerateContent(ctx, &model.LLMRequest{}, false) {
+				if err != nil {
+					return nil, err
+				}
+				return map[string]any{"result": response.Content.Parts[0].Text}, nil
+			}
+			return nil, errors.New("no answer")
+		})
+		if err != nil {
+			return nil, err
+		}
+		tools = append(tools, search)
+	}
 	return llmagent.New(llmagent.Config{
 		Name:                 WorkerName,
 		Model:                b.llm,
 		InstructionProvider:  func(agent.ReadonlyContext) (string, error) { return worker.Instruction, nil },
-		Tools:                append(slices.Clone(worker.Own), b.extra...),
+		Tools:                tools,
 		BeforeModelCallbacks: worker.BeforeModel,
 		AfterModelCallbacks:  worker.AfterModel,
 		BeforeToolCallbacks:  worker.BeforeTool,

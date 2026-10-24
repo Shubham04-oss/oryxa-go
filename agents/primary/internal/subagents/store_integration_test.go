@@ -202,3 +202,47 @@ func TestManagerOnPostgres(t *testing.T) {
 		t.Fatalf("after forgetting: %v", err)
 	}
 }
+
+// TestPostgresStoreListsWhatToSweep: the sweeper's query finds the records
+// past their expiry that are not running, and the running ones left
+// unwritten too long, and nothing else.
+func TestPostgresStoreListsWhatToSweep(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	suffix := randomSuffix(t)
+	thread := Thread{OrganizationID: "org_" + suffix, UserID: "member_" + suffix, App: "krude", ID: "thread_" + suffix}
+	now := time.Now().UTC()
+	recordOf := func(id, state string, updated, expires time.Time) Record {
+		return Record{
+			ID: "sa_" + id + "_" + suffix, Thread: thread, ParentRunID: "run", Objective: "x", State: state,
+			BudgetModelCalls: 1, BudgetMinutes: 1, CreatedAt: updated, UpdatedAt: updated, ExpiresAt: expires,
+		}
+	}
+	records := []Record{
+		recordOf("expired", StateDone, now.Add(-48*time.Hour), now.Add(-time.Hour)),
+		recordOf("live", StateDone, now, now.Add(time.Hour)),
+		recordOf("stale", StateRunning, now.Add(-time.Hour), now.Add(time.Hour)),
+		recordOf("working", StateRunning, now, now.Add(-time.Hour)),
+	}
+	for _, record := range records {
+		if err := store.Create(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+		id := record.ID
+		t.Cleanup(func() { _ = store.Delete(context.Background(), id) })
+	}
+	listed, err := store.ListSweepable(ctx, now, now.Add(-30*time.Minute), 100000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found []string
+	for _, record := range listed {
+		if record.Thread == thread {
+			found = append(found, record.ID)
+		}
+	}
+	slices.Sort(found)
+	if want := []string{records[0].ID, records[2].ID}; !slices.Equal(found, want) {
+		t.Fatalf("sweepable = %v, want %v", found, want)
+	}
+}

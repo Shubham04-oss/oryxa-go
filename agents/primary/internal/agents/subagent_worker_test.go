@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"google.golang.org/genai"
@@ -90,15 +91,23 @@ func TestSubagentsGetOnlyTheirBriefsReadOnlyTools(t *testing.T) {
 	if got := builder.Families(); !slices.Equal(got, spawned.Families) {
 		t.Fatalf("families = %v, want all four", got)
 	}
+	// Code in the sandbox can reach the network: it never sits beside a read.
+	for _, read := range []string{spawned.ToolKnowledge, spawned.ToolAppsRead, spawned.ToolWebSearch} {
+		if _, err := builder.Build(spawned.Worker{Tools: []string{read, spawned.ToolSandbox}}); err == nil {
+			t.Fatalf("built a sub-agent with %s beside the sandbox", read)
+		}
+	}
 	for name, tc := range map[string]struct {
 		families []string
 		want     []string
 	}{
 		"none":      {nil, []string{spawned.AskToolName}},
 		"knowledge": {[]string{spawned.ToolKnowledge}, []string{spawned.AskToolName, "knowledge_collections", "knowledge_search"}},
-		"all": {spawned.Families, []string{
-			"apps_connections", "apps_run_read_tool", "apps_search_tools", spawned.AskToolName, "knowledge_collections", "knowledge_search",
-			"sandbox_execute_code", "sandbox_read_files", "sandbox_write_files", webSearchName,
+		"every read": {[]string{spawned.ToolKnowledge, spawned.ToolAppsRead, spawned.ToolWebSearch}, []string{
+			"apps_connections", "apps_run_read_tool", "apps_search_tools", spawned.AskToolName, "knowledge_collections", "knowledge_search", webSearchName,
+		}},
+		"the sandbox alone": {[]string{spawned.ToolSandbox}, []string{
+			spawned.AskToolName, "sandbox_execute_code", "sandbox_read_files", "sandbox_write_files",
 		}},
 	} {
 		llm.mu.Lock()
@@ -359,5 +368,53 @@ func TestSingleAgentKrudeWithoutSubagentToolsIsR1s(t *testing.T) {
 	request := llm.requestsFor(RootName)[0]
 	if slices.Contains(declaredFunctions(request), spawned.SpawnToolName) || strings.Contains(text(request.Config.SystemInstruction), "spawn_agent") {
 		t.Fatal("single-agent Krude without sub-agent tools is told of them")
+	}
+}
+
+// countingModel counts the calls made on the model it wraps.
+type countingModel struct {
+	model.LLM
+	calls *atomic.Int32
+}
+
+func (c countingModel) GenerateContent(ctx context.Context, request *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	c.calls.Add(1)
+	return c.LLM.GenerateContent(ctx, request, stream)
+}
+
+// TestASubagentsWebSearchIsMetered: web_search in a sub-agent runs on the
+// model its Worker's Meter wraps, so its calls count against the
+// sub-agent's budget; the sub-agent's own calls do not go through it.
+func TestASubagentsWebSearchIsMetered(t *testing.T) {
+	llm := newTreeModel(func(name string, request *model.LLMRequest) *genai.Content {
+		switch {
+		case name == webSearchName:
+			return genai.NewContentFromText("$4.", genai.RoleModel)
+		case functionResponse(request, webSearchName) != "":
+			return genai.NewContentFromText("It costs $4.", genai.RoleModel)
+		}
+		return functionCalls(&genai.FunctionCall{ID: "call_search", Name: webSearchName, Args: map[string]any{"question": "Widget price?"}})
+	})
+	router, err := modelrouter.New(llm, llm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder, err := SubagentBuilder(router, SubagentToolboxes{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metered atomic.Int32
+	worker, err := builder.Build(spawned.Worker{
+		Instruction: "You are a sub-agent.", Tools: []string{spawned.ToolWebSearch}, Own: []tool.Tool{askParentTool(t)},
+		Meter: func(inner model.LLM) model.LLM { return countingModel{LLM: inner, calls: &metered} },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer := runWorker(t, worker, "thread_1/sa_1"); answer != "It costs $4." {
+		t.Fatalf("answer = %q", answer)
+	}
+	if got := metered.Load(); got != 1 {
+		t.Fatalf("metered calls = %d, want web_search's one", got)
 	}
 }

@@ -13,10 +13,13 @@
 //
 // A sub-agent runs as the member, on the context of the run of Krude's that
 // set it working: the member's token, the run's usage counter, which prices
-// its model calls into that run, and the run's record of what it read. It
-// reads, and changes nothing: its tools are a fixed read-only set (Worker),
-// it never starts sub-agents of its own, and it neither reads nor writes
-// memory. A running sub-agent stops when the run that set it working ends;
+// its model calls into that run, and the run's record of what it read. Its
+// tools are a fixed set (Worker): reads of the organization's knowledge, the
+// member's apps and the web, which send, post and change nothing; or, on its
+// own, the conversation's sandbox, which runs code with network access and
+// so is never given beside a read (checkBrief), so that nothing a sub-agent
+// read can leave through it. It never starts sub-agents of its own, and it
+// neither reads nor writes memory. A running sub-agent stops when the run that set it working ends;
 // a done or waiting one is kept, for the thread's next runs, until its TTL
 // after its last activity runs out.
 //
@@ -31,6 +34,7 @@ import (
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
+	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/tool"
 )
 
@@ -40,8 +44,9 @@ const AppName = "krude_sub"
 // WorkerName is the agent name a sub-agent answers to in its own session.
 const WorkerName = "subagent"
 
-// The tool families a brief may allow, and nothing else: none of them sends,
-// posts or changes anything outside the conversation's own sandbox.
+// The tool families a brief may allow, and nothing else. The three reads
+// send, post and change nothing; the sandbox runs code, network included,
+// so a brief has it alone or not at all.
 const (
 	// ToolKnowledge is the organization's documents, searched as the member.
 	ToolKnowledge = "knowledge"
@@ -51,7 +56,8 @@ const (
 	// ToolWebSearch is web_search, Krude's own search-only agent.
 	ToolWebSearch = "web_search"
 	// ToolSandbox is the conversation's sandbox, the one Krude uses, for
-	// running code over scratch files.
+	// running code over scratch files. It is not read-only: code there can
+	// reach the network. A brief that allows it allows nothing else.
 	ToolSandbox = "sandbox"
 )
 
@@ -98,10 +104,14 @@ type Worker struct {
 	AfterModel  []llmagent.AfterModelCallback
 	BeforeTool  []llmagent.BeforeToolCallback
 	AfterTool   []llmagent.AfterToolCallback
+	// Meter wraps the model of any agent the sub-agent's tools run, such as
+	// web_search's, so its calls count against the sub-agent's budget and
+	// its totals as the sub-agent's own do. Nil leaves them as they are.
+	Meter func(model.LLM) model.LLM
 }
 
 // Builder builds sub-agents: internal/agents' SubagentBuilder, over the
-// lite model and the read-only toolboxes.
+// lite model and the toolboxes it may have.
 type Builder interface {
 	// Families are the tool families this deployment can give a sub-agent,
 	// of Families.

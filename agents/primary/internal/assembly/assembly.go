@@ -579,6 +579,13 @@ func (krude *Krude) startSubagents(settings serviceconfig.Config, storage Subage
 		return err
 	}
 	krude.Subagents, krude.subagentTools, krude.subagentBuilder = manager, tools, builder
+	// Expired sub-agents, and their transcripts, are removed wherever they
+	// are, not only when their thread starts another.
+	stopSweeping := manager.StartSweeping()
+	krude.closers = append(krude.closers, func(context.Context) error {
+		stopSweeping()
+		return nil
+	})
 	return nil
 }
 
