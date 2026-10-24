@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/Shubham04-oss/oryxa-go/internal/access"
+	"github.com/Shubham04-oss/oryxa-go/internal/access/spicedb/projector"
 	"log/slog"
 	"net/http"
 	"time"
@@ -391,7 +392,9 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		return host.Service{}, fmt.Errorf("assemble Krude: %w", err)
 	}
 	var localWorkflowRuntime *agentworkflows.LocalRuntime
+	var spicedbWriter *projector.Engine
 	closeAll := func() {
+		spicedbWriter.Close()
 		if localWorkflowRuntime != nil {
 			localWorkflowRuntime.Close()
 		}
@@ -401,6 +404,15 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			logger.Warn("stop what Krude opened", "error", err)
 		}
 		sessionStore.Close()
+	}
+	// Agents and their grants reach SpiceDB as they commit, whichever
+	// services decide from it; the projector still follows from the events.
+	if spicedbWriter, err = projector.OpenWriter(platform); err != nil {
+		closeAll()
+		return host.Service{}, err
+	}
+	if spicedbWriter != nil {
+		registryStore.WithRelationships(agentRelationships{spicedbWriter}, logger)
 	}
 
 	// Every run this process holds is tracked in one drain, whichever engine
