@@ -60,6 +60,9 @@ const maxStateTextRunes = 60
 //go:embed instructions/krude.md
 var krudeInstructionText string
 
+//go:embed instructions/krude_single.md
+var singleInstructionText string
+
 //go:embed instructions/krude_unattended.md
 var unattendedInstructionText string
 
@@ -71,6 +74,10 @@ var roomInstructionText string
 // with that session state value, and a turn fails when the key is missing
 // unless it is written {key?}.
 var krudeInstruction = template.Must(template.New("krude").Parse(krudeInstructionText))
+
+// singleInstruction is Krude's instruction when it is one agent
+// (SingleAgentRoot), rendered the same way.
+var singleInstruction = template.Must(template.New("krude-single").Parse(singleInstructionText))
 
 // unattendedInstruction is Krude's instruction for a run the member is not
 // there for, rendered the same way.
@@ -189,6 +196,50 @@ func Root(router *modelrouter.Router, toolboxes []Toolbox, remembers bool) (agen
 		SubAgents:           subAgents,
 		Tools:               tools,
 		Toolsets:            []tool.Toolset{catalog.loaded(), subagents},
+	})
+}
+
+// SingleAgentRoot returns Krude as one agent with tools, for
+// AGENTS_PRIMARY_SINGLE_AGENT (docs/design/agent-runtime.md, R1). It has no
+// sub-agents of any kind: no planner, researcher, helpers or sub-agents of
+// its own, and nothing to start them with. In their place it has
+//
+//   - web_search, a search-only agent wrapped as a tool, on the research
+//     role's model (webSearchTool says why it is an agent at all);
+//   - plan, its own todo list for the thread, kept in session state.
+//
+// Everything else is Root's: the toolbox catalog, the member's details, the
+// screen, artifacts, memory when remembers is true, and the run's source
+// record. Root itself is unchanged, and is what runs while the flag is off.
+func SingleAgentRoot(router *modelrouter.Router, toolboxes []Toolbox, remembers bool) (agent.Agent, error) {
+	if router == nil {
+		return nil, errors.New("a model router is required")
+	}
+	catalog, err := newToolCatalog(toolboxes)
+	if err != nil {
+		return nil, err
+	}
+	plans := newPlanCalls()
+	webSearch := func() (tool.Tool, error) { return webSearchTool(router.For(modelrouter.RoleResearch)) }
+	builders := []func() (tool.Tool, error){catalog.listTool, catalog.loadTool, userDetailsTool, currentScreenTool, webSearch, planTool(sessionPlanStore{}, plans), loadArtifactsTool, saveArtifactTool}
+	if remembers {
+		builders = append(builders, loadMemoryTool)
+	}
+	tools, err := buildTools(builders...)
+	if err != nil {
+		return nil, err
+	}
+	return llmagent.New(llmagent.Config{
+		Name:                RootName,
+		Description:         "Krude, a member's assistant.",
+		Model:               router.Answer(modelrouter.RoleChat),
+		InstructionProvider: instructionFrom(singleInstruction, catalog, false),
+		BeforeToolCallbacks: []llmagent.BeforeToolCallback{recordRunSource},
+		// Marks every plan call after the first in one response, for the
+		// plan tool to refuse (planTool says why).
+		AfterModelCallbacks: []llmagent.AfterModelCallback{plans.afterModel},
+		Tools:               tools,
+		Toolsets:            []tool.Toolset{catalog.loaded()},
 	})
 }
 
