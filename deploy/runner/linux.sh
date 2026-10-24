@@ -95,6 +95,11 @@ for name in "$@"; do
     useradd --no-create-home --home-dir "/home/$user" --shell /usr/sbin/nologin --user-group "$user"
   usermod --lock "$user"
   for group in docker sudo adm; do gpasswd --delete "$user" "$group" >/dev/null 2>&1 || true; done
+  # A cron or at job would run outside the service, and so outlive a job.
+  for deny in /etc/cron.deny /etc/at.deny; do
+    grep -qx "$user" "$deny" 2>/dev/null || echo "$user" >>"$deny"
+  done
+  crontab -r -u "$user" 2>/dev/null || true
   if ! grep -q "^$user:" /etc/subuid; then
     start=$(next_range /etc/subuid)
     usermod --add-subuids "$start-$((start + 65535))" "$user"

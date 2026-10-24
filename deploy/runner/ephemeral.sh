@@ -47,6 +47,8 @@ as() {
     "$@"
 }
 
+# Anything of the user's outside this cgroup (linux.sh denies it cron and at).
+pkill -KILL -u "$uid" && sleep 1
 rm -rf "$home" "$run"
 find /dev/shm -user "$uid" -delete 2>/dev/null
 install -d -o "$RUNNER_USER" -g "$RUNNER_USER" -m 700 "$home" "$home/runner" "$run"
@@ -77,8 +79,6 @@ if [ -z "$jit" ]; then
   sleep 30
   exit 1
 fi
-(umask 077 && printf '%s' "$jit" >"$home/.jitconfig")
-chown "$RUNNER_USER:" "$home/.jitconfig"
 # The runner reads ACTIONS_RUNNER_INPUT_JITCONFIG as its --jitconfig.
-cd "$home/runner" &&
-  as bash -c 'export ACTIONS_RUNNER_INPUT_JITCONFIG=$(cat ~/.jitconfig) && rm ~/.jitconfig && exec ./run.sh'
+printf '%s' "$jit" | (cd "$home/runner" &&
+  as bash -c 'export ACTIONS_RUNNER_INPUT_JITCONFIG=$(cat) && exec ./run.sh </dev/null')
