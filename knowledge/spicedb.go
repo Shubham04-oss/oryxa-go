@@ -14,7 +14,3 @@ type relationships struct{ engine *projector.Engine }
 func (r relationships) SourceRegistered(ctx context.Context, source domain.Source) error {
 	return r.engine.SourceRegistered(ctx, source.OrganizationID, source.ID, source.ConnectionID, source.CreatedBy)
 }
-
-func (r relationships) SourceRemoved(ctx context.Context, organizationID, sourceID string) error {
-	return r.engine.Deleted(ctx, "source", organizationID, sourceID)
-}

@@ -347,7 +347,6 @@ func (s *Service) RemoveSource(ctx context.Context, credentials authclient.Crede
 		s.retractions(knowledgev1.RemovedReasonSourceRemoved, pending)); err != nil {
 		return err
 	}
-	s.sourceRemoved(ctx, organizationID, sourceID)
 	s.record(ctx, caller, access.ActionDelete, resourceSource, source.ID, source)
 	s.deleteOriginals(ctx, pending)
 	return nil

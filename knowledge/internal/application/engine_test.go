@@ -24,17 +24,12 @@ func (d *decider) Decide(_ context.Context, _ access.Ask, codeAllowed bool) (boo
 }
 
 type written struct {
-	registered, removed []string
-	err                 error
+	registered []string
+	err        error
 }
 
 func (w *written) SourceRegistered(_ context.Context, source domain.Source) error {
 	w.registered = append(w.registered, source.ID)
-	return w.err
-}
-
-func (w *written) SourceRemoved(_ context.Context, _, sourceID string) error {
-	w.removed = append(w.removed, sourceID)
 	return w.err
 }
 
@@ -88,8 +83,9 @@ func TestTheEngineFailsClosed(t *testing.T) {
 	}
 }
 
-// A source's relationships are written as it is registered and removed, and a
-// failure to write them fails neither.
+// A source's relationships are written as it is registered, a failure to
+// write them fails nothing, and removing it keeps them: its creator can still
+// read a removed source, as before.
 func TestRelationshipsFollowTheSource(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()
@@ -101,9 +97,12 @@ func TestRelationshipsFollowTheSource(t *testing.T) {
 		t.Fatalf("register failed with SpiceDB down: %v", err)
 	}
 	if err := service.RemoveSource(ctx, engineCreds, "org_1", source.ID); err != nil {
-		t.Fatalf("remove failed with SpiceDB down: %v", err)
+		t.Fatalf("remove failed: %v", err)
 	}
-	if len(rels.registered) != 1 || rels.registered[0] != source.ID || len(rels.removed) != 1 || rels.removed[0] != source.ID {
-		t.Fatalf("registered %v, removed %v", rels.registered, rels.removed)
+	if len(rels.registered) != 1 || rels.registered[0] != source.ID {
+		t.Fatalf("registered %v", rels.registered)
+	}
+	if _, err := service.Source(ctx, engineCreds, "org_1", source.ID); err != nil {
+		t.Fatalf("the creator can't read their removed source: %v", err)
 	}
 }

@@ -47,12 +47,12 @@ func (s *Service) record(ctx context.Context, caller domain.OrgMembership, actio
 	s.recorder.Record(ctx, decision)
 }
 
-// Relationships keeps a source's relationships in SpiceDB as the source comes
-// and goes. Knowledge publishes no event for a source, so without this the
-// nightly reconcile is the only writer.
+// Relationships writes a source's relationships to SpiceDB as it is
+// registered. Knowledge publishes no event for a source, so without this the
+// nightly reconcile is the only writer. A removed source keeps them: its row
+// stays, and its creator and admins can still read it and why it went.
 type Relationships interface {
 	SourceRegistered(ctx context.Context, source domain.Source) error
-	SourceRemoved(ctx context.Context, organizationID, sourceID string) error
 }
 
 func (s *Service) sourceRegistered(ctx context.Context, source domain.Source) {
@@ -62,15 +62,6 @@ func (s *Service) sourceRegistered(ctx context.Context, source domain.Source) {
 	// The source stands either way: the nightly reconcile writes it too.
 	if err := s.relationships.SourceRegistered(ctx, source); err != nil {
 		s.logger.WarnContext(ctx, "source relationships not written to spicedb; the reconcile will", "source_id", source.ID, "error", err)
-	}
-}
-
-func (s *Service) sourceRemoved(ctx context.Context, organizationID, sourceID string) {
-	if s.relationships == nil {
-		return
-	}
-	if err := s.relationships.SourceRemoved(ctx, organizationID, sourceID); err != nil {
-		s.logger.WarnContext(ctx, "source relationships not deleted from spicedb; the reconcile will", "source_id", sourceID, "error", err)
 	}
 }
 
