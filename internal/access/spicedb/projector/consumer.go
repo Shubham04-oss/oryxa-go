@@ -274,23 +274,32 @@ func (consumer *Consumer) project(ctx context.Context, detailType string, mappin
 type queueAPI interface {
 	ReceiveMessage(context.Context, *sqs.ReceiveMessageInput, ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error)
 	DeleteMessageBatch(context.Context, *sqs.DeleteMessageBatchInput, ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error)
+	ChangeMessageVisibilityBatch(context.Context, *sqs.ChangeMessageVisibilityBatchInput, ...func(*sqs.Options)) (*sqs.ChangeMessageVisibilityBatchOutput, error)
 }
+
+// handleTimeout bounds one message's handling, which outlives the shutdown
+// that stops Poll from receiving: the message in hand finishes, and the rest
+// of its batch goes back to the queue.
+const handleTimeout = 10 * time.Second
 
 // Poll consumes the queue until ctx is cancelled. Handled messages are
 // deleted; failed ones return after their visibility timeout, and the redrive
-// policy moves a message that keeps failing aside.
+// policy moves a message that keeps failing aside. Once ctx is cancelled it
+// receives no more, and every message it received but did not handle is made
+// visible at once, for another task, instead of a visibility timeout later.
 func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL string) {
 	consumer.queueName = observability.QueueName(queueURL)
-	for {
+	work := context.WithoutCancel(ctx)
+	for ctx.Err() == nil {
 		output, err := client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
 			QueueUrl:            aws.String(queueURL),
 			MaxNumberOfMessages: 10,
 			WaitTimeSeconds:     20,
 		})
-		if ctx.Err() != nil {
-			return
-		}
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			consumer.logger.ErrorContext(ctx, "receive from spicedb projector queue failed", "error", err)
 			select {
 			case <-ctx.Done():
@@ -301,8 +310,18 @@ func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL st
 		}
 		receivedAt := time.Now()
 		var handled []sqstypes.DeleteMessageBatchRequestEntry
+		var unhandled []sqstypes.ChangeMessageVisibilityBatchRequestEntry
 		for index, message := range output.Messages {
-			if err := consumer.handle(ctx, aws.ToString(message.Body), receivedAt); err != nil {
+			if ctx.Err() != nil {
+				unhandled = append(unhandled, sqstypes.ChangeMessageVisibilityBatchRequestEntry{
+					Id: aws.String(strconv.Itoa(index)), ReceiptHandle: message.ReceiptHandle, VisibilityTimeout: 0,
+				})
+				continue
+			}
+			handling, cancel := context.WithTimeout(work, handleTimeout)
+			err := consumer.handle(handling, aws.ToString(message.Body), receivedAt)
+			cancel()
+			if err != nil {
 				consumer.logger.ErrorContext(ctx, "spicedb projection failed", "sqs_message_id", aws.ToString(message.MessageId), "error", err)
 				continue
 			}
@@ -311,18 +330,34 @@ func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL st
 				ReceiptHandle: message.ReceiptHandle,
 			})
 		}
-		if len(handled) == 0 {
-			continue
-		}
+		consumer.settle(work, client, queueURL, handled, unhandled)
+	}
+}
+
+// settle deletes the handled messages and returns the unhandled ones to the
+// queue, within handleTimeout, shutdown or not.
+func (consumer *Consumer) settle(ctx context.Context, client queueAPI, queueURL string, handled []sqstypes.DeleteMessageBatchRequestEntry, unhandled []sqstypes.ChangeMessageVisibilityBatchRequestEntry) {
+	ctx, cancel := context.WithTimeout(ctx, handleTimeout)
+	defer cancel()
+	if len(handled) > 0 {
 		deleted, err := client.DeleteMessageBatch(ctx, &sqs.DeleteMessageBatchInput{QueueUrl: aws.String(queueURL), Entries: handled})
 		if err != nil {
-			if !errors.Is(err, context.Canceled) {
-				consumer.logger.ErrorContext(ctx, "delete handled messages failed", "error", err)
+			consumer.logger.ErrorContext(ctx, "delete handled messages failed", "error", err)
+		} else {
+			for _, failure := range deleted.Failed {
+				consumer.logger.ErrorContext(ctx, "delete handled message failed", "code", aws.ToString(failure.Code), "message", aws.ToString(failure.Message))
 			}
-			continue
 		}
-		for _, failure := range deleted.Failed {
-			consumer.logger.ErrorContext(ctx, "delete handled message failed", "code", aws.ToString(failure.Code), "message", aws.ToString(failure.Message))
+	}
+	if len(unhandled) > 0 {
+		released, err := client.ChangeMessageVisibilityBatch(ctx, &sqs.ChangeMessageVisibilityBatchInput{QueueUrl: aws.String(queueURL), Entries: unhandled})
+		if err != nil {
+			consumer.logger.WarnContext(ctx, "returning unhandled messages at shutdown failed; they come back after their visibility timeout", "error", err)
+			return
 		}
+		for _, failure := range released.Failed {
+			consumer.logger.WarnContext(ctx, "returning an unhandled message at shutdown failed", "code", aws.ToString(failure.Code), "message", aws.ToString(failure.Message))
+		}
+		consumer.logger.InfoContext(ctx, "returned unhandled messages to the queue at shutdown", "count", len(unhandled)-len(released.Failed))
 	}
 }
