@@ -23,6 +23,17 @@ variable "spicedb_desired_count" {
   default     = 0
 }
 
+variable "access_engines" {
+  description = "Which services decide access from SpiceDB (ACCESS_ENGINE_<SERVICE>), by service: files, rag, knowledge, apps or teams, each \"spicedb\" or \"code\". Given to the oryxa task only while SpiceDB runs (spicedb_desired_count above zero). Empty, the default, leaves every service on its code; deploy/README.md, \"Deciding from SpiceDB\", gives the order."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition     = alltrue([for service, engine in var.access_engines : contains(["files", "rag", "knowledge", "apps", "teams"], service) && contains(["code", "spicedb"], engine)])
+    error_message = "access_engines maps files, rag, knowledge, apps or teams to \"code\" or \"spicedb\"."
+  }
+}
+
 locals {
   spicedb       = var.spicedb_enabled ? 1 : 0
   spicedb_on    = var.spicedb_enabled && var.spicedb_desired_count > 0
@@ -32,10 +43,12 @@ locals {
 
   # What the oryxa task reads (internal/access/spicedb.FromEnv). Insecure is
   # plain gRPC, which only the VPC and the security group below ever carry.
-  spicedb_environment = local.spicedb_on ? {
+  # ACCESS_ENGINE_<SERVICE> come only with the endpoint: a service set to
+  # spicedb without SpiceDB refuses to start.
+  spicedb_environment = local.spicedb_on ? merge({
     SPICEDB_ENDPOINT = "${local.spicedb_host}:50051"
     SPICEDB_INSECURE = "true"
-  } : {}
+  }, { for service, engine in var.access_engines : "ACCESS_ENGINE_${upper(service)}" => engine }) : {}
 
   spicedb_datastore = [
     { name = "SPICEDB_DATASTORE_ENGINE", value = "postgres" },

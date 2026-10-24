@@ -927,6 +927,114 @@ Their output is in the log group `/oryxa-production/spicedb`.
    deploy/scripts/sql.sh "DROP ROLE spicedb"
    ```
 
+### Deciding from SpiceDB
+
+Permissions step 5 lets a service decide from SpiceDB instead of only
+comparing. Five switches, one per service, all `code` until set:
+
+| Variable | Decides access to |
+|---|---|
+| `ACCESS_ENGINE_FILES` | files |
+| `ACCESS_ENGINE_RAG` | corpora |
+| `ACCESS_ENGINE_KNOWLEDGE` | knowledge sources |
+| `ACCESS_ENGINE_APPS` | connections |
+| `ACCESS_ENGINE_TEAMS` | teams (PR #454, not merged yet) |
+
+Each is `code` (or unset) or `spicedb`; anything else refuses to start. A
+switched service only **narrows**: it allows when both its code and SpiceDB
+do, so SpiceDB can refuse what the code allowed but never allow what the code
+refused. It fails closed: SpiceDB unreachable, or a relationship missing,
+refuses. A missing relationship looks like an outage (a new connection
+answering 404, say), which is why the order below matters. Decisions SpiceDB
+does not model, such as the org agent's, stay in code.
+
+At boot, with `SPICEDB_ENDPOINT` set, the oryxa task compares SpiceDB's schema
+with the `schema.zed` built into its binary (SpiceDB's `DiffSchema`, so layout
+and comments don't count). With any switch on, a different schema is a refusal
+to start, naming the differences; with only the shadow on, it is an error in
+the log and the process starts. A SpiceDB that doesn't answer within 10 s is
+logged and the process starts: switched services refuse until it answers.
+
+In production the switches are the `access_engines` variable (`spicedb.tf`),
+by service, given to the oryxa task only while `spicedb_desired_count` is
+above zero. Its default, `{}`, changes nothing. Keep them in
+`spicedb.auto.tfvars.json`, beside the other two. To flip, in this order,
+everything above done and SpiceDB in shadow:
+
+1. **Write the schema** of the release that is running, from that release's
+   binary. Run it in an oryxa task (it needs `SPICEDB_*`, which only the oryxa
+   task has):
+
+   ```sh
+   oryxa_exec() {  # oryxa_exec <command>: runs /oryxa <command> in a running oryxa task
+     aws ecs execute-command --cluster "$cluster" --container oryxa --interactive \
+       --task "$(aws ecs list-tasks --cluster "$cluster" --service-name oryxa --query 'taskArns[0]' --output text)" \
+       --command "/oryxa $1"
+   }
+   oryxa_exec spicedb-schema-write   # "already has this binary's schema", or how many differences it fixed
+   ```
+
+   A write that would drop a relation still holding relationships is refused
+   by SpiceDB; that is a schema change to plan, not to force.
+
+2. **Run the reconcile,** so every relationship the events never carried
+   (knowledge sources, the org chart, grants) is there. Its output lists what
+   it wrote; a second run should write nothing:
+
+   ```sh
+   oryxa_exec spicedb-reconcile
+   ```
+
+3. **Confirm the shadow is quiet.** Leave it a day of normal traffic, and
+   look at the disagreements for the service you are about to flip (apps
+   here). Each is a row in the access log and a WARN line in
+   `/oryxa-production/app`; `spicedb did not answer a shadow check` lines
+   matter too, since a switched service refuses then:
+
+   ```sh
+   aws logs filter-log-events --log-group-name /oryxa-production/app \
+     --start-time $(( ($(date +%s) - 86400) * 1000 )) \
+     --filter-pattern '{ $.msg = "spicedb disagrees with the code" && $.service = "apps" }' \
+     --query 'events[].message' --output text | head -50
+   ```
+
+   None for that service, or only ones you have explained, before going on.
+   Also check the boot line `spicedb schema matches this binary's`.
+
+4. **Flip one service,** apply only the oryxa task, and watch that service's
+   refusals (403s and 404s on its routes in the dashboard, and the same log
+   filter) for a day before the next:
+
+   ```sh
+   jq '.access_engines.apps = "spicedb"' deploy/production/spicedb.auto.tfvars.json > /tmp/spicedb.json \
+     && mv /tmp/spicedb.json deploy/production/spicedb.auto.tfvars.json
+   (cd deploy/production && tofu apply -target=aws_ecs_task_definition.oryxa -target=aws_ecs_service.oryxa)
+   ```
+
+   A rolling deploy runs old and new tasks side by side for a minute: some
+   requests decide in code, some from SpiceDB. Both answer the same once the
+   shadow is quiet, which is what step 3 is for.
+
+5. **Flip back** the same way: set that service to `code` (or delete its key)
+   and apply the same two targets. It needs nothing from SpiceDB, so it works
+   when SpiceDB itself is the problem. With SpiceDB down altogether, flip every
+   switched service back before `spicedb_desired_count` goes to 0, or set it to
+   0 as well: the variables leave with the endpoint, and the services fall back
+   to code.
+
+**When `schema.zed` changes** while a service is switched, write the new
+schema before the release that carries it is rolled out, or its tasks refuse
+to start (and ECS keeps the old ones). A change that only adds is safe to
+write first, since the running binary ignores what it doesn't ask. Run the new
+image once with the command overridden, after CD has registered its task
+definition:
+
+```sh
+aws ecs run-task --cluster "$cluster" --launch-type FARGATE --task-definition oryxa-production \
+  --network-configuration "$network" \
+  --overrides '{"containerOverrides":[{"name":"oryxa","command":["spicedb-schema-write"]}]}'
+```
+
 ## Looking at it
 
 - **Dashboard** `oryxa-production` in CloudWatch: the tunnel, API latency by
