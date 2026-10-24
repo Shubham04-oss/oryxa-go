@@ -157,6 +157,24 @@ func TestAnUnsignedFloodDoesNotRateLimitSignedSlackDeliveries(t *testing.T) {
 	}
 }
 
+// An app delivers for many orgs from the same addresses, so one endpoint
+// refusing them (an org's wrong secret) does not turn them away from another.
+func TestRefusalsAtOneEndpointDoNotBlockAnother(t *testing.T) {
+	h := newHarness(t)
+	broken := h.connectionEndpoint("github", "apc_1", "mem_1", githubTrigger)
+	healthy := h.connectionEndpoint("github", "apc_2", "mem_2", githubTrigger)
+	body := []byte(`{"id":"issue-1"}`)
+	for range RefusalsPerSecond {
+		h.deliver(broken.Endpoint.ID, githubDelivery("a-stale-secret-0123456789abcdef", "d-1", "issues", body), body)
+	}
+	if response := h.deliver(broken.Endpoint.ID, githubDelivery(broken.Hook.Secret, "d-1", "issues", body), body); response.Code != http.StatusTooManyRequests {
+		t.Fatalf("the refusing endpoint = %d, want 429", response.Code)
+	}
+	if response := h.deliver(healthy.Endpoint.ID, githubDelivery(healthy.Hook.Secret, "d-1", "issues", body), body); response.Code != http.StatusOK {
+		t.Fatalf("another endpoint from the same address = %d %s, want 200", response.Code, response.Body)
+	}
+}
+
 func TestBodiesAreCappedAtOneMebibyte(t *testing.T) {
 	h := newHarness(t)
 	created := h.connectionEndpoint("github", "apc_1", "mem_1", githubTrigger)

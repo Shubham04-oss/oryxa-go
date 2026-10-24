@@ -44,6 +44,9 @@ func (limiter *limiter) take(key string, spend bool) bool {
 		limiter.pruneLocked(now)
 	}
 	tokens, seen := limiter.buckets[key]
+	if !seen && !spend {
+		return true // a full bucket; nothing is kept for a key only asked about
+	}
 	if !seen {
 		tokens = limiter.budget
 	} else if elapsed := now.Sub(limiter.last[key]); elapsed > 0 {

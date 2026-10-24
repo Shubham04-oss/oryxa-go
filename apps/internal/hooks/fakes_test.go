@@ -683,6 +683,7 @@ func (h *harness) subscribeAccount(subscription Subscription) {
 func (h *harness) post(path string, header http.Header, body []byte) *httptest.ResponseRecorder {
 	h.t.Helper()
 	request := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+	request.RemoteAddr = "127.0.0.1:41000" // cloudflared's, as in production
 	for name, values := range header {
 		for _, value := range values {
 			request.Header.Add(name, value)

@@ -48,7 +48,7 @@ const (
 	RatePerSecond = 50
 
 	// RefusalsPerSecond is how many deliveries that fail verification one
-	// client IP may send a second, per replica, before its requests are
+	// client IP may send one endpoint a second, per replica, before its requests are
 	// answered 429 without being checked. An app's own deliveries are never
 	// refused, so this bounds forgers' work (a JWKS refetch for an unknown
 	// key id, say) without touching anyone else's.
