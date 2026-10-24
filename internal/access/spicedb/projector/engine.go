@@ -48,6 +48,12 @@ func OpenEngine(platform host.Platform, service string) (*Engine, error) {
 	}, nil
 }
 
+// Apply writes change, as a mapping in this package made it.
+func (engine *Engine) Apply(ctx context.Context, change Change) error {
+	_, err := engine.writer.Apply(ctx, change)
+	return err
+}
+
 // Placed writes a corpus's or file's relationships as it is created.
 func (engine *Engine) Placed(ctx context.Context, resourceType, id string, placement Placement) error {
 	change, err := Placed(resourceType, id, placement)

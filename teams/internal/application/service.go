@@ -113,8 +113,13 @@ type Service struct {
 	store     Store
 	directory Directory
 	shadow    access.Comparer
-	logger    *slog.Logger
-	now       func() time.Time
+	// engine, when set, decides who sees and manages a team from SpiceDB
+	// (ACCESS_ENGINE_TEAMS=spicedb), and relationships writes teams and
+	// their members to it as they change (engine.go).
+	engine        access.Decider
+	relationships Relationships
+	logger        *slog.Logger
+	now           func() time.Time
 	// toolCalls bounds the ping-bearing tools per member per organization.
 	toolCalls *toolRateLimiter
 }
@@ -149,8 +154,8 @@ func (s *Service) CreateTeam(ctx context.Context, credentials authclient.Credent
 	if err != nil {
 		return domain.Team{}, err
 	}
-	parentPath := ""
-	if parentID := strings.TrimSpace(input.ParentID); parentID != "" {
+	parentPath, parentID := "", strings.TrimSpace(input.ParentID)
+	if parentID != "" {
 		parent, err := s.teamActor(ctx, credentials, organizationID, parentID)
 		if err != nil {
 			return domain.Team{}, err
@@ -217,6 +222,12 @@ func (s *Service) CreateTeam(ctx context.Context, credentials authclient.Credent
 	}
 	if err := s.store.CreateTeam(ctx, org.OrganizationName, team, creator, events); err != nil {
 		return domain.Team{}, err
+	}
+	if s.relationships != nil {
+		s.wrote(ctx, "team", s.relationships.TeamCreated(ctx, team, parentID))
+		if creator.UserID != "" {
+			s.wrote(ctx, "team creator", s.relationships.MemberSet(ctx, organizationID, team.ID, creator.UserID, creator.Role))
+		}
 	}
 	return team, nil
 }
@@ -405,7 +416,7 @@ func (s *Service) Team(ctx context.Context, credentials authclient.Credentials, 
 	if err != nil {
 		return TeamDetail{}, err
 	}
-	if !domain.CanSeeTeam(actor.org, actor.onTeam()) {
+	if !actor.canSee() {
 		return TeamDetail{}, domain.ErrNotFound
 	}
 	return TeamDetail{Team: actor.team, Membership: actor.membership, CanManage: actor.canManage()}, nil
@@ -478,7 +489,17 @@ func (s *Service) DeleteTeam(ctx context.Context, credentials authclient.Credent
 		}
 		events = append(events, emitted...)
 	}
-	return s.store.DeleteTeam(ctx, organizationID, teamID, events)
+	if err := s.store.DeleteTeam(ctx, organizationID, teamID, events); err != nil {
+		return err
+	}
+	if s.relationships != nil {
+		ids := make([]string, len(subtree))
+		for i, team := range subtree {
+			ids[i] = team.ID
+		}
+		s.wrote(ctx, "deleted teams", s.relationships.TeamsDeleted(ctx, organizationID, ids))
+	}
+	return nil
 }
 
 func (s *Service) Members(ctx context.Context, credentials authclient.Credentials, organizationID, teamID string) ([]domain.Membership, error) {
@@ -569,6 +590,9 @@ func (s *Service) AddMember(ctx context.Context, credentials authclient.Credenti
 	if err := s.store.AddMember(ctx, membership, event); err != nil {
 		return domain.Membership{}, err
 	}
+	if s.relationships != nil {
+		s.wrote(ctx, "team member", s.relationships.MemberSet(ctx, organizationID, teamID, membership.UserID, membership.Role))
+	}
 	return membership, nil
 }
 
@@ -612,6 +636,9 @@ func (s *Service) ChangeMemberRole(ctx context.Context, credentials authclient.C
 	if err := s.store.ChangeMemberRole(ctx, teamID, userID, target.Role, replacement, event); err != nil {
 		return domain.Membership{}, err
 	}
+	if s.relationships != nil {
+		s.wrote(ctx, "team member's role", s.relationships.MemberSet(ctx, organizationID, teamID, userID, replacement))
+	}
 	target.Role = replacement
 	return target, nil
 }
@@ -642,7 +669,13 @@ func (s *Service) RemoveMember(ctx context.Context, credentials authclient.Crede
 	if err != nil {
 		return err
 	}
-	return s.store.RemoveMember(ctx, teamID, userID, target.Role, event)
+	if err := s.store.RemoveMember(ctx, teamID, userID, target.Role, event); err != nil {
+		return err
+	}
+	if s.relationships != nil {
+		s.wrote(ctx, "removed team member", s.relationships.MemberRemoved(ctx, organizationID, teamID, userID))
+	}
+	return nil
 }
 
 func (s *Service) SetNotification(ctx context.Context, credentials authclient.Credentials, organizationID, teamID string, notifyEmail bool) (domain.Membership, error) {
@@ -710,6 +743,9 @@ type teamActor struct {
 	org        domain.OrgMembership
 	team       domain.Team
 	membership *domain.Membership
+	// see and manage are decided once, in teamActor, by the code and, with
+	// an engine, narrowed by SpiceDB.
+	see, manage bool
 }
 
 func (actor teamActor) onTeam() bool {
@@ -724,11 +760,11 @@ func (actor teamActor) teamRole() domain.Role {
 }
 
 func (actor teamActor) canSee() bool {
-	return domain.CanSeeTeam(actor.org, actor.onTeam())
+	return actor.see
 }
 
 func (actor teamActor) canManage() bool {
-	return domain.CanManageTeam(actor.org, actor.teamRole())
+	return actor.manage
 }
 
 func (s *Service) summarizeTeams(ctx context.Context, org domain.OrgMembership, teams []domain.Team) ([]TeamSummary, error) {
@@ -739,9 +775,20 @@ func (s *Service) summarizeTeams(ctx context.Context, org domain.OrgMembership, 
 		if membershipErr != nil && !errors.Is(membershipErr, domain.ErrNotFound) {
 			return nil, membershipErr
 		}
-		summary := TeamSummary{Team: team, CanManage: domain.CanManageTeam(org, membership.Role)}
-		s.compare(ctx, org, team, access.ActionRead, true)
-		s.compare(ctx, org, team, access.ActionWrite, summary.CanManage)
+		// The query already kept the caller to teams the code lets them see;
+		// the engine may only narrow that.
+		see, err := s.decide(ctx, org, team, access.ActionRead, true)
+		if err != nil {
+			return nil, err
+		}
+		if !see {
+			continue
+		}
+		manage, err := s.decide(ctx, org, team, access.ActionWrite, domain.CanManageTeam(org, membership.Role))
+		if err != nil {
+			return nil, err
+		}
+		summary := TeamSummary{Team: team, CanManage: manage}
 		if onTeam {
 			summary.Role = membership.Role
 		}
@@ -800,26 +847,15 @@ func (s *Service) teamActor(ctx context.Context, credentials authclient.Credenti
 	case !errors.Is(err, domain.ErrNotFound):
 		return teamActor{}, err
 	}
-	// Every route on one team decides from this actor, so asking SpiceDB
-	// here covers them all; the actor's answers stand.
-	s.compare(ctx, org, team, access.ActionRead, actor.canSee())
-	s.compare(ctx, org, team, access.ActionWrite, actor.canManage())
-	return actor, nil
-}
-
-// compare asks SpiceDB in shadow what the code decided about a team: read is
-// seeing it, write is managing it.
-func (s *Service) compare(ctx context.Context, org domain.OrgMembership, team domain.Team, action string, allowed bool) {
-	if s.shadow == nil {
-		return
+	// Every route on one team decides from this actor, so deciding here
+	// covers them all.
+	if actor.see, err = s.decide(ctx, org, team, access.ActionRead, domain.CanSeeTeam(org, actor.onTeam())); err != nil {
+		return teamActor{}, err
 	}
-	// ponytail: teams' membership carries no agent id or role, so an agent
-	// is asked as a primary; specialists aren't narrowed on teams today.
-	s.shadow.Compare(ctx, access.Ask{
-		OrganizationID: team.OrganizationID, Service: "teams", Action: action,
-		ResourceKind: "team", ResourceID: team.ID, UserID: org.UserID,
-		Actor: access.Actor{Role: access.Role(org.Role), Agent: org.Agent},
-	}, allowed)
+	if actor.manage, err = s.decide(ctx, org, team, access.ActionWrite, domain.CanManageTeam(org, actor.teamRole())); err != nil {
+		return teamActor{}, err
+	}
+	return actor, nil
 }
 
 func (s *Service) organizationMember(ctx context.Context, credentials authclient.Credentials, organizationID, userID string) (domain.OrgMembership, error) {
