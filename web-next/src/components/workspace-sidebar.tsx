@@ -61,10 +61,8 @@ import { PersonAvatar } from "./direct-message"
 import { countLabel } from "./direct-message-format"
 import type { DmPeople } from "./direct-message-people"
 import { usePeerOnline } from "./direct-message-presence"
-import { waitsOnOwner } from "./request-card-format"
-import { requestListQueryOptions } from "./requests-view-queries"
+import { needsYouBadge, useNeedsYou } from "@/hooks/use-needs-you"
 import {
-  AGENT_REQUESTS_LIMIT,
   agentTeamsQueryOptions,
   agentWorkflowsQueryOptions,
   agentsQueryOptions,
@@ -198,27 +196,15 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 function useSidebarCounts(organizationId?: string, viewerId?: string) {
   const enabled = Boolean(organizationId && viewerId)
   const org = organizationId ?? ""
-  const inbox = useQuery({
-    ...requestListQueryOptions(org, "inbox"),
-    enabled,
-  })
+  const needs = useNeedsYou(organizationId, viewerId)
   const agents = useQuery({ ...agentsQueryOptions(org), enabled })
   const teams = useQuery({ ...agentTeamsQueryOptions(org), enabled })
   const workflows = useQuery({ ...agentWorkflowsQueryOptions(org), enabled })
 
-  const now = Date.now()
-  const waiting = inbox.data
-    ? inbox.data.filter((request) => waitsOnOwner(request, viewerId ?? "", now))
-        .length
-    : undefined
   return {
-    // A full page may hold more behind it: say so rather than undercount.
-    requests:
-      waiting === undefined || waiting === 0
-        ? undefined
-        : inbox.data && inbox.data.length >= AGENT_REQUESTS_LIMIT
-          ? `${waiting}+`
-          : String(waiting),
+    // Everything that waits on the member, as every page counts it; a full
+    // inbox may hold more behind it, and says so rather than undercount.
+    requests: needsYouBadge(needs),
     primary: agents.data ? primaryAgent(agents.data) : undefined,
     specialists: agents.data ? specialistAgents(agents.data).length : undefined,
     teams: teams.data?.length,

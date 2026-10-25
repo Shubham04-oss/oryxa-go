@@ -10,7 +10,7 @@ import {
   matches,
 } from "./workspace-command-palette"
 import type { CommandPaletteProps } from "./workspace-command-palette"
-import { requestListQueryOptions } from "./requests-view-queries"
+import { inboxQueryOptions } from "@/hooks/use-needs-you"
 import { agentsQueryOptions } from "@/lib/agents/queries"
 import { filesQueryOptions } from "@/lib/files/client"
 import { threadListQueryOptions } from "@/lib/threads/client"
@@ -29,7 +29,7 @@ function seeded(): QueryClient {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   })
-  client.setQueryData(requestListQueryOptions(ORG, "inbox").queryKey, [
+  client.setQueryData(inboxQueryOptions(ORG, VIEWER).queryKey, [
     {
       id: "irq_1",
       task: "What is the plan for the EU launch?",

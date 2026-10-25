@@ -2,7 +2,6 @@ import { useEffect, useState } from "react"
 import {
   useInfiniteQuery,
   useMutation,
-  useQueries,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
@@ -21,7 +20,7 @@ import { originLabel } from "./request-card-format"
 import { refreshRequests, usePeopleNames } from "./requests-view-queries"
 import { clockTime } from "./direct-message-format"
 import {
-  agentFilesOf,
+  agentFilesFromList,
   agoPhrase,
   briefsOf,
   greeting,
@@ -48,45 +47,30 @@ import { ApiError } from "@/lib/api/client"
 import {
   AGENT_REQUESTS_POLL_MS,
   agentKeys,
-  agentRequestsQueryOptions,
   agentWorkflowsQueryOptions,
 } from "@/lib/agents/queries"
 import { isUnavailableHere } from "@/lib/agents/policy"
 import { needsOwnerReply, revokeAgentLease } from "@/lib/agents/agent-requests"
 import { connectionsQueryOptions, toolkitName } from "@/lib/apps/client"
-import type { AgentRequest } from "@/lib/agents/agent-requests"
-import { getAgentGrant } from "@/lib/auth/settings"
+import { getAgentGrant, getAppPreferences } from "@/lib/auth/settings"
 import { slackKeys } from "@/lib/apps/slack"
 import { corporaQueryOptions } from "@/lib/rag/client"
 import {
   retryUnlessRefused,
-  threadApprovalQueryOptions,
   threadDetailQueryOptions,
   threadListQueryOptions,
 } from "@/lib/threads/client"
-import { pendingConfirmationIds } from "@/lib/threads/timeline"
-import { approvalCandidates, chatHistory } from "@/lib/threads/chat-choice"
+import { chatHistory } from "@/lib/threads/chat-choice"
 import type { PrimaryChatActivity } from "@/lib/threads/chat-choice"
 import { getMemberSlackStatus, listActiveAgentLeases } from "@/lib/home/client"
 import { authorizedData, homeRead } from "@/lib/home/queries"
 import { teamspacesQueryOptions } from "@/lib/teamspaces/queries"
+import { INBOX_LIMIT, useNeedsYou } from "@/hooks/use-needs-you"
 import "./home-overview.css"
-
-const requestLimit = 100
 
 /** An app as its brand writes it ("GitHub"), else as the catalog does. */
 function appName(toolkit: string): string {
   return toolkitIcon(toolkit)?.title || toolkitName(toolkit)
-}
-
-/** Only owner decisions and held-answer reviews actually wait on this member. */
-function waitsOnMember(request: AgentRequest, viewerId: string, now: number) {
-  return (
-    request.target.user_id === viewerId &&
-    Date.parse(request.expires_at) > now &&
-    (request.status === "review" ||
-      (request.status === "pending" && request.approval !== "agent"))
-  )
 }
 
 type ReadState = {
@@ -187,6 +171,8 @@ type HomeProps = {
   onOpenKnowledge: () => void
   onOpenSlack?: () => void
   onOpenAccount?: () => void
+  /** Settings → Your agent, where "Keeps updates from your apps" is switched. */
+  onOpenAgentSettings?: () => void
   /** Opens a teamspace, where its live parley is joined. */
   onOpenTeamspace?: (teamspaceId: string) => void
   /** Opens Teamspaces, where a first one is made. */
@@ -238,6 +224,7 @@ function HomeDesk({
   onOpenKnowledge,
   onOpenSlack,
   onOpenAccount,
+  onOpenAgentSettings,
   onOpenTeamspace,
   onOpenTeamspaces,
   onOpenPeople,
@@ -260,10 +247,10 @@ function HomeDesk({
   const [leaseProblem, setLeaseProblem] = useState("")
   const [now, setNow] = useState(() => Date.now())
   const poll = { enabled, refetchInterval: AGENT_REQUESTS_POLL_MS }
-  const inbox = useQuery({
-    ...homeRead(agentRequestsQueryOptions(org, "inbox", requestLimit), viewer),
-    ...poll,
-  })
+  // What needs the member, as every page counts it: one inbox read and one
+  // read of the chats a tool waits in, shared with the sidebar and Requests.
+  const needs = useNeedsYou(organizationId, viewerId, enabled)
+  const inbox = needs.inbox
   const threads = useQuery({
     ...homeRead(threadListQueryOptions(org, viewer), viewer),
     ...poll,
@@ -315,6 +302,16 @@ function HomeDesk({
     enabled,
     refetchInterval: 30_000,
   })
+  // Whether app updates are kept at all (Settings → Your agent): with them
+  // off, an empty "While you were away" is the switch, not a quiet day. The
+  // settings page writes this same entry.
+  const preferences = useQuery({
+    queryKey: ["settings", "app-preferences", org],
+    queryFn: () => getAppPreferences(org),
+    enabled,
+    retry: false,
+  })
+  const updatesOff = authorizedData(preferences)?.app_updates === false
   const leaseKey = [...agentKeys.requests(org), "active-leases", "home", viewer]
   const leases = useInfiniteQuery({
     queryKey: leaseKey,
@@ -379,41 +376,33 @@ function HomeDesk({
     },
   })
   const inboxRows = authorizedData(inbox) ?? []
-  const waitingRequests = inboxRows.filter((request) =>
-    waitsOnMember(request, viewer, now)
-  )
+  const waitingRequests = needs.requests ?? []
   const conversations = chatHistory(authorizedData(threads) ?? [])
-  // ADK stores confirmations in events, not reliable session metadata. Never
-  // walk all histories: check the newest five primary chats plus the open one.
-  const checkedChats = approvalCandidates(conversations)
   const openThreadId = primaryChatActivity?.threadId
-  const checkedIds = checkedChats.map((thread) => thread.id)
-  if (openThreadId && !checkedIds.includes(openThreadId))
-    checkedIds.push(openThreadId)
-  const confirmations = useQueries({
-    queries: checkedIds.map((threadId) => ({
-      ...threadApprovalQueryOptions(org, threadId, viewer),
-      enabled,
+  // Every chat a tool waits in, from Go's own count across all of them; the
+  // open chat, waiting this moment, shows before that read catches up.
+  const pendingChats = needs.chats ?? []
+  const liveWaitingId =
+    primaryChatActivity?.state === "waiting" ? openThreadId : undefined
+  const waitingChats = [
+    ...pendingChats.map((chat) => ({
+      id: chat.id,
+      title: conversationTitle(chat.title) || "A conversation",
+      pending: chat.pending_confirmations,
     })),
-  })
-  const waitingChats = checkedIds.flatMap((threadId, index) => {
-    const detail = authorizedData(confirmations[index])
-    const pending = detail ? pendingConfirmationIds(detail).length : 0
-    const liveWaiting =
-      primaryChatActivity?.state === "waiting" && openThreadId === threadId
-    if (!pending && !liveWaiting) return []
-    return [
-      {
-        id: threadId,
-        title:
-          conversationTitle(
-            detail?.title ||
-              conversations.find((chat) => chat.id === threadId)?.title
-          ) || "Current conversation",
-        pending,
-      },
-    ]
-  })
+    ...(liveWaitingId && !pendingChats.some((chat) => chat.id === liveWaitingId)
+      ? [
+          {
+            id: liveWaitingId,
+            title:
+              conversationTitle(
+                conversations.find((chat) => chat.id === liveWaitingId)?.title
+              ) || "Current conversation",
+            pending: 0,
+          },
+        ]
+      : []),
+  ]
   const waitingWithoutId =
     primaryChatActivity?.state === "waiting" && !openThreadId
   const running =
@@ -470,9 +459,7 @@ function HomeDesk({
 
   const updatesDetail = authorizedData(updates)
   const briefs = updatesDetail ? briefsOf(updatesDetail) : []
-  const agentFiles = agentFilesOf(
-    confirmations.map((query) => authorizedData(query))
-  )
+  const agentFiles = agentFilesFromList(authorizedData(threads) ?? [])
   const tools = [
     ...new Set(
       (authorizedData(connections) ?? [])
@@ -510,22 +497,10 @@ function HomeDesk({
   ]
   const needsMember =
     waitingRequests.length > 0 || waitingChats.length > 0 || waitingWithoutId
-  const outsideConfirmationCoverage = conversations.some(
-    (thread) => !checkedIds.includes(thread.id)
-  )
-  const freshConfirmations = confirmations.every(
-    (query) => query.isSuccess && !query.isFetching
-  )
-  const completeConfirmationCoverage =
-    threads.isSuccess && !outsideConfirmationCoverage && freshConfirmations
-  const settled = [inbox, threads, leases].every(
-    (query) => query.isSuccess && !query.isFetching
-  )
-  const canSayQuiet =
-    settled &&
-    inboxRows.length < requestLimit &&
-    completeConfirmationCoverage &&
-    !needsMember
+  // A read that failed, not one this server doesn't serve (that one has
+  // nothing to count).
+  const confirmationsFailed =
+    needs.confirmations.isError && needs.chats === undefined
   const needsCount = waitingRequests.length + waitingChats.length
   const handled = handledToday(inboxRows, viewer, now)
   const helloLine = helloWords(needsCount, handled)
@@ -640,11 +615,20 @@ function HomeDesk({
           <p className="home-quiet">
             {noApps
               ? "Connect an app to see what happened while you were away."
-              : "Nothing new from your apps."}
-            {noApps && (
+              : updatesOff
+                ? "App updates are off, so nothing new from your apps is kept."
+                : "Nothing new from your apps."}
+            {noApps ? (
               <Button variant="link" size="sm" onClick={onOpenTools}>
                 Connect your tools
               </Button>
+            ) : (
+              updatesOff &&
+              onOpenAgentSettings && (
+                <Button variant="link" size="sm" onClick={onOpenAgentSettings}>
+                  Turn on app updates
+                </Button>
+              )
             )}
           </p>
         )
@@ -832,35 +816,13 @@ function HomeDesk({
           {waitingRequests.length - 4} more waiting in Requests.
         </p>
       )}
-      {checkedIds.map((id, index) => (
-        <ReadNotice
-          key={id}
-          {...notices.confirmations}
-          query={confirmations[index]}
-        />
-      ))}
-      {threads.isSuccess &&
-        (outsideConfirmationCoverage || !freshConfirmations) && (
-          <p className="home-quiet">
-            Tool confirmations are limited to your{" "}
-            {checkedChats.length === 5 ? "five" : checkedChats.length} newest
-            chat{checkedChats.length === 1 ? "" : "s"}
-            {openThreadId ? " and the open chat" : ""}.{" "}
-            {outsideConfirmationCoverage
-              ? "Older chats may still need you."
-              : "The check is not complete."}
-            <Button variant="link" size="sm" onClick={onOpenAgent}>
-              All conversations
-            </Button>
-          </p>
-        )}
-      {inboxRows.length >= requestLimit && (
-        <p className="home-quiet">
-          Only the latest {requestLimit} requests were checked.
-        </p>
+      {confirmationsFailed && (
+        <ReadNotice {...notices.confirmations} query={needs.confirmations} />
       )}
-      {canSayQuiet && activeLeases.length === 0 && (
-        <p className="home-quiet home-empty">Nothing needs you right now.</p>
+      {needs.capped && (
+        <p className="home-quiet">
+          Only the latest {INBOX_LIMIT} requests were checked.
+        </p>
       )}
     </section>
   )
@@ -883,13 +845,15 @@ function HomeDesk({
       },
       now
     )
-    const pickupReady =
-      threads.isSuccess &&
-      corpora.isSuccess &&
-      confirmations.every((query) => query.isSuccess)
+    const pickupReady = threads.isSuccess && corpora.isSuccess
     // Suggestions come from what the member really has: never a made-up
-    // teammate, file or channel.
-    const firstTool = tools[0]
+    // teammate, file or channel. "Catch me up" names an app only while its
+    // updates are kept and it has something new.
+    const firstTool = updatesOff
+      ? undefined
+      : briefs
+          .flatMap((brief) => brief.toolkits)
+          .find((toolkit) => tools.includes(toolkit))
     const suggestions: HomeSuggestion[] = enabled
       ? [
           {
@@ -929,7 +893,17 @@ function HomeDesk({
       (briefs.length > 0
         ? `${briefs.length === 1 ? "One thing" : `${briefs.length} things`} stood out in your apps. Ask Krude about any of it, or anything else.`
         : "Ask Krude anything, or finish getting started below.")
-    const showNeeds = needsMember || activeLeases.length > 0
+    // Nothing waiting, nothing to say: the card goes, rather than say so.
+    // A read that failed keeps it, so the failure is seen, as does a full
+    // inbox, which may hold more than it shows.
+    const showNeeds =
+      needsMember ||
+      activeLeases.length > 0 ||
+      needs.capped ||
+      inbox.isError ||
+      confirmationsFailed ||
+      leases.isError ||
+      Boolean(leaseProblem)
     return (
       <div
         className="home-overview home-today home-centred"
@@ -964,8 +938,8 @@ function HomeDesk({
           suggestions={suggestions}
         />
         {enabled && !firstRun && (
-          <div className="home-pair">
-            {needsSection}
+          <div className={showNeeds ? "home-pair" : "home-pair home-pair-solo"}>
+            {showNeeds && needsSection}
             {appsSection}
           </div>
         )}
@@ -1022,7 +996,7 @@ function HomeDesk({
         knowledge={knowledgeRows}
         corpora={corpora}
         files={agentFiles}
-        filesRead={confirmations.every((query) => query.isSuccess)}
+        filesRead={threads.isSuccess}
         conversationTitle={(threadId) =>
           conversationTitle(
             conversations.find((chat) => chat.id === threadId)?.title

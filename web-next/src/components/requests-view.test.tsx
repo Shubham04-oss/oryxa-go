@@ -274,7 +274,7 @@ describe("Sent", () => {
 })
 
 describe("the origin filter", () => {
-  it("narrows a list to Slack, or to agents in Oryxa, by asking Go", async () => {
+  it("narrows a list to Slack, or to agents in Oryxa, from the one inbox read", async () => {
     const origins: string[] = []
     renderView({
       [`GET ${inboxPath}`]: listRoute(
@@ -286,7 +286,6 @@ describe("the origin filter", () => {
     expect(screen.getAllByText("Explain the service boundary.")).toBeTruthy()
 
     fireEvent.click(screen.getByRole("button", { name: "Slack" }))
-    // A new filter is a new list, and says so while it loads.
     await screen.findAllByText("What is the plan for the EU launch?")
     expect(screen.queryByText("Explain the service boundary.")).toBeNull()
     expect(screen.getByRole("button", { name: "Slack" })).toHaveProperty(
@@ -297,7 +296,8 @@ describe("the origin filter", () => {
     fireEvent.click(screen.getByRole("button", { name: "Oryxa" }))
     await screen.findAllByText("Explain the service boundary.")
     expect(screen.queryByText("What is the plan for the EU launch?")).toBeNull()
-    expect(origins).toEqual(expect.arrayContaining(["", "slack", "agent"]))
+    // The filter narrows what the page holds: Go is never asked by origin.
+    expect(new Set(origins)).toEqual(new Set([""]))
   })
 
   it("narrows an older server's mixed list and keeps legacy requests under Oryxa", async () => {
@@ -789,5 +789,51 @@ describe("the board's Requests", () => {
     expect(
       go.calls.find((call) => call.path.endsWith("/consent"))?.body
     ).toEqual({ choice: "access" })
+  })
+})
+
+describe("chats a tool waits in", () => {
+  it("wait on the member beside their requests, counted as one, and open their chat", async () => {
+    fakeGo({
+      [`GET ${inboxPath}`]: () => ({ requests: [slackRequest(), earlier] }),
+      [`GET /v1/organizations/${ORG}/pending-confirmations`]: () => ({
+        threads: [
+          {
+            id: "chat-9",
+            title: "Clean up the drive",
+            updated_at: "2026-09-29T12:00:00Z",
+            pending_confirmations: 2,
+          },
+        ],
+        total: 2,
+      }),
+    })
+    const onOpenConversation = vi.fn()
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <RequestsView
+          organizationId={ORG}
+          viewerId={OWNER}
+          onOpenConversation={onOpenConversation}
+        />
+      </QueryClientProvider>
+    )
+    const inbox = await screen.findByRole("list", { name: "Inbox" })
+    const chat = await within(inbox).findByRole("button", {
+      name: "Open Clean up the drive: 2 tools wait for your OK",
+    })
+    expect(waitingHeading(2, inbox)).toBeTruthy()
+    expect(screen.getByRole("tab", { name: "Inbox, 2 waiting" })).toBeTruthy()
+    fireEvent.click(chat)
+    expect(onOpenConversation).toHaveBeenCalledWith("chat-9")
+
+    // A channel's filter holds that channel's requests only.
+    fireEvent.click(screen.getByRole("button", { name: "Slack" }))
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: /Clean up the drive/ })
+      ).toBeNull()
+    )
   })
 })

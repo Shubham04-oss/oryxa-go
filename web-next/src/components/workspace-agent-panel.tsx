@@ -484,7 +484,7 @@ export function WorkspaceAgentPanel({
   const agentLabel = agentName ?? "Your agent"
   const needsLabel =
     needs && needs > 0
-      ? `${needs} ${needs === 1 ? "request needs" : "requests need"} you`
+      ? `${needs} ${needs === 1 ? "thing needs" : "things need"} you`
       : undefined
 
   return (

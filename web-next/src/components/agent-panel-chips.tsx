@@ -60,7 +60,7 @@ function needsButton({ needs, onOpenRequests }: ChipsProps): ReactNode {
       size="sm"
       className="workspace-agent-chip"
       onClick={onOpenRequests}
-      aria-label={`Needs you: ${needs} ${needs === 1 ? "request" : "requests"}, open Requests`}
+      aria-label={`Needs you: ${needs} ${needs === 1 ? "thing" : "things"}, open Requests`}
     >
       Needs you
       <Badge variant="outline" className="workspace-agent-chip-count">
