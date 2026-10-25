@@ -132,6 +132,10 @@ type Run struct {
 	// artifacts is the files the thread has kept, as the run found them and
 	// with every one the run keeps, which the run records as it ends.
 	artifacts artifactTally
+	// confirmations is the tool confirmations the thread holds, as the run
+	// found them and with every one the run asks or answers, which the run
+	// records as it ends.
+	confirmations confirmationTally
 	// remembering is the run's view of memory, scoped to the member's
 	// organization, that the run is handed to once it ends. It is built when
 	// the run starts driving, and nil when the service has no memory or the
@@ -255,6 +259,7 @@ func (run *Run) prepare(ctx context.Context, message string, input RunInput) err
 	}
 	history := sessionEvents(stored)
 	run.artifacts = tallyArtifacts(history)
+	run.confirmations = tallyConfirmations(history, service.agent.Name())
 	run.guardInput = publicationGuardInput(history, message)
 	if stateString(stored.State(), stateOrigin) == OriginSideConversation {
 		// The wrapped prompt contains other people's untrusted words. It must
@@ -620,6 +625,7 @@ func (run *Run) drive(ctx context.Context, send func(Item)) error {
 			continue
 		}
 		run.artifacts.add(event)
+		run.confirmations.add(event)
 		for _, item := range displayAgent(streamItems(event), answering.Name(), run.member.AgentName) {
 			send(item)
 		}

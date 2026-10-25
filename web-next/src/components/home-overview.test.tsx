@@ -132,6 +132,14 @@ const said = (
   text: string,
   author = "Krude"
 ): Item => ({ type: "message", id, at, author, text })
+/** A wake-up thread whose briefs name these apps: they have something new. */
+const withBriefs = (...toolkits: string[]) => ({
+  [`${path}/threads`]: { threads: [chat("wake", "Updates", "wakeup")] },
+  [`${path}/threads/wake`]: wakeDetail([
+    appsBatch("batch", minutesAgo(3), ...toolkits),
+    said("brief", minutesAgo(2), "Something happened. More detail."),
+  ]),
+})
 type Route =
   unknown | ((url: URL, init?: RequestInit) => Response | Promise<Response>)
 
@@ -245,7 +253,13 @@ it("shows the same chats at a glance in the agent panel, without its own compose
 it("lays At a glance out as the board's cards, from real reads only", async () => {
   stubApi({
     [`${path}/threads`]: {
-      threads: [chat("wake", "Updates", "wakeup"), chat("one", "First")],
+      threads: [
+        chat("wake", "Updates", "wakeup"),
+        {
+          ...chat("one", "First"),
+          latest_artifact: { name: "EU launch plan.docx", kind: "docx" },
+        },
+      ],
     },
     [`${path}/threads/wake`]: wakeDetail([
       appsBatch("b1", minutesAgo(12), "slack"),
@@ -424,10 +438,12 @@ it("asks Krude from the large composer in the middle of the page, starting a new
   expect(view.onNewChat).toHaveBeenLastCalledWith("What needs me today?")
 })
 
-it("suggests catching up only on an app the member really connected", async () => {
+it("suggests catching up only on a connected app with something new", async () => {
   stubApi()
   const first = renderHome()
-  await screen.findByText("Nothing needs you right now.")
+  await screen.findByText(
+    "Connect an app to see what happened while you were away."
+  )
   expect(screen.queryByRole("button", { name: /Catch me up/ })).toBeNull()
   // Without a connected tool, While you were away offers to connect one.
   fireEvent.click(
@@ -438,15 +454,48 @@ it("suggests catching up only on an app the member really connected", async () =
 
   stubApi({
     [`${path}/apps/connections`]: {
-      connections: [connection("linear", "expired"), connection("github")],
+      connections: [
+        connection("linear", "expired"),
+        connection("slack"),
+        connection("github"),
+      ],
     },
+    ...withBriefs("linear", "github"),
   })
   const view = renderHome()
   fireEvent.click(
     await screen.findByRole("button", { name: "Catch me up on GitHub" })
   )
   expect(view.onNewChat).toHaveBeenLastCalledWith("Catch me up on GitHub")
-  expect(screen.queryByRole("button", { name: /Linear/ })).toBeNull()
+  // Linear is not connected; Slack has nothing new.
+  expect(
+    screen.queryByRole("button", { name: "Catch me up on Linear" })
+  ).toBeNull()
+  expect(
+    screen.queryByRole("button", { name: "Catch me up on Slack" })
+  ).toBeNull()
+})
+
+it("says app updates are off, links the setting, and suggests no catch-up while they are", async () => {
+  stubApi({
+    [`${path}/apps/connections`]: { connections: [connection("github")] },
+    [`${path}/preferences`]: { app_updates: false },
+    [`${path}/threads`]: { threads: [] },
+  })
+  const onOpenAgentSettings = vi.fn()
+  renderHome({ onOpenAgentSettings })
+  const away = screen.getByRole("region", { name: "While you were away" })
+  expect(
+    await within(away).findByText(
+      /App updates are off, so nothing new from your apps is kept\./
+    )
+  ).toBeTruthy()
+  expect(within(away).queryByText("Nothing new from your apps.")).toBeNull()
+  fireEvent.click(
+    within(away).getByRole("button", { name: "Turn on app updates" })
+  )
+  expect(onOpenAgentSettings).toHaveBeenCalledOnce()
+  expect(screen.queryByRole("button", { name: /Catch me up/ })).toBeNull()
 })
 
 it("pins a running open chat once and keeps starting chat truthful until an ID exists", async () => {
@@ -498,9 +547,11 @@ it("greets by the member's clock and first name", () => {
 })
 
 it("lays My workspace out on one axis: greeting, composer, Needs you beside While you were away, then Pick up", async () => {
-  stubApi()
+  stubApi({
+    [`${path}/agent-requests/inbox`]: { requests: [request()] },
+  })
   const view = renderHome({ viewerName: "Ada Brennan" })
-  await screen.findByText("Nothing needs you right now.")
+  await screen.findByRole("list", { name: "Needs you" })
   expect(
     screen.getAllByRole("heading", { level: 2 }).map((node) => node.textContent)
   ).toEqual([
@@ -563,26 +614,16 @@ it("says how many things need the member and what Krude handled for them today",
 })
 
 it("orders Pick up where you left off by what was touched last, four at most", async () => {
-  const artifact = (id: string, at: string, name: string) =>
-    ({
-      type: "artifact",
-      id,
-      at,
-      author: "Krude",
-      artifact: name,
-      version: 1,
-    }) as Item
   stubApi({
     [`${path}/threads`]: {
       threads: [
-        { ...chat("one", "Launch plan"), updated_at: minutesAgo(30) },
+        {
+          ...chat("one", "Launch plan"),
+          updated_at: minutesAgo(30),
+          latest_artifact: { name: "deck.pptx", kind: "pptx" },
+        },
         { ...chat("two", "Old chat"), updated_at: minutesAgo(900) },
       ],
-    },
-    [`${path}/threads/one`]: {
-      ...chat("one", "Launch plan"),
-      items: [artifact("e1", minutesAgo(5), "deck.pptx")],
-      pending_confirmations: [],
     },
     [`${path}/corpora`]: {
       corpora: [
@@ -599,7 +640,7 @@ it("orders Pick up where you left off by what was touched last, four at most", a
       .getAllByRole("listitem")
       .map((card) => card.textContent)
   ).toEqual([
-    "PPTXdeck.pptxLaunch plan · 5 min ago",
+    "PPTXdeck.pptxLaunch plan · 30 min ago",
     "Launch planChat · 30 min ago",
     "HandbookLibrary · 1 document",
     "Old chatChat · 15 h ago",
@@ -618,7 +659,7 @@ it("orders Pick up where you left off by what was touched last, four at most", a
       ]
     })
   ).toEqual([
-    ["Open deck.pptx", "Launch plan · 5 min ago"],
+    ["Open deck.pptx", "Launch plan · 30 min ago"],
     ["Open Launch plan", "Chat · 30 min ago"],
     ["Open Handbook", "Library · 1 document"],
     ["Open Old chat", "Chat · 15 h ago"],
@@ -799,10 +840,9 @@ it("lists waiting teammate requests as rows with one action that opens that exac
     within(needs).getByRole("button", { name: "Reply to Raya’s request" })
   )
   expect(view.onOpenRequests).toHaveBeenLastCalledWith("own-reply")
-  expect(screen.queryByText("Nothing needs you right now.")).toBeNull()
 })
 
-it("keeps only this member's unexpired owner decisions and held reviews; bounds rows with All requests", async () => {
+it("keeps only what waits on this member, by the one rule; bounds rows with All requests", async () => {
   stubApi({
     [`${path}/agent-requests/inbox`]: {
       requests: [
@@ -833,9 +873,11 @@ it("keeps only this member's unexpired owner decisions and held reviews; bounds 
   expect(within(needs).getAllByRole("listitem")).toHaveLength(4)
   expect(within(needs).queryByText("Owner request 5")).toBeNull()
   expect(screen.queryByText("Foreign owner")).toBeNull()
-  expect(screen.queryByText("Agent handles this")).toBeNull()
   expect(screen.queryByText("Expired request")).toBeNull()
-  expect(screen.getByText("1 more waiting in Requests.")).toBeTruthy()
+  // Pending for its owner, whoever was set to approve it: the one rule
+  // (waitsOnOwner) counts it here as in the sidebar and Requests.
+  expect(within(needs).getByText("Agent handles this")).toBeTruthy()
+  expect(screen.getByText("2 more waiting in Requests.")).toBeTruthy()
   fireEvent.click(
     within(screen.getByRole("region", { name: "Needs you" })).getByRole(
       "button",
@@ -1046,30 +1088,26 @@ it("invites knowledge when there is none to look up", async () => {
   expect(view.onOpenKnowledge).toHaveBeenCalledOnce()
 })
 
-it("lists the files the agent saved in recent chats, latest version once, newest first, opening their chat", async () => {
-  const artifact = (id: string, at: string, name: string, version: number) =>
-    ({
-      type: "artifact",
-      id,
-      at,
-      author: "Krude",
-      artifact: name,
-      version,
-    }) as Item
+it("lists each chat's latest file from the chat list, newest first, opening their chat, reading no chat", async () => {
   const go = stubApi({
-    [`${path}/threads`]: { threads: [chat("one", "One"), chat("two", "Two")] },
-    [`${path}/threads/one`]: {
-      ...chat("one", "One"),
-      items: [
-        artifact("e1", minutesAgo(30), "report.pdf", 1),
-        artifact("e2", minutesAgo(10), "report.pdf", 2),
+    [`${path}/threads`]: {
+      threads: [
+        {
+          ...chat("one", "One"),
+          updated_at: minutesAgo(10),
+          latest_artifact: { name: "report.pdf", kind: "pdf" },
+        },
+        {
+          ...chat("two", "Two"),
+          updated_at: minutesAgo(20),
+          latest_artifact: { name: "notes.md", kind: "md" },
+        },
+        { ...chat("three", "Three"), updated_at: minutesAgo(5) },
+        {
+          ...chat("side", "Side", "side_conversation"),
+          latest_artifact: { name: "hidden.txt", kind: "txt" },
+        },
       ],
-      pending_confirmations: [],
-    },
-    [`${path}/threads/two`]: {
-      ...chat("two", "Two"),
-      items: [artifact("e3", minutesAgo(20), "notes.md", 1)],
-      pending_confirmations: [],
     },
   })
   const view = renderHome({ variant: "glance" })
@@ -1082,10 +1120,9 @@ it("lists the files the agent saved in recent chats, latest version once, newest
   ).toEqual(["report.pdf, from One", "notes.md, from Two"])
   fireEvent.click(within(files).getByRole("button", { name: /notes\.md/ }))
   expect(view.onOpenConversation).toHaveBeenCalledWith("two")
-  // Files come from the chat details Today already reads, not a read of their own.
   expect(
-    go.calls.filter((call) => call.url.pathname === `${path}/threads/one`)
-  ).toHaveLength(1)
+    go.calls.filter((call) => call.url.pathname.startsWith(`${path}/threads/`))
+  ).toHaveLength(0)
 })
 
 it("shows the viewer's own recurring work with its schedule in words", async () => {
@@ -1184,155 +1221,86 @@ it("reads apps, tools and recurring work, and never sent requests or shared acti
   expect(go.calls.every((call) => call.method === "GET")).toBe(true)
 })
 
-it("checks only newest five primary chats plus the distinct open chat and opens exact confirmations", async () => {
+it("lists every chat a tool waits in from one read across all chats, and opens the exact chat", async () => {
   const go = stubApi({
     [`${path}/threads`]: {
+      threads: Array.from({ length: 12 }, (_, i) => chat(`chat-${i}`)),
+    },
+    [`${path}/pending-confirmations`]: {
       threads: [
-        chat("wake", "Wake", "wakeup"),
-        ...Array.from({ length: 12 }, (_, i) => chat(`chat-${i}`)),
+        { ...chat("chat-1", "Needs a tool choice"), pending_confirmations: 2 },
+        // The twelfth chat: no older chat is out of reach.
+        { ...chat("chat-11", "Old chat"), pending_confirmations: 1 },
       ],
-    },
-    [`${path}/threads/chat-1`]: {
-      ...chat("chat-1", "Needs a tool choice"),
-      items: [],
-      pending_confirmations: ["a", "b"],
-    },
-    [`${path}/threads/chat-10`]: {
-      ...chat("chat-10", "Open older chat"),
-      items: [],
-      pending_confirmations: ["c"],
+      total: 3,
     },
   })
-  const view = renderHome({
-    primaryChatActivity: { threadId: "chat-10", state: "idle" },
-  })
+  const view = renderHome()
   await screen.findByText("2 tool confirmations")
   expect(screen.getByText("1 tool confirmation")).toBeTruthy()
+  expect(screen.queryByText(/newest chats/)).toBeNull()
+  expect(screen.queryByText(/Older chats may still need you/)).toBeNull()
+  // No chat's history is read to find them.
   expect(
-    screen.getByText(/limited to your five newest chats and the open chat/)
-  ).toBeTruthy()
-  const details = go.calls
-    .filter((call) => call.url.pathname.startsWith(`${path}/threads/`))
-    .map((call) => call.url.pathname.split("/").at(-1))
-  // The five newest chats, the open one, and the wake-up thread's briefs.
-  expect(details.sort()).toEqual(
-    ["chat-0", "chat-1", "chat-2", "chat-3", "chat-4", "chat-10", "wake"].sort()
-  )
-  expect(screen.queryByText("Nothing needs you right now.")).toBeNull()
+    go.calls.filter((call) => call.url.pathname.startsWith(`${path}/threads/`))
+  ).toHaveLength(0)
+  expect(
+    screen.getByRole("heading", { name: "Needs you" }).parentElement
+      ?.textContent
+  ).toContain("2")
   fireEvent.click(
     within(
-      screen.getByText(/waiting in Open older chat/).closest("li")!
+      screen.getByText(/waiting in Old chat/).closest("li")!
     ).getByRole<HTMLButtonElement>("button", { name: "Open" })
   )
-  expect(view.onOpenConversation).toHaveBeenCalledWith("chat-10")
+  expect(view.onOpenConversation).toHaveBeenCalledWith("chat-11")
 })
 
-it("polls bounded chat details every thirty seconds while lists stay quick and mount and focus refresh immediately", async () => {
+it("reads pending confirmations every thirty seconds and on focus, never a chat's history", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] })
   const go = stubApi({
     [`${path}/threads`]: {
       threads: Array.from({ length: 6 }, (_, i) => chat(`chat-${i}`)),
     },
+    [`${path}/pending-confirmations`]: { threads: [], total: 0 },
   })
-  const activity = { threadId: "chat-5", state: "idle" as const }
-  const view = renderHome({ primaryChatActivity: activity })
-  const detailReads = () =>
-    go.calls.filter((call) => call.url.pathname.startsWith(`${path}/threads/`))
-  const listReads = () =>
-    go.calls.filter((call) => call.url.pathname === `${path}/threads`)
-  await screen.findByText("Nothing needs you right now.")
-  expect(detailReads()).toHaveLength(6)
+  const view = renderHome({
+    primaryChatActivity: { threadId: "chat-5", state: "idle" },
+  })
+  const reads = () =>
+    go.calls.filter(
+      (call) => call.url.pathname === `${path}/pending-confirmations`
+    )
+  await waitFor(() => expect(reads()).toHaveLength(1))
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(10_000)
+    await vi.advanceTimersByTimeAsync(29_999)
   })
-  expect(listReads()).toHaveLength(2)
-  expect(detailReads()).toHaveLength(6)
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(19_999)
-  })
-  expect(detailReads()).toHaveLength(6)
+  expect(reads()).toHaveLength(1)
   await act(async () => {
     await vi.advanceTimersByTimeAsync(1)
   })
-  expect(detailReads()).toHaveLength(12)
-
-  view.unmount()
-  render(
-    <QueryClientProvider client={view.client}>
-      <HomeOverview
-        organizationId={ORG}
-        viewerId={OWNER}
-        primaryChatActivity={activity}
-        onOpenRequests={vi.fn()}
-        onOpenAgent={vi.fn()}
-        onOpenTools={vi.fn()}
-        onOpenKnowledge={vi.fn()}
-      />
-    </QueryClientProvider>
-  )
-  await screen.findByText("Nothing needs you right now.")
-  expect(detailReads()).toHaveLength(18)
+  expect(reads()).toHaveLength(2)
   await act(async () => {
     focusManager.setFocused(false)
     focusManager.setFocused(true)
   })
-  await waitFor(() => expect(detailReads()).toHaveLength(24))
-})
-
-it("deduplicates an open chat already among five and never reads side-conversation histories", async () => {
-  const go = stubApi({
-    [`${path}/threads`]: {
-      threads: [
-        chat("side", "Side", "side_conversation"),
-        ...[1, 2, 3, 4, 5].map((i) => chat(String(i))),
-      ],
-    },
-  })
-  renderHome({ primaryChatActivity: { state: "idle", threadId: "2" } })
-  await screen.findByText("Nothing needs you right now.")
+  await waitFor(() => expect(reads()).toHaveLength(3))
   expect(
     go.calls.filter((call) => call.url.pathname.startsWith(`${path}/threads/`))
-  ).toHaveLength(5)
+  ).toHaveLength(0)
+  view.unmount()
 })
 
-it("keeps known live confirmation reachable after a refused detail refresh while cached confirmations disappear", async () => {
-  let deny = false
+it("keeps the open chat's live confirmation reachable when the confirmations read is refused", async () => {
   stubApi({
-    [`${path}/threads`]: {
-      threads: [
-        chat("stored", "Stored confirmation"),
-        chat("live", "Open chat"),
-      ],
-    },
-    [`${path}/threads/stored`]: () =>
-      deny
-        ? refused()
-        : json({
-            ...chat("stored", "Stored confirmation"),
-            items: [],
-            pending_confirmations: ["a"],
-          }),
-    [`${path}/threads/live`]: () =>
-      deny
-        ? refused()
-        : json({
-            ...chat("live", "Open chat"),
-            items: [],
-            pending_confirmations: ["b"],
-          }),
+    [`${path}/threads`]: { threads: [chat("live", "Open chat")] },
+    [`${path}/pending-confirmations`]: refused,
   })
   const view = renderHome({
     primaryChatActivity: { state: "waiting", threadId: "live" },
   })
-  await screen.findByText(/waiting in Stored confirmation/)
-  deny = true
-  await act(async () => {
-    await view.client.invalidateQueries({ queryKey: threadKeys.all(ORG) })
-  })
+  await screen.findByText("Tool confirmations can’t be loaded right now.")
   const needs = screen.getByRole("list", { name: "Needs you" })
-  await waitFor(() =>
-    expect(within(needs).queryByText(/Stored confirmation/)).toBeNull()
-  )
   fireEvent.click(
     within(
       within(needs)
@@ -1341,21 +1309,33 @@ it("keeps known live confirmation reachable after a refused detail refresh while
     ).getByRole<HTMLButtonElement>("button", { name: "Open" })
   )
   expect(view.onOpenConversation).toHaveBeenCalledWith("live")
-  expect(screen.queryByText("Nothing needs you right now.")).toBeNull()
   expect(screen.queryByText("private diagnostic")).toBeNull()
 })
 
-it("never claims all clear when history coverage is partial, loading, or refused", async () => {
-  stubApi({
-    [`${path}/threads`]: {
-      threads: Array.from({ length: 8 }, (_, i) => chat(String(i))),
-    },
-    [`${path}/threads/1`]: refused,
-  })
+it("hides Needs you when nothing waits, and when a server does not count confirmations", async () => {
+  stubApi({ [`${path}/pending-confirmations`]: { threads: [], total: 0 } })
+  const first = renderHome()
+  await screen.findByRole("region", { name: "While you were away" })
+  await waitFor(() =>
+    expect(
+      first.client.getQueryState([
+        "threads",
+        ORG,
+        "pending-confirmations",
+        OWNER,
+      ])?.status
+    ).toBe("success")
+  )
+  expect(screen.queryByRole("region", { name: "Needs you" })).toBeNull()
+  first.unmount()
+
+  // A server without the route (404) has nothing to count, not a failure.
+  stubApi()
   renderHome()
-  await screen.findByText("Tool confirmations can’t be loaded right now.")
-  expect(screen.queryByText("Nothing needs you right now.")).toBeNull()
-  expect(screen.getByText(/Older chats may still need you/)).toBeTruthy()
+  await screen.findByRole("region", { name: "While you were away" })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  expect(screen.queryByRole("region", { name: "Needs you" })).toBeNull()
+  expect(screen.queryByText(/can’t be loaded/)).toBeNull()
 })
 
 it("gives quiet complete empty Home exactly once, with only unfinished setup", async () => {
@@ -1383,7 +1363,9 @@ it("gives quiet complete empty Home exactly once, with only unfinished setup", a
 it("hides completed setup and does not create Slack authorization URLs", async () => {
   const go = stubApi()
   renderHome()
-  await screen.findByText("Nothing needs you right now.")
+  await screen.findByText(
+    "Connect an app to see what happened while you were away."
+  )
   expect(screen.queryByLabelText("Finish setup")).toBeNull()
   expect(screen.queryByText(/Finish setup/)).toBeNull()
   expect(
@@ -1449,8 +1431,6 @@ it("exposes End access only on owned revocable active windows and settles the se
     within(rows[0]).getByRole("button", { name: "End access" })
   ).toBeTruthy()
   expect(rows[1].textContent).toContain("You can ask Raya’s agent")
-  // Access does not count as needing the member, nor as quiet.
-  expect(screen.queryByText("Nothing needs you right now.")).toBeNull()
   fireEvent.click(
     within(section).getByRole<HTMLButtonElement>("button", {
       name: "End access",
@@ -1545,7 +1525,6 @@ it("does not claim quiet when the request inbox reaches its server limit", async
   })
   renderHome()
   await screen.findByText("Only the latest 100 requests were checked.")
-  expect(screen.queryByText("Nothing needs you right now.")).toBeNull()
 })
 
 it("keeps preview read-only and does not fetch private APIs", async () => {
@@ -1558,7 +1537,6 @@ it("keeps preview read-only and does not fetch private APIs", async () => {
   ).toBe(true)
   await act(async () => {})
   expect(go.calls).toHaveLength(0)
-  expect(screen.queryByText("Nothing needs you right now.")).toBeNull()
 })
 
 it("leaves unsupported conversation callbacks visibly disabled and drafts editable", async () => {
@@ -1596,7 +1574,6 @@ it.each([
     seed: { threads: [chat("private", "Private recent title")] },
     privateText: "Private recent title",
     key: threadKeys.list(ORG),
-    needsCheck: true,
   },
   {
     name: "open access",
@@ -1628,6 +1605,7 @@ it.each([
     // Tools only feed a suggestion on the page: it goes, without a notice.
     privateText: "Catch me up on GitHub",
     key: appsQueryKey(ORG),
+    extra: withBriefs("github"),
   },
   {
     name: "knowledge bases",
@@ -1677,10 +1655,10 @@ it.each([
     if (failed) await screen.findByText(failed)
     await waitFor(() => expect(screen.queryByText(privateText)).toBeNull())
     if (field) expect(field.value).toBe("Keep this draft")
-    // A read that decides whether anything needs the member never lets a
-    // refusal pass for quiet.
+    // A read that decides whether anything needs the member keeps the card,
+    // so its failure is seen rather than passed off as nothing waiting.
     if (needsCheck)
-      expect(screen.queryByText("Nothing needs you right now.")).toBeNull()
+      expect(screen.getByRole("region", { name: "Needs you" })).toBeTruthy()
     expect(screen.queryByText("private diagnostic")).toBeNull()
   }
 )
@@ -1753,7 +1731,9 @@ it("drops prior viewer work and drafts immediately and freshly authorizes all pr
   await act(async () => {
     finish!(json({ requests: [] }))
   })
-  await screen.findByText("Nothing needs you right now.")
+  await screen.findByText(
+    "Connect an app to see what happened while you were away."
+  )
   const keys = view.client
     .getQueryCache()
     .getAll()

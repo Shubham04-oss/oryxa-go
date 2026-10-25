@@ -4,8 +4,27 @@
 import { clockTime, dayLabel } from "./time-format"
 import { agoPhrase } from "./today-format"
 import { expiresPhrase } from "./request-card-format"
-import { isOwnerWritten, needsOwnerReply } from "@/lib/agents/agent-requests"
+import {
+  isOwnerWritten,
+  needsOwnerReply,
+  originOf,
+} from "@/lib/agents/agent-requests"
 import type { AgentRequest } from "@/lib/agents/agent-requests"
+import type { OriginFilter } from "./requests-view-queries"
+
+/**
+ * The requests made where the filter says: in Slack, by an agent in Oryxa,
+ * or anywhere. The lists are read whole, once, and narrowed here, so the
+ * filter never makes another read of its own.
+ */
+export function madeIn(
+  requests: readonly AgentRequest[],
+  origin: OriginFilter
+): AgentRequest[] {
+  return origin === "all"
+    ? [...requests]
+    : requests.filter((request) => originOf(request) === origin)
+}
 
 /**
  * A row's tag: for a request that waits on the member, what it waits on

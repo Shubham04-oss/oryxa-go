@@ -33,16 +33,13 @@ import type { ScreenContext } from "@/lib/agents/screen-context"
 import { afterUpdateAgent } from "@/lib/agents/invalidation"
 import { updateAgent } from "@/lib/agents/managed-agents"
 import type { ManagedAgent } from "@/lib/agents/managed-agents"
-import type { AgentRequest } from "@/lib/agents/agent-requests"
+import { useNeedsYou } from "@/hooks/use-needs-you"
 import {
-  canDecideAgentRequest,
-  canRespondToAgentRequest,
   isUnavailableHere,
   primaryAgent,
   specialistAgents,
 } from "@/lib/agents/policy"
 import {
-  agentRequestsQueryOptions,
   agentTeamsQueryOptions,
   agentsQueryOptions,
 } from "@/lib/agents/queries"
@@ -150,16 +147,6 @@ export function AgentsFocus({
   )
 }
 
-/** Requests in the member's inbox that wait on them: to decide or to answer. */
-function waitingOn(requests: readonly AgentRequest[], viewerId?: string) {
-  return requests.filter((request) =>
-    viewerId
-      ? canDecideAgentRequest(request, viewerId) ||
-        canRespondToAgentRequest(request, viewerId)
-      : request.status === "pending" || request.status === "approved"
-  )
-}
-
 /** "Slack, Notion and Drive": the apps, joined as a sentence says them. */
 function listed(names: readonly string[]): string {
   if (names.length <= 1) return names.join("")
@@ -247,7 +234,7 @@ function AgentsOverview({
   const queryClient = useQueryClient()
   const agents = useQuery(agentsQueryOptions(organizationId))
   const teams = useQuery(agentTeamsQueryOptions(organizationId))
-  const inbox = useQuery(agentRequestsQueryOptions(organizationId, "inbox"))
+  const needs = useNeedsYou(organizationId, viewerId)
   const apps = useQuery({
     ...connectionsQueryOptions(organizationId),
     retry: false,
@@ -350,8 +337,8 @@ function AgentsOverview({
           <dl className="agents-hero-stats">
             <Stat
               label="waiting for you"
-              value={inbox.data && waitingOn(inbox.data, viewerId).length}
-              query={inbox}
+              value={needs.count}
+              query={needs.inbox}
               onOpen={() => openRequests()}
             />
             <Stat

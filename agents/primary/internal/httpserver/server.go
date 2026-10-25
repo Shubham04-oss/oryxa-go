@@ -67,6 +67,13 @@ type Threads interface {
 	SaveArtifact(ctx context.Context, member threads.Member, threadID, name string, expectedVersion int64, data []byte) (int64, error)
 }
 
+// ThreadConfirmations is what the pending-confirmations route needs: every
+// chat of the member's with tools waiting for their answer. threads.Service
+// implements it; a Threads without it leaves the route answering 404.
+type ThreadConfirmations interface {
+	PendingConfirmations(ctx context.Context, member threads.Member) ([]threads.PendingThread, error)
+}
+
 // Run is a started run. *threads.Run implements it.
 type Run interface {
 	ID() string
@@ -353,6 +360,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 		writer.WriteHeader(http.StatusNoContent)
 	})
 	server.handle("GET /v1/organizations/{organizationID}/threads", server.listThreads)
+	server.handle("GET /v1/organizations/{organizationID}/pending-confirmations", server.pendingConfirmations)
 	server.handle("POST /v1/organizations/{organizationID}/threads", server.createThread)
 	server.handle("GET /v1/organizations/{organizationID}/threads/{threadID}", server.getThread)
 	server.handle("PATCH /v1/organizations/{organizationID}/threads/{threadID}", server.renameThread)
@@ -1705,6 +1713,31 @@ func (server *Server) listThreads(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"threads": listed})
+}
+
+// pendingConfirmations answers how many tool confirmations wait on the
+// member across all their chats, and in which: one read for "what needs you"
+// instead of every chat's history.
+func (server *Server) pendingConfirmations(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	confirmations, ok := server.threads.(ThreadConfirmations)
+	if !ok {
+		writeError(writer, http.StatusNotFound, "not_found", "pending confirmations are not served here")
+		return
+	}
+	waiting, err := confirmations.PendingConfirmations(request.Context(), member)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	total := 0
+	for _, thread := range waiting {
+		total += thread.PendingConfirmations
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"threads": waiting, "total": total})
 }
 
 func (server *Server) createThread(writer http.ResponseWriter, request *http.Request) {

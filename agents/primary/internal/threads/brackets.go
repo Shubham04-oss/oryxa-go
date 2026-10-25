@@ -3,6 +3,7 @@ package threads
 import (
 	"context"
 	"errors"
+	"maps"
 	"time"
 
 	"google.golang.org/adk/v2/session"
@@ -98,7 +99,8 @@ func failureCode(failure error) string {
 }
 
 // record stores one of the run's brackets in its thread, and with the one
-// that ends it, the tally of the thread's files. It is written while the run
+// that ends it, the tally of the thread's files and of the confirmations
+// waiting in it. It is written while the run
 // still holds its thread, so nothing else writes the thread in between. It is
 // bookkeeping beside the answer: a failure is a log line, never a failed run,
 // and leaves the bracket only streamed. An interrupted run's record has half
@@ -129,7 +131,14 @@ func (run *Run) record(ctx context.Context, bracket Item) {
 		Error: bracket.Error, Code: bracket.Code, Interrupted: bracket.Interrupted,
 	}}
 	if bracket.Type != ItemRunStarted {
-		event.Actions.StateDelta = run.artifacts.changes(stored.State())
+		delta := run.artifacts.changes(stored.State())
+		if pending := run.confirmations.changes(stored.State()); pending != nil {
+			if delta == nil {
+				delta = map[string]any{}
+			}
+			maps.Copy(delta, pending)
+		}
+		event.Actions.StateDelta = delta
 	}
 	if err := service.sessions.AppendEvent(recordContext, stored, event); err != nil {
 		service.logger.WarnContext(recordContext, "record a run's bracket in its thread", "run_id", run.id, "thread_id", run.threadID, "type", bracket.Type, "error", err)
