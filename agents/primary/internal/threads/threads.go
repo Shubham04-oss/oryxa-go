@@ -228,6 +228,9 @@ type Service struct {
 	initialState    map[string]any
 	drain           *Drain
 	subagents       Subagents
+	// legacyCounts remembers the waiting confirmations of threads whose
+	// state does not hold them yet (PendingConfirmations).
+	legacyCounts legacyCounts
 }
 
 // New returns the service.
