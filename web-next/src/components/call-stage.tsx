@@ -359,6 +359,7 @@ export function CallStage({ active }: { active: ActiveCall }) {
             name={agent.name}
             speaking={active.agentSpeaking}
             size={size}
+            agent={agent}
           />,
         ]
       : []),

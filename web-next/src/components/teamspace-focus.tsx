@@ -182,6 +182,17 @@ export function TeamspaceFocus({
 
   const liveRoom: LiveRoom = { kind: "teamspace", id: space.id }
   const paused = space.status !== "active"
+  // The call's agent answers to the names the room shows for its agents.
+  const roomAgents = [
+    ...space.whisperers.map((whisperer) => whisperer.agent_name),
+    ...space.contributions.map((contribution) => contribution.name),
+  ]
+  // Who can't parley here sees why, not a button that fails (T13).
+  const parleyBlocked = !space.is_member
+    ? "Only people on this team can join its parleys."
+    : paused
+      ? "This teamspace is paused, so parleys are off."
+      : undefined
   const target = targetLine(space)
 
   return (
@@ -222,6 +233,8 @@ export function TeamspaceFocus({
                 subtitle={space.description || undefined}
                 member={viewerId}
                 name={memberName(space, viewerId)}
+                agents={roomAgents}
+                blocked={parleyBlocked}
               />
             )}
             {space.can_manage && (
@@ -244,6 +257,8 @@ export function TeamspaceFocus({
             subtitle={space.description || undefined}
             member={viewerId}
             name={memberName(space, viewerId)}
+            agents={roomAgents}
+            blocked={parleyBlocked}
           />
         )}
         <TabsList

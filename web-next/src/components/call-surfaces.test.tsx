@@ -18,7 +18,14 @@ import {
   useReportRoomActivity,
   useRoomChatHost,
 } from "./call-provider"
-import { CallSurface, ParleyButton, ParleyStrip, tintOf } from "./call-surfaces"
+import {
+  CallSurface,
+  ParleyButton,
+  ParleyStrip,
+  agentDoing,
+  tintOf,
+  wakeHint,
+} from "./call-surfaces"
 import type { CallView } from "@/lib/call/client"
 import { callDuration, parseVoiceFrame, whoIsIn } from "@/lib/call/client"
 import type {
@@ -51,7 +58,10 @@ class QuietSocket extends EventTarget {
 function socketFor(path: string) {
   return [...QuietSocket.all]
     .reverse()
-    .find((socket) => socket.url.includes(path))
+    .find(
+      (socket) =>
+        socket.url.endsWith(path) && !socket.url.endsWith(`/voice${path}`)
+    )
 }
 
 function json(body: unknown, status = 200) {
@@ -148,7 +158,13 @@ function fakeMedia() {
   return media
 }
 
-function Parley({ onRoomPage }: { onRoomPage: boolean }) {
+function Parley({
+  onRoomPage,
+  agents,
+}: {
+  onRoomPage: boolean
+  agents?: string[]
+}) {
   return (
     <>
       {onRoomPage && (
@@ -167,6 +183,7 @@ function Parley({ onRoomPage }: { onRoomPage: boolean }) {
             subtitle="Launch on 4 November"
             member="usr_ada"
             name="Ada"
+            agents={agents}
           />
         </>
       )}
@@ -176,7 +193,8 @@ function Parley({ onRoomPage }: { onRoomPage: boolean }) {
 }
 
 function renderParley(
-  join: () => Promise<CallMedia> = vi.fn(async () => fakeMedia())
+  join: () => Promise<CallMedia> = vi.fn(async () => fakeMedia()),
+  { agents }: { agents?: string[] } = {}
 ) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -184,7 +202,7 @@ function renderParley(
   const tree = (onRoomPage: boolean) => (
     <QueryClientProvider client={client}>
       <CallProvider joinMediaWith={join}>
-        <Parley onRoomPage={onRoomPage} />
+        <Parley onRoomPage={onRoomPage} agents={agents} />
       </CallProvider>
     </QueryClientProvider>
   )
@@ -233,6 +251,36 @@ afterEach(() => {
   cleanup()
   fetchMock.mockReset()
   vi.unstubAllGlobals()
+})
+
+describe("what the call says of its agent (T1, T2, T3)", () => {
+  it("promises notes only when the call leaves them, and says when it can't answer", () => {
+    const agent = { present: true, name: "Krude" }
+    expect(agentDoing(agent, false)).toBe("listening")
+    expect(agentDoing({ ...agent, notes: true }, false)).toBe("taking notes")
+    expect(agentDoing({ ...agent, notes: true }, true)).toBe("speaking")
+    expect(agentDoing({ ...agent, canAnswer: false }, false)).toBe(
+      "can't answer right now"
+    )
+    expect(agentDoing({ ...agent, notes: true }, false, true)).toBe("Notes")
+  })
+
+  it("tells members what to call the agent, by the names the room shows", () => {
+    expect(
+      wakeHint({
+        present: true,
+        name: "Krude",
+        names: ["Krude", "Arlo-UJVX", "Maya Chen"],
+      })
+    ).toBe("Say “Arlo, …” or “Maya, …” to ask")
+    expect(wakeHint({ present: true, name: "Krude" })).toBe(
+      "Say “Krude, …” to ask"
+    )
+    expect(wakeHint({ present: false, name: "Krude" })).toBeUndefined()
+    expect(
+      wakeHint({ present: true, name: "Krude", canAnswer: false })
+    ).toBeUndefined()
+  })
 })
 
 describe("the call's words", () => {
@@ -796,6 +844,9 @@ describe("the shared dock and tiles", () => {
   }
 
   it("flags who's sharing, whose camera is off and the agent taking notes", async () => {
+    current = view({
+      agent: { present: true, name: "Krude", canAnswer: true, notes: true },
+    })
     const media = fakeMedia()
     const tiles = media.tiles()
     media.tiles = () => [
@@ -1095,5 +1146,205 @@ describe("the agent panel's parley chip", () => {
     current = view()
     renderChips()
     expect(screen.queryByRole("group", { name: "For you now" })).toBeNull()
+  })
+})
+
+describe("a parley that works every time", () => {
+  async function joinFromStrip(
+    media = fakeMedia(),
+    options: { agents?: string[] } = {}
+  ) {
+    renderParley(
+      vi.fn(async () => media),
+      options
+    )
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    await screen.findByText(/^You're in the parley/)
+    return media
+  }
+
+  it("joins with the names the room shows for its agents, which the call's agent answers to (T3)", async () => {
+    await joinFromStrip(fakeMedia(), { agents: ["Arlo-UJVX", "Maya"] })
+    const [, init] = requests("/call/join", "POST")[0] ?? []
+    expect(JSON.parse(String(init?.body))).toEqual({
+      name: "Ada",
+      agents: ["Arlo-UJVX", "Maya"],
+    })
+  })
+
+  it("keeps the member's words until the room takes them, and says when they aren't arriving (T4)", async () => {
+    let failing = 2
+    const answer = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation(async (url, init) => {
+      if (String(url).endsWith("/call/transcript") && failing > 0) {
+        failing -= 1
+        return json({ error: { code: "internal", message: "down" } }, 500)
+      }
+      return answer(url, init)
+    })
+    const media = await joinFromStrip()
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }))
+    media.say({
+      id: "s1",
+      member: "usr_ada",
+      name: "Ada",
+      text: "Ship it Friday.",
+      partial: false,
+      at: 1,
+    })
+    expect(
+      await screen.findByText(
+        /Your words aren't reaching the room/,
+        undefined,
+        {
+          timeout: 6000,
+        }
+      )
+    ).toBeTruthy()
+    await waitFor(
+      () => expect(requests("/call/transcript", "POST")).toHaveLength(3),
+      { timeout: 6000 }
+    )
+    // The same words, sent again until the room took them.
+    for (const [, init] of requests("/call/transcript", "POST")) {
+      expect(JSON.parse(String(init?.body)).segments[0].id).toBe("s1")
+    }
+    await waitFor(() =>
+      expect(screen.queryByText(/Your words aren't reaching the room/)).toBe(
+        null
+      )
+    )
+  }, 15_000)
+
+  it("sends the member's last words before leaving", async () => {
+    const media = await joinFromStrip()
+    media.say({
+      id: "s9",
+      member: "usr_ada",
+      name: "Ada",
+      text: "Bye all.",
+      partial: false,
+      at: 9,
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Leave" }))
+    await waitFor(() => expect(requests("/call/leave", "POST")).toHaveLength(1))
+    const sent = requests("/call/transcript", "POST")
+    expect(sent).toHaveLength(1)
+    const order = fetchMock.mock.calls.map(([url]) => String(url))
+    expect(
+      order.findIndex((url) => url.endsWith("/call/transcript"))
+    ).toBeLessThan(order.findIndex((url) => url.endsWith("/call/leave")))
+  })
+
+  it("shows what the agent heard and why it stayed quiet, and never shows another frame as private (T2, T3)", async () => {
+    await joinFromStrip()
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }))
+    const voice = socketFor("/voice/live")
+    act(() =>
+      voice?.frame({ type: "voice.heard", text: "Krude, what's next?" })
+    )
+    expect(
+      await screen.findByText("Krude heard: “Krude, what's next?”")
+    ).toBeTruthy()
+    act(() => voice?.frame({ type: "voice.trouble", reason: "no_model" }))
+    expect(
+      await screen.findByText("Krude can't answer in calls right now.")
+    ).toBeTruthy()
+    act(() => voice?.frame({ type: "voice.something_new", text: "secret" }))
+    expect(screen.queryByText(/Only you/)).toBeNull()
+  })
+
+  it("says how to address the agent while the member is in the call (T3)", async () => {
+    current = view({
+      agent: {
+        present: true,
+        name: "Krude",
+        names: ["Krude", "Arlo"],
+        canAnswer: true,
+        notes: false,
+      },
+    })
+    await joinFromStrip()
+    expect(
+      await screen.findByText(/Say “Arlo, …” or “Krude, …” to ask/)
+    ).toBeTruthy()
+  })
+
+  it("says when a control fails instead of doing nothing (T16)", async () => {
+    const answer = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation(async (url, init) =>
+      String(url).endsWith("/call/recording")
+        ? json({ error: { code: "internal", message: "down" } }, 500)
+        : answer(url, init)
+    )
+    await joinFromStrip()
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }))
+    fireEvent.click(screen.getByRole("button", { name: "Record" }))
+    expect(
+      await screen.findByText("Couldn't start recording. Try again.")
+    ).toBeTruthy()
+  })
+
+  it("gives the last one to leave the parley's summary too (T16)", async () => {
+    current = view({
+      participants: [
+        { member: "usr_ada", name: "Ada", joinedAt: "2026-10-14T10:00:00Z" },
+      ],
+      agent: { present: true, name: "Krude", canAnswer: true, notes: true },
+    })
+    await joinFromStrip()
+    await waitFor(() =>
+      expect(requests(`${base}/call`).length).toBeGreaterThan(1)
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Leave" }))
+    const ended = await screen.findByRole("dialog", {
+      name: "What's kept from EU launch",
+    })
+    expect(
+      within(ended).getByText(/agent's notes will appear in the room/)
+    ).toBeTruthy()
+  })
+
+  it("doesn't offer a parley to someone who can't join one, and says why (T13)", async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <CallProvider joinMediaWith={vi.fn(async () => fakeMedia())}>
+          <ParleyButton
+            organizationId="org_1"
+            room={room}
+            roomName="EU launch"
+            member="usr_ada"
+            name="Ada"
+            blocked="This teamspace is paused, so parleys are off."
+          />
+        </CallProvider>
+      </QueryClientProvider>
+    )
+    const button = screen.getByRole("button", { name: /Parley/ })
+    expect(button.hasAttribute("disabled")).toBe(true)
+    expect(button.getAttribute("title")).toBe(
+      "This teamspace is paused, so parleys are off."
+    )
+    expect(requests(`${base}/call`)).toHaveLength(0)
+  })
+
+  it("keeps the Parley button for a passing error, not only a refusal (T13)", async () => {
+    fetchMock.mockImplementation(async (url) =>
+      String(url).endsWith(`${base}/call`)
+        ? json({ error: { code: "internal", message: "down" } }, 500)
+        : json({ events: [], next: 0, more: false })
+    )
+    renderParley()
+    const button = await screen.findByRole("button", { name: /Parley/ })
+    await waitFor(() =>
+      expect(requests(`${base}/call`).length).toBeGreaterThan(0)
+    )
+    expect(button.hasAttribute("disabled")).toBe(false)
   })
 })

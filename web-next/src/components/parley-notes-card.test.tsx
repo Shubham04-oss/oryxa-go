@@ -103,6 +103,15 @@ describe("parley notes in the room", () => {
     expect(within(card).queryByText(/Decided:/)).toBeNull()
   })
 
+  it("carries its seq, so a room whose newest message is notes still marks itself read (T9)", () => {
+    renderRoom([roomMessage(1, ada, "Morning"), notesMessage(2, notes)])
+    const card = screen.getByRole("article", {
+      name: "Parley notes, posted by Simulated Org Agent",
+    })
+    // The room's read marker finds its newest message by [data-seq].
+    expect(document.querySelector('[data-seq="2"]')).toBe(card)
+  })
+
   it("leaves plain messages as they were", () => {
     renderRoom([
       roomMessage(1, ada, "Morning"),

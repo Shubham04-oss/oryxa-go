@@ -66,6 +66,8 @@ export function ParleyNotesCard({
     <article
       className="workspace-message workspace-parley-notes"
       data-author={message.author_kind}
+      // The room marks itself read by its newest message's seq (T9).
+      data-seq={message.seq}
       aria-label={`Parley notes, posted by ${posterName}`}
     >
       <span className="workspace-parley-notes-gutter" aria-hidden="true" />
