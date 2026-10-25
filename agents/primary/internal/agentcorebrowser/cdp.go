@@ -332,6 +332,10 @@ func (c *cdpClient) waitUntilReady(ctx context.Context) error {
 				return nil
 			}
 		} else {
+			// A broken stream won't recover by waiting.
+			if isTransportError(err) {
+				return fmt.Errorf("wait for browser page: %w", err)
+			}
 			// A navigation can briefly destroy the prior execution context. Retrying
 			// is safe because this check never changes page state.
 			lastErr = err
@@ -383,6 +387,22 @@ func (c *cdpClient) evaluate(ctx context.Context, expression string) (json.RawMe
 	return response.Result.Value, nil
 }
 
+// transportError is a failure of the automation WebSocket itself (a send,
+// a receive or a deadline), as opposed to an error the browser answered. The
+// connection is unusable after one: gorilla treats a missed deadline as
+// final.
+type transportError struct{ err error }
+
+func (e *transportError) Error() string { return e.err.Error() }
+func (e *transportError) Unwrap() error { return e.err }
+
+// isTransportError reports whether err means the automation stream broke and
+// must be reconnected before the next command.
+func isTransportError(err error) bool {
+	var transport *transportError
+	return errors.As(err, &transport)
+}
+
 type cdpError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
@@ -409,13 +429,13 @@ func (c *cdpClient) command(ctx context.Context, method string, params any, atta
 		deadline = contextDeadline
 	}
 	if err := c.connection.SetWriteDeadline(deadline); err != nil {
-		return err
+		return &transportError{err}
 	}
 	if err := c.connection.WriteJSON(message); err != nil {
-		return fmt.Errorf("send CDP %s: %w", method, err)
+		return &transportError{fmt.Errorf("send CDP %s: %w", method, err)}
 	}
 	if err := c.connection.SetReadDeadline(deadline); err != nil {
-		return err
+		return &transportError{err}
 	}
 	for {
 		var response struct {
@@ -424,7 +444,7 @@ func (c *cdpClient) command(ctx context.Context, method string, params any, atta
 			Error  *cdpError       `json:"error"`
 		}
 		if err := c.connection.ReadJSON(&response); err != nil {
-			return fmt.Errorf("receive CDP %s: %w", method, err)
+			return &transportError{fmt.Errorf("receive CDP %s: %w", method, err)}
 		}
 		if response.ID == nil || *response.ID != id {
 			continue

@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"strings"
@@ -29,6 +30,10 @@ const (
 	SystemBrowser = "aws.browser.v1"
 
 	DefaultSessionTimeout = 15 * time.Minute
+	// DefaultIdleTimeout stops a chat's browser this long after its last
+	// browser call, as the Cloudflare browser's idle sweep does. The session
+	// timeout stays the backstop.
+	DefaultIdleTimeout    = 10 * time.Minute
 	MinSessionTimeout     = time.Minute
 	MaxSessionTimeout     = 8 * time.Hour
 	DefaultViewportWidth  = int32(1440)
@@ -104,10 +109,12 @@ type Controller interface {
 type Options struct {
 	BrowserIdentifier string
 	SessionTimeout    time.Duration
-	ViewportWidth     int32
-	ViewportHeight    int32
-	now               func() time.Time
-	connector         automationConnector
+	// IdleTimeout is DefaultIdleTimeout when zero.
+	IdleTimeout    time.Duration
+	ViewportWidth  int32
+	ViewportHeight int32
+	now            func() time.Time
+	connector      automationConnector
 	// resolver looks up the host of a URL the browser is sent to, and is the
 	// system's when nil.
 	resolver safehttp.Resolver
@@ -123,6 +130,7 @@ type Manager struct {
 	resolver   safehttp.Resolver
 	identifier string
 	timeout    time.Duration
+	idle       time.Duration
 	width      int32
 	height     int32
 	now        func() time.Time
@@ -130,6 +138,8 @@ type Manager struct {
 	mu       sync.Mutex
 	closed   bool
 	sessions map[string]*managedSession
+	// done stops the idle sweeper when the manager closes.
+	done chan struct{}
 }
 
 type managedSession struct {
@@ -137,7 +147,9 @@ type managedSession struct {
 	key        string
 	refs       int
 	id         string
+	endpoint   string
 	expiresAt  time.Time
+	lastUsed   time.Time
 	automation automationClient
 }
 
@@ -156,7 +168,12 @@ func New(config aws.Config, options Options) (*Manager, error) {
 		}
 		options.connector = connector
 	}
-	return newManager(&runtimeClient{client: bedrockagentcore.NewFromConfig(config)}, options)
+	manager, err := newManager(&runtimeClient{client: bedrockagentcore.NewFromConfig(config)}, options)
+	if err != nil {
+		return nil, err
+	}
+	go manager.sweepEvery(idleSweepInterval(manager.idle))
+	return manager, nil
 }
 
 func newManager(api runtimeAPI, options Options) (*Manager, error) {
@@ -176,6 +193,13 @@ func newManager(api runtimeAPI, options Options) (*Manager, error) {
 	}
 	if timeout < MinSessionTimeout || timeout > MaxSessionTimeout || timeout%time.Second != 0 {
 		return nil, fmt.Errorf("AgentCore browser session timeout must be a whole number of seconds between %s and %s", MinSessionTimeout, MaxSessionTimeout)
+	}
+	idle := options.IdleTimeout
+	if idle == 0 {
+		idle = DefaultIdleTimeout
+	}
+	if idle < time.Minute {
+		return nil, errors.New("AgentCore browser idle timeout must be at least a minute")
 	}
 	width := options.ViewportWidth
 	if width == 0 {
@@ -205,10 +229,12 @@ func newManager(api runtimeAPI, options Options) (*Manager, error) {
 		resolver:   resolver,
 		identifier: identifier,
 		timeout:    timeout,
+		idle:       idle,
 		width:      width,
 		height:     height,
 		now:        now,
 		sessions:   map[string]*managedSession{},
+		done:       make(chan struct{}),
 	}, nil
 }
 
@@ -226,8 +252,15 @@ func (m *Manager) Invoke(ctx context.Context, sessionKey string, request Request
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 
+	entry.lastUsed = m.now()
 	recreated := false
-	if entry.id == "" || entry.automation == nil || !m.now().Before(entry.expiresAt.Add(-sessionExpiryCushion(m.timeout))) {
+	expiring := !m.now().Before(entry.expiresAt.Add(-sessionExpiryCushion(m.timeout)))
+	if entry.id != "" && entry.automation == nil && !expiring {
+		// The stream broke on an earlier call: reconnect to the same session,
+		// keeping its cookies and pages, before starting a new one.
+		m.reconnect(ctx, entry)
+	}
+	if entry.id == "" || entry.automation == nil || expiring {
 		if err := m.recreateSession(ctx, entry); err != nil {
 			return Result{}, err
 		}
@@ -236,12 +269,30 @@ func (m *Manager) Invoke(ctx context.Context, sessionKey string, request Request
 
 	result, err := entry.automation.invoke(ctx, request)
 	if err != nil {
+		if isTransportError(err) {
+			// The stream is unusable now; the next call reconnects (B5).
+			_ = entry.automation.close()
+			entry.automation = nil
+		}
 		return Result{}, fmt.Errorf("run AgentCore browser %s: %w", request.Action, err)
 	}
 	result.SessionRecreated = recreated
 	result.ViewportWidth = m.width
 	result.ViewportHeight = m.height
 	return result, nil
+}
+
+// reconnect opens a new automation stream to the session entry already has.
+// When that fails, the caller starts a new session.
+func (m *Manager) reconnect(ctx context.Context, entry *managedSession) {
+	if entry.endpoint == "" {
+		return
+	}
+	automation, err := m.connector.connect(ctx, entry.endpoint)
+	if err != nil {
+		return
+	}
+	entry.automation = automation
 }
 
 func (m *Manager) recreateSession(ctx context.Context, entry *managedSession) error {
@@ -278,6 +329,8 @@ func (m *Manager) recreateSession(ctx context.Context, entry *managedSession) er
 		)
 	}
 	entry.automation = automation
+	// Only a session that once connected is worth reconnecting to.
+	entry.endpoint = started.automationEndpoint
 	return nil
 }
 
@@ -303,6 +356,7 @@ func (m *Manager) Close(ctx context.Context) error {
 		return nil
 	}
 	m.closed = true
+	close(m.done)
 	entries := make([]*managedSession, 0, len(m.sessions))
 	for _, entry := range m.sessions {
 		entries = append(entries, entry)
@@ -330,6 +384,7 @@ func (m *Manager) stopSession(ctx context.Context, entry *managedSession) error 
 	}
 	id := entry.id
 	entry.id = ""
+	entry.endpoint = ""
 	entry.expiresAt = time.Time{}
 	if id != "" {
 		if err := m.api.stop(ctx, m.identifier, id); err != nil {
@@ -383,6 +438,84 @@ func (m *Manager) acquireSession(key string, create bool) (*managedSession, erro
 	entry := &managedSession{key: key, refs: 1}
 	m.sessions[key] = entry
 	return entry, nil
+}
+
+// sweepEvery stops idle browsers until the manager closes.
+func (m *Manager) sweepEvery(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-m.done:
+			return
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), defaultCommandTimeout)
+			if err := m.sweepIdle(ctx); err != nil {
+				slog.Warn("stopping idle AgentCore browsers failed", "error", err)
+			}
+			cancel()
+		}
+	}
+}
+
+// sweepIdle stops every browser no call has used for the idle timeout, so a
+// chat left alone doesn't keep a signed-in browser running until its TTL
+// (B4). A browser in use is skipped; a failed stop keeps its id, so the next
+// sweep tries again.
+func (m *Manager) sweepIdle(ctx context.Context) error {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil
+	}
+	now := m.now()
+	var idle []*managedSession
+	for _, entry := range m.sessions {
+		if entry.refs == 0 && entry.id != "" && !now.Before(entry.lastUsed.Add(m.idle)) {
+			entry.refs++
+			idle = append(idle, entry)
+		}
+	}
+	m.mu.Unlock()
+
+	var failures []error
+	for _, entry := range idle {
+		entry.mu.Lock()
+		// A call may have used it between the check and the lock.
+		if entry.id != "" && !m.now().Before(entry.lastUsed.Add(m.idle)) {
+			if err := m.stopIdle(ctx, entry); err != nil {
+				failures = append(failures, err)
+			}
+		}
+		entry.mu.Unlock()
+		m.releaseSession(entry)
+	}
+	return errors.Join(failures...)
+}
+
+// stopIdle stops an idle session. Unlike stopSession it keeps the id when
+// AgentCore refuses, so the next sweep (or the chat's next call, which stops
+// it before starting another) tries again.
+func (m *Manager) stopIdle(ctx context.Context, entry *managedSession) error {
+	if entry.automation != nil {
+		_ = entry.automation.close()
+		entry.automation = nil
+	}
+	entry.endpoint = ""
+	if err := m.api.stop(ctx, m.identifier, entry.id); err != nil {
+		return fmt.Errorf("stop idle AgentCore browser %q: %w", entry.id, err)
+	}
+	entry.id = ""
+	entry.expiresAt = time.Time{}
+	return nil
+}
+
+func idleSweepInterval(idle time.Duration) time.Duration {
+	interval := idle / 4
+	if interval > time.Minute {
+		return time.Minute
+	}
+	return interval
 }
 
 func wrapError(err error, message string) error {
