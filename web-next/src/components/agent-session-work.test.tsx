@@ -9,10 +9,16 @@ import type { SessionWorkTab } from "./agent-session-work"
 import { threadKeys } from "@/lib/threads/client"
 import type { ThreadDetail } from "@/lib/threads/client"
 
+const roomState: {
+  children: { isPending: boolean; isError: boolean; data: unknown[] }
+  log: { events: unknown[] }
+} = {
+  children: { isPending: false, isError: false, data: [] },
+  log: { events: [] },
+}
+
 vi.mock("./live-work", () => ({
-  useRoomChildren: () => ({
-    children: { isPending: false, isError: false, data: [] },
-  }),
+  useRoomChildren: () => roomState,
   LiveChildren: () => null,
 }))
 vi.mock("./agent-timeline", () => ({
@@ -21,7 +27,24 @@ vi.mock("./agent-timeline", () => ({
   ),
 }))
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  roomState.children = { isPending: false, isError: false, data: [] }
+  roomState.log = { events: [] }
+})
+
+const minutesAgo = (minutes: number) =>
+  new Date(Date.now() - minutes * 60_000).toISOString()
+
+function browserRow(name: string, lastUsedAt: string) {
+  return {
+    kind: "browser",
+    name,
+    status: "running",
+    createdAt: lastUsedAt,
+    lastUsedAt,
+  }
+}
 
 const detail: ThreadDetail = {
   id: "th_1",
@@ -112,5 +135,31 @@ describe("the session's work tabs", () => {
         "Start a conversation to see the requests it files here."
       )
     ).toBeTruthy()
+  })
+
+  it("counts only browsers really running: not idle past the limit, not stopped in the log", () => {
+    roomState.children.data = [
+      browserRow("br_now", minutesAgo(1)),
+      browserRow("br_idle", minutesAgo(11)),
+      browserRow("br_ended", minutesAgo(2)),
+    ]
+    roomState.log.events = [
+      {
+        seq: 9,
+        at: minutesAgo(1),
+        type: "browser.stopped",
+        summary: "Browser closed (it had ended)",
+        data: { child: "br_ended" },
+      },
+    ]
+    renderTabs("th_1")
+    expect(screen.getByRole("tab", { name: "Live1" })).toBeTruthy()
+  })
+
+  it("says nothing is live in a chat that never ran a browser", () => {
+    renderTabs("th_1")
+    fireEvent.click(screen.getByRole("tab", { name: "Live" }))
+    expect(screen.getByText(/Nothing live in this chat/)).toBeTruthy()
+    expect(screen.queryByRole("alert")).toBeNull()
   })
 })

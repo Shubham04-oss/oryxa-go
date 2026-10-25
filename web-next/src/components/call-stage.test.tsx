@@ -222,7 +222,8 @@ describe("the parley's stage", () => {
         name: "brw_1",
         status: "running",
         createdAt: "2026-10-15T09:00:00Z",
-        lastUsedAt: "2026-10-15T09:10:00Z",
+        // Used just now: a browser idle past the limit shows as stopped.
+        lastUsedAt: new Date().toISOString(),
       },
       {
         kind: "browser",

@@ -9,6 +9,7 @@ import { threadRoom } from "@/lib/live/children"
 import type { LiveTarget } from "@/lib/live/children"
 import { AgentRequestCard } from "./agent-timeline"
 import { LiveChildren, useRoomChildren } from "./live-work"
+import { useRunningPredicate } from "./browser-pane-state"
 import { PrimaryAgentFiles, useConversationFiles } from "./primary-agent-files"
 import type { PrimaryAgentFileTarget } from "./primary-agent-files"
 import "./agent-session.css"
@@ -80,14 +81,15 @@ export function SessionWorkTabs({
 }) {
   const room = threadRoom(threadId)
   const { files } = useConversationFiles(organizationId, threadId)
-  // One reader of the room's log at a time: on the Live tab, its tiles read
-  // it; elsewhere this does, for the tab's count (they share the query).
-  const { children } = useRoomChildren(organizationId, room, {
-    enabled: tab !== "live",
-  })
+  // One reader of the room's list and log, for the tab's count and its
+  // tiles alike, so the two never disagree (B16).
+  const roomChildren = useRoomChildren(organizationId, room)
+  const { children, log } = roomChildren
+  const isRunning = useRunningPredicate(organizationId, room, log.events)
   const { detail, requests } = useConversationRequests(organizationId, threadId)
   const live = children.data ?? []
-  const running = live.filter((child) => child.status === "running").length
+  // The same state the tiles and the pane show (B16).
+  const running = live.filter(isRunning).length
   const count = (value: number) =>
     value > 0 && <span className="agent-session-tab-count">{value}</span>
 
@@ -125,14 +127,14 @@ export function SessionWorkTabs({
         className="agent-session-tab-panel agent-session-tab-padded"
         value="live"
       >
-        {/* The tiles read the room (and its log) while this tab is open;
-            the lines below follow the same query. */}
+        {/* The tiles and the lines below follow the same list and log. */}
         {room && (
           <LiveChildren
             organizationId={organizationId}
             room={room}
             viewerId={viewerId}
             title="This conversation's sandbox and browser"
+            shared={roomChildren}
             onOpen={(child) => onOpenLive({ room, child })}
           />
         )}
@@ -144,13 +146,13 @@ export function SessionWorkTabs({
           <Quiet role="status">Loading live work…</Quiet>
         ) : children.isError ? (
           <Quiet role="alert">
-            Couldn't load this conversation's live work.
+            Couldn't load this conversation's live work. Try again in a moment.
           </Quiet>
         ) : (
           live.length === 0 && (
             <Quiet>
-              Nothing live yet. When your agent starts a sandbox or a browser
-              for this conversation, it appears here.
+              Nothing live in this chat. When your agent starts a sandbox or a
+              browser for this conversation, it appears here.
             </Quiet>
           )
         )}

@@ -355,4 +355,169 @@ describe("RoomLive", () => {
       "allow-scripts allow-forms allow-popups"
     )
   })
+
+  it("shows nothing live, not an error, for a room the edge doesn't have yet", async () => {
+    fetchMock.mockImplementation(async () =>
+      json({ error: { code: "not_found", message: "no such room" } }, 404)
+    )
+    renderLive()
+    expect(await screen.findByText(/No sandbox or browser yet/)).toBeTruthy()
+    expect(screen.queryByText(/Couldn't load/)).toBeNull()
+    // No log to follow in a room that doesn't exist.
+    expect(calls(`${base}/log`)).toHaveLength(0)
+  })
+
+  it("says a browser idle past the limit has stopped, and doesn't wake it", async () => {
+    const old = new Date(Date.now() - 11 * 60_000).toISOString()
+    fetchMock.mockImplementation(async (url) => {
+      const target = String(url)
+      if (target.endsWith(`${base}/children`)) {
+        return json({ children: [{ ...browser, lastUsedAt: old }] })
+      }
+      if (target.includes(`${base}/log`))
+        return json({ events: [], next: 0, more: false })
+      return json({ url: "https://live.example/tab", expiresAt: now })
+    })
+    renderLive()
+    const tile = await screen.findByRole("button", {
+      name: "Open Your browser",
+    })
+    expect(tile.textContent).toContain("Stopped")
+    fireEvent.click(tile)
+    expect(await screen.findByText(/This browser has stopped/)).toBeTruthy()
+    const pane = screen.getByRole("region", { name: "Your browser" })
+    expect(within(pane).getByText("Stopped")).toBeTruthy()
+    expect(calls("/browser/br_1/live", "POST")).toHaveLength(0)
+  })
+
+  it("opening a 'running' browser that has ended shows it stopped, everywhere, and starts nothing", async () => {
+    fetchMock.mockImplementation(async (url) => {
+      const target = String(url)
+      if (target.endsWith(`${base}/children`))
+        return json({ children: [browser] })
+      if (target.includes(`${base}/log`))
+        return json({ events: [], next: 0, more: false })
+      if (target.includes("/browser/br_1/live")) {
+        return json(
+          { error: { code: "conflict", message: "this browser has stopped" } },
+          409
+        )
+      }
+      return json({ active: false })
+    })
+    renderLive()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open Your browser" })
+    )
+    expect(await screen.findByText(/This browser has stopped/)).toBeTruthy()
+    const pane = screen.getByRole("region", { name: "Your browser" })
+    expect(within(pane).getByText("Stopped")).toBeTruthy()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(calls("/browser/br_1/live", "POST")).toHaveLength(1)
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }))
+    const tile = await screen.findByRole("button", {
+      name: "Open Your browser",
+    })
+    expect(tile.textContent).toContain("Stopped")
+  })
+
+  it("tells a network failure apart from a stopped or private browser", async () => {
+    fetchMock.mockImplementation(async (url) => {
+      const target = String(url)
+      if (target.endsWith(`${base}/children`))
+        return json({ children: [browser] })
+      if (target.includes(`${base}/log`))
+        return json({ events: [], next: 0, more: false })
+      if (target.includes("/browser/br_1/live")) {
+        return json({ error: { code: "unavailable", message: "down" } }, 503)
+      }
+      return json({ active: false })
+    })
+    renderLive()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open Your browser" })
+    )
+    expect(await screen.findByText(/Couldn't reach the browser/)).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy()
+  })
+
+  it("treats a hand back with no handoff left open as done", async () => {
+    handoff = { active: true, reason: "Sign in" }
+    extraEvents = [
+      {
+        seq: 2,
+        at: now,
+        org: "org_1",
+        room,
+        actor: { type: "agent", id: "agt_0", onBehalfOf: "usr_ada" },
+        run: "run_1",
+        type: "browser.handoff",
+        summary: "Asked for a sign-in",
+        data: { child: "br_1" },
+        durationMs: 0,
+        private: false,
+      },
+    ]
+    const original = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation(async (url, init) => {
+      if (String(url).includes("/browser/br_1/resume")) {
+        return json(
+          { error: { code: "conflict", message: "no handoff is open" } },
+          409
+        )
+      }
+      return original(url, init)
+    })
+    renderLive()
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Open Your browser, needs a hand",
+      })
+    )
+    fireEvent.click(await screen.findByRole("button", { name: "Take over" }))
+    fireEvent.click(screen.getByRole("button", { name: "Hand back" }))
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Hand back" })).toBeNull()
+    )
+    expect(screen.queryByText(/Couldn't hand the browser back/)).toBeNull()
+  })
+
+  it("drops the ask for a hand once the handoff timed out", async () => {
+    extraEvents = [
+      {
+        seq: 2,
+        at: now,
+        org: "org_1",
+        room,
+        actor: { type: "agent", id: "agt_0", onBehalfOf: "usr_ada" },
+        run: "run_1",
+        type: "browser.handoff",
+        summary: "Asked for a sign-in",
+        data: { child: "br_1" },
+        durationMs: 0,
+        private: false,
+      },
+      {
+        seq: 3,
+        at: now,
+        org: "org_1",
+        room,
+        actor: { type: "agent", id: "agt_0", onBehalfOf: "usr_ada" },
+        run: "run_1",
+        type: "browser.handoff.timeout",
+        summary: "Nobody took over in time",
+        data: { child: "br_1" },
+        durationMs: 0,
+        private: false,
+      },
+    ]
+    renderLive()
+    expect(
+      await screen.findByRole("button", { name: "Open Your browser" })
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole("button", { name: "Open Your browser, needs a hand" })
+    ).toBeNull()
+  })
 })
