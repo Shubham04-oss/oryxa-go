@@ -1409,10 +1409,10 @@ describe("the panel's header, switch and chips", () => {
     const onOpenRequests = vi.fn()
     withQueries(panel({ onOpenRequests }))
     const chip = await screen.findByRole("button", {
-      name: "Needs you: 2 requests, open Requests",
+      name: "Needs you: 2 things, open Requests",
     })
     expect(
-      screen.getByRole("tab", { name: "At a glance, 2 requests need you" })
+      screen.getByRole("tab", { name: "At a glance, 2 things need you" })
     ).toBeTruthy()
     fireEvent.click(chip)
     expect(onOpenRequests).toHaveBeenCalledOnce()

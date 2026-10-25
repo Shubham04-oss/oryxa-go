@@ -21,10 +21,16 @@ import { AgentsNotice } from "./agents-parts"
 import { agentsErrorMessage, plural } from "./agents-format"
 import { RequestCard, RequestCardById } from "./request-card"
 import { originLabel, waitsOnOwner } from "./request-card-format"
+import type { Reader } from "./request-card-format"
+import { conversationOf, conversationsOf } from "./requests-view-group"
+import type { RequestConversation } from "./requests-view-group"
+import { RequestThread, partyName } from "./requests-thread"
+import { ThinkingOrb } from "thinking-orbs"
 import { IdentityAvatar } from "./workspace-avatar"
 import { personIdentity } from "./people-format"
 import {
   clearStats,
+  madeIn,
   matchesSearch,
   rowTag,
   rowTime,
@@ -37,8 +43,10 @@ import {
   requestListQueryOptions,
   usePeopleNames,
 } from "./requests-view-queries"
-import type { OriginFilter } from "./requests-view-queries"
+import type { OriginFilter, PeopleNames } from "./requests-view-queries"
 import { AGENT_REQUESTS_LIMIT, agentsQueryOptions } from "@/lib/agents/queries"
+import { INBOX_LIMIT, useInbox, useNeedsYou } from "@/hooks/use-needs-you"
+import type { PendingChat } from "@/lib/home/confirmations"
 import { primaryAgent, isUnavailableHere } from "@/lib/agents/policy"
 import type {
   AgentActivityEntry,
@@ -55,8 +63,12 @@ const tabs: ReadonlyArray<{ key: Tab; label: string }> = [
   { key: "activity", label: "Activity" },
 ]
 
-const filters: ReadonlyArray<{ key: OriginFilter; label: string }> = [
-  { key: "all", label: "All" },
+// The channel is a chip (N12): on, the lists hold that channel's requests;
+// pressed again, every channel's.
+const filters: ReadonlyArray<{
+  key: Exclude<OriginFilter, "all">
+  label: string
+}> = [
   { key: "slack", label: "Slack" },
   { key: "agent", label: "Oryxa" },
 ]
@@ -129,54 +141,104 @@ const emptyWords: Record<
   },
 }
 
-function RequestRow({
-  request,
+/**
+ * One conversation's row: who it is with, where, the newest ask, and where
+ * it stands; with more than one ask, how many. It opens the ask that waits
+ * on the member, else the newest.
+ */
+function ConversationRow({
+  conversation,
   box,
-  waits,
+  waiting,
   selected,
-  nameOf,
-  now,
+  people,
+  reader,
   agentName,
   onSelect,
 }: {
-  request: AgentRequest
+  conversation: RequestConversation
   box: AgentRequestBox
-  waits: boolean
+  /** The ask in it that waits on the member, if one does. */
+  waiting?: AgentRequest
   selected: boolean
-  nameOf: (userId: string) => string | undefined
-  now: number
+  people: PeopleNames
+  reader: Reader
   /** The member's agent, for "Answered by Krude". */
   agentName?: string
   onSelect: (requestId: string) => void
 }) {
+  const request = conversation.latest
   // Inbox rows name who asked; Sent rows name who was asked.
   const party = box === "inbox" ? request.requester : request.target
-  const name =
-    nameOf(party.user_id) ||
-    party.user_display_name?.trim() ||
-    party.user_email?.trim() ||
-    "Someone"
+  const { name, hint } = partyName(party, reader.viewerId, people)
   const what = request.task.trim() || request.purpose.trim()
+  const count = conversation.requests.length
+  const shown = waiting ?? request
   return (
     <button
       type="button"
       className={selected ? "requests-row is-active" : "requests-row"}
       aria-current={selected ? "true" : undefined}
-      data-waiting={waits ? "true" : undefined}
-      onClick={() => onSelect(request.id)}
+      data-waiting={waiting ? "true" : undefined}
+      onClick={() => onSelect(shown.id)}
     >
       <IdentityAvatar identity={personIdentity(party.user_id, name)} />
       <span className="requests-row-copy">
         <span className="requests-row-head">
           <strong>{name}</strong>
+          {hint && <small className="requests-row-hint">{hint}</small>}
           <small>· {originLabel(request)}</small>
           <time dateTime={request.created_at}>
-            {rowTime(request.created_at, now)}
+            {rowTime(request.created_at, reader.now)}
           </time>
         </span>
         <span className="requests-row-what">{what}</span>
         <span className="requests-row-tag">
-          {rowTag(request, waits, now, box === "inbox" ? agentName : undefined)}
+          {rowTag(
+            shown,
+            Boolean(waiting),
+            reader,
+            box === "inbox" ? agentName : undefined
+          )}
+          {count > 1 && (
+            <span className="requests-row-count"> · {count} messages</span>
+          )}
+        </span>
+      </span>
+    </button>
+  )
+}
+
+/** A chat in which a tool waits for the member's OK: it opens the chat. */
+function ChatRow({
+  chat,
+  onOpen,
+}: {
+  chat: PendingChat
+  onOpen?: (threadId: string) => void
+}) {
+  const title = chat.title.trim() || "A conversation"
+  const count = chat.pending_confirmations
+  return (
+    <button
+      type="button"
+      className="requests-row"
+      data-waiting="true"
+      disabled={!onOpen}
+      aria-label={`Open ${title}: ${count} ${count === 1 ? "tool waits" : "tools wait"} for your OK`}
+      onClick={() => onOpen?.(chat.id)}
+    >
+      <ThinkingOrb size={20} state="listening" aria-hidden="true" />
+      <span className="requests-row-copy">
+        <span className="requests-row-head">
+          <strong>Your agent</strong>
+          <small>· Chat</small>
+        </span>
+        <span className="requests-row-what">{title}</span>
+        <span className="requests-row-tag">
+          {count === 1
+            ? "A tool waits for your OK"
+            : `${count} tools wait for your OK`}
         </span>
       </span>
     </button>
@@ -192,11 +254,16 @@ function RequestList({
   onSelect,
   search,
   agentName,
+  chats = [],
+  onOpenConversation,
 }: {
   organizationId: string
   viewerId: string
   box: AgentRequestBox
   origin: OriginFilter
+  /** Chats with a tool waiting for the member's OK: they wait on them too. */
+  chats?: readonly PendingChat[]
+  onOpenConversation?: (threadId: string) => void
   /** What the member typed in the list's search: only the requests it matches show. */
   search: string
   agentName?: string
@@ -205,17 +272,33 @@ function RequestList({
   onSelect: (requestId: string) => void
 }) {
   const people = usePeopleNames(organizationId, viewerId)
-  const query = useQuery(requestListQueryOptions(organizationId, box, origin))
+  // One read per box, whatever the filter: the inbox's is the one every
+  // page shares.
+  const inbox = useInbox(organizationId, viewerId, box === "inbox")
+  const sent = useQuery({
+    ...requestListQueryOptions(organizationId, "sent"),
+    enabled: box === "sent",
+  })
+  const query = box === "inbox" ? inbox : sent
+  const limit = box === "inbox" ? INBOX_LIMIT : AGENT_REQUESTS_LIMIT
   const now = Date.now()
-  const requests = (query.data ?? []).filter((request) =>
+  const requests = madeIn(query.data ?? [], origin).filter((request) =>
     matchesSearch(request, search, people.nameOf)
   )
+  // Chats are no channel's: they show with every request, not a filter's.
+  const waitingChats =
+    box === "inbox" && origin === "all" && !search.trim() ? chats : []
   const waitsNow = (request: AgentRequest) =>
     box === "inbox" && waitsOnOwner(request, viewerId, now)
-  // Each request keeps the place it first had while the list is open: the one
-  // the member has just answered stays under their pointer.
-  const layout = useStableLayout(requests, (request) =>
-    waitsNow(request) ? "waiting" : "earlier"
+  const reader: Reader = { viewerId, nameOf: people.nameOf, now }
+  // Asks from one person, in one place, close together, are one row.
+  const conversations = conversationsOf(requests, box)
+  const waitingIn = (conversation: RequestConversation) =>
+    conversation.requests.find(waitsNow)
+  // Each conversation keeps the place it first had while the list is open:
+  // the one the member has just answered stays under their pointer.
+  const layout = useStableLayout(conversations, (conversation) =>
+    waitingIn(conversation) ? "waiting" : "earlier"
   )
 
   if (query.isPending || people.status === "loading") {
@@ -261,14 +344,18 @@ function RequestList({
   // all-clear), then "Earlier"; the headings are items of the one list, so
   // one going or coming never makes a card again.
   const headed = box === "inbox"
-  const waitingNow = layout.waiting.filter(waitsNow).length
+  // The count is of asks, as every page counts them, not of rows.
+  const waitingNow = requests.filter(waitsNow).length + waitingChats.length
   const rows: Array<
-    { heading: string; count?: number } | { request: AgentRequest }
+    | { heading: string; count?: number }
+    | { conversation: RequestConversation }
+    | { chat: PendingChat }
   > = [
     ...(headed ? [{ heading: "Waiting for you", count: waitingNow }] : []),
-    ...layout.waiting.map((request) => ({ request })),
+    ...waitingChats.map((chat) => ({ chat })),
+    ...layout.waiting.map((conversation) => ({ conversation })),
     ...(headed && layout.earlier.length > 0 ? [{ heading: "Earlier" }] : []),
-    ...layout.earlier.map((request) => ({ request })),
+    ...layout.earlier.map((conversation) => ({ conversation })),
   ]
 
   return (
@@ -290,15 +377,21 @@ function RequestList({
                 )}
               </p>
             </li>
+          ) : "chat" in row ? (
+            <li key={`chat:${row.chat.id}`}>
+              <ChatRow chat={row.chat} onOpen={onOpenConversation} />
+            </li>
           ) : (
-            <li key={row.request.id}>
-              <RequestRow
-                request={row.request}
+            <li key={row.conversation.id}>
+              <ConversationRow
+                conversation={row.conversation}
                 box={box}
-                waits={waitsNow(row.request)}
-                selected={row.request.id === selectedId}
-                nameOf={people.nameOf}
-                now={now}
+                waiting={waitingIn(row.conversation)}
+                selected={row.conversation.requests.some(
+                  (request) => request.id === selectedId
+                )}
+                people={people}
+                reader={reader}
                 agentName={agentName}
                 onSelect={onSelect}
               />
@@ -306,14 +399,14 @@ function RequestList({
           )
         )}
       </ul>
-      {requests.length === 0 && (
+      {requests.length === 0 && waitingChats.length === 0 && (
         <AgentsNotice title={emptyWords[box][origin].title}>
           {emptyWords[box][origin].body}
         </AgentsNotice>
       )}
-      {query.data.length >= AGENT_REQUESTS_LIMIT && (
+      {query.data.length >= limit && (
         <p className="workspace-agents-note">
-          Showing the latest {plural(AGENT_REQUESTS_LIMIT, "request")}.
+          Showing the latest {plural(limit, "request")}.
         </p>
       )}
     </div>
@@ -327,6 +420,8 @@ export type RequestsViewProps = {
   focusRequestId?: string | null
   /** The named request was put away. */
   onFocusDone?: () => void
+  /** Opens one of the member's chats: one a tool waits in. */
+  onOpenConversation?: (threadId: string) => void
 }
 
 /**
@@ -339,6 +434,7 @@ export function RequestsView({
   viewerId,
   focusRequestId,
   onFocusDone,
+  onOpenConversation,
 }: RequestsViewProps) {
   const [tab, setTab] = useState<Tab>("inbox")
   const [origin, setOrigin] = useState<OriginFilter>("all")
@@ -362,15 +458,14 @@ export function RequestsView({
     }
   }, [focusRequestId])
 
-  // The whole inbox, whatever the filter: it says how many wait on the
-  // member, and whether an access they gave may still be running.
-  const inbox = useQuery(requestListQueryOptions(organizationId, "inbox"))
+  // The whole inbox, whatever the filter, and the chats a tool waits in: what
+  // waits on the member, counted as every page counts it, and whether an
+  // access they gave may still be running.
+  const needs = useNeedsYou(organizationId, viewerId)
+  const inbox = needs.inbox
   const now = Date.now()
   const inboxAll = inbox.data
-  const waitingRequests = (inboxAll ?? []).filter((request) =>
-    waitsOnOwner(request, viewerId, now)
-  )
-  const waiting = waitingRequests.length
+  const waiting = needs.count ?? needs.requests?.length ?? 0
   const accessMayRun = (inboxAll ?? []).some((request) =>
     mayHoldAccess(request, now)
   )
@@ -380,38 +475,38 @@ export function RequestsView({
   })
   const leases = useMemo(() => leasesByRequest(activity.data), [activity.data])
   // The list on show, from the same cache its rows read.
-  const shown = useQuery({
-    ...requestListQueryOptions(
-      organizationId,
-      tab === "sent" ? "sent" : "inbox",
-      origin
-    ),
-    enabled: tab !== "activity",
+  const sent = useQuery({
+    ...requestListQueryOptions(organizationId, "sent"),
+    enabled: tab === "sent",
   })
+  const shown = madeIn((tab === "sent" ? sent.data : inboxAll) ?? [], origin)
   // Without a choice, the first request on show that waits opens, and stays
   // open once answered, so the member sees what their choice did.
   const firstWaiting =
     tab === "inbox"
-      ? (shown.data ?? []).find((request) =>
-          waitsOnOwner(request, viewerId, now)
-        )?.id
+      ? shown.find((request) => waitsOnOwner(request, viewerId, now))?.id
       : undefined
   const [lastOpened, setLastOpened] = useState<string | null>(null)
   useEffect(() => {
     if (firstWaiting) setLastOpened(firstWaiting)
   }, [firstWaiting])
   const stillListed =
-    lastOpened &&
-    (shown.data ?? []).some((request) => request.id === lastOpened)
+    lastOpened && shown.some((request) => request.id === lastOpened)
       ? lastOpened
       : null
   const openId =
     chosen ?? (tab === "inbox" ? (firstWaiting ?? stillListed) : null)
   const openRequest = openId
-    ? [...(shown.data ?? []), ...(inboxAll ?? [])].find(
-        (request) => request.id === openId
-      )
+    ? [...shown, ...(inboxAll ?? [])].find((request) => request.id === openId)
     : undefined
+  // The conversation the open request is in, read as a thread above its card.
+  const people = usePeopleNames(organizationId, viewerId)
+  const box: AgentRequestBox = tab === "sent" ? "sent" : "inbox"
+  const openConversation =
+    openId && tab !== "activity"
+      ? conversationOf(conversationsOf(shown, box), openId)
+      : undefined
+  const reader: Reader = { viewerId, nameOf: people.nameOf, now }
   const allClear =
     !openId && tab === "inbox" && inbox.isSuccess && waiting === 0
   const stats = inboxAll ? clearStats(inboxAll, viewerId, now) : undefined
@@ -546,7 +641,7 @@ export function RequestsView({
               <div
                 className="workspace-requests-filter"
                 role="group"
-                aria-label="Where requests were made"
+                aria-label="Channel"
               >
                 {filters.map((item) => (
                   <Button
@@ -555,7 +650,9 @@ export function RequestsView({
                     className="workspace-requests-filter-item"
                     key={item.key}
                     aria-pressed={origin === item.key}
-                    onClick={() => setOrigin(item.key)}
+                    onClick={() =>
+                      setOrigin(origin === item.key ? "all" : item.key)
+                    }
                   >
                     {item.label}
                   </Button>
@@ -586,6 +683,8 @@ export function RequestsView({
                 onSelect={choose}
                 search={search}
                 agentName={agentName}
+                chats={needs.chats}
+                onOpenConversation={onOpenConversation}
               />
             )}
           </div>
@@ -604,6 +703,17 @@ export function RequestsView({
               >
                 Back to all requests
               </button>
+            )}
+            {openConversation && (
+              <RequestThread
+                conversation={openConversation}
+                box={box}
+                openId={openId}
+                reader={reader}
+                people={people}
+                agentName={agentName}
+                onSelect={choose}
+              />
             )}
             {openRequest && !(chosen && chosenAlone) ? (
               <RequestCard
@@ -640,7 +750,7 @@ export function RequestsView({
                 ? `${agentName} will flag the next one.`
                 : "The next one opens here."}
             </p>
-            {stats && (inboxAll?.length ?? 0) < AGENT_REQUESTS_LIMIT && (
+            {stats && (inboxAll?.length ?? 0) < INBOX_LIMIT && (
               <dl className="requests-clear-stats" aria-label="Today">
                 <div>
                   <dt>asks today</dt>
@@ -684,11 +794,13 @@ export function RequestsCanvas({
   viewerId,
   focusRequestId,
   onFocusDone,
+  onOpenConversation,
 }: {
   organizationId?: string
   viewerId?: string
   focusRequestId?: string | null
   onFocusDone?: () => void
+  onOpenConversation?: (threadId: string) => void
 }) {
   if (!organizationId || !viewerId) {
     return (
@@ -706,6 +818,7 @@ export function RequestsCanvas({
       viewerId={viewerId}
       focusRequestId={focusRequestId}
       onFocusDone={onFocusDone}
+      onOpenConversation={onOpenConversation}
     />
   )
 }

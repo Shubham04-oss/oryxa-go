@@ -619,6 +619,7 @@ div.home-item:hover {
 }
 .home-krude b { color: var(--text); font-weight: 600; }
 .home-pair-one { grid-template-columns: minmax(0, 1fr); margin-top: 0; }
+.home-pair-solo { grid-template-columns: minmax(0, 1fr); }
 .home-check {
   display: grid;
   width: 18px;

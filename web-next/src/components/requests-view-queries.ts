@@ -112,6 +112,11 @@ export type PeopleNames = {
   status: "loading" | "ready" | "error"
   /** A member's name, once the list can say; nothing while it loads, and for anyone it does not list. */
   nameOf: (userId: string) => string | undefined
+  /**
+   * What tells a member apart from another with the same first name (H5):
+   * their email. Nothing for a member whose first name no one else has.
+   */
+  hintOf: (userId: string) => string | undefined
 }
 
 /**
@@ -147,9 +152,23 @@ export function usePeopleNames(
         member.display_name?.trim() || member.email,
       ])
     )
+    const first = (name: string) =>
+      (name.includes("@") ? name : name.split(/\s+/)[0]).toLowerCase()
+    const sharing = new Map<string, number>()
+    for (const name of names.values())
+      sharing.set(first(name), (sharing.get(first(name)) ?? 0) + 1)
+    const emails = new Map(
+      (data ?? []).map((member) => [member.user_id, member.email])
+    )
     return {
       status: data ? "ready" : failed ? "error" : "loading",
       nameOf: (userId) => names.get(userId),
+      hintOf: (userId) => {
+        const name = names.get(userId)
+        if (!name || (sharing.get(first(name)) ?? 0) < 2) return undefined
+        const email = emails.get(userId)
+        return email && email !== name ? email : undefined
+      },
     }
   }, [data, failed])
 }

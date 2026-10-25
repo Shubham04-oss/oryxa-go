@@ -666,6 +666,10 @@ function WorkspaceShellContent({
       setSettingsPage("account")
       setSettingsOpen(true)
     },
+    onOpenAgentSettings: () => {
+      setSettingsPage("agent")
+      setSettingsOpen(true)
+    },
   }
 
   return (
@@ -1018,6 +1022,7 @@ function WorkspaceShellContent({
                   viewerId={session?.user.id}
                   focusRequestId={requestFocus}
                   onFocusDone={() => setRequestFocus(null)}
+                  onOpenConversation={homeOverviewProps.onOpenConversation}
                 />
               )}
             </main>

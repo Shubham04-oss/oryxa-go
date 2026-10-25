@@ -106,6 +106,11 @@ func (service *fakeThreads) List(_ context.Context, member threads.Member, origi
 	return []threads.Thread{{ID: "thread_1", Title: "Hello", Origin: listed}}, nil
 }
 
+func (service *fakeThreads) PendingConfirmations(_ context.Context, member threads.Member) ([]threads.PendingThread, error) {
+	service.members = append(service.members, member)
+	return []threads.PendingThread{}, service.err
+}
+
 func (service *fakeThreads) Get(_ context.Context, member threads.Member, threadID string) (threads.Detail, error) {
 	service.members = append(service.members, member)
 	if threadID != "thread_1" {
@@ -789,7 +794,7 @@ var bearer = map[string]string{"Authorization": "Bearer member-token"}
 func TestPatternsNameEveryRoute(t *testing.T) {
 	server := newTestServer(member(), &fakeThreads{})
 	patterns := server.Patterns()
-	if len(patterns) != 85 {
+	if len(patterns) != 86 {
 		t.Fatalf("patterns = %v", patterns)
 	}
 	wildcards := regexp.MustCompile(`\{[^}]+\}`)

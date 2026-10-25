@@ -3,45 +3,50 @@
 // alone: nothing here asks Go for more than the lists already hold.
 import { clockTime, dayLabel } from "./time-format"
 import { agoPhrase } from "./today-format"
-import { expiresPhrase } from "./request-card-format"
-import { isOwnerWritten, needsOwnerReply } from "@/lib/agents/agent-requests"
+import { expiresPhrase, statusLabel } from "./request-card-format"
+import type { Reader } from "./request-card-format"
+import {
+  isOwnerWritten,
+  needsOwnerReply,
+  originOf,
+} from "@/lib/agents/agent-requests"
 import type { AgentRequest } from "@/lib/agents/agent-requests"
+import type { OriginFilter } from "./requests-view-queries"
 
 /**
- * A row's tag: for a request that waits on the member, what it waits on
- * ("Wants your reply", "Answer held for you", or how long is left to decide
- * it); for the rest, where it stands, and who answered an answered one.
- * `agentName` is the member's agent, as an inbox row names it.
+ * The requests made where the filter says: in Slack, by an agent in Oryxa,
+ * or anywhere. The lists are read whole, once, and narrowed here, so the
+ * filter never makes another read of its own.
+ */
+export function madeIn(
+  requests: readonly AgentRequest[],
+  origin: OriginFilter
+): AgentRequest[] {
+  return origin === "all"
+    ? [...requests]
+    : requests.filter((request) => originOf(request) === origin)
+}
+
+/**
+ * A row's tag: where the request stands, in the words of the one status map
+ * (`statusLabel`), except that an ask waiting for the member's OK says how
+ * long is left to give it. `agentName` is the member's agent, as an inbox
+ * row names it.
  */
 export function rowTag(
   request: AgentRequest,
   waits: boolean,
-  now: number,
+  reader: Reader,
   agentName?: string
 ): string {
-  if (waits) {
-    if (request.status === "review") return "Answer held for you"
-    if (needsOwnerReply(request)) return "Wants your reply"
-    return (
-      expiresPhrase(request, now)?.replace(/\.$/, "") ?? "Waiting for your OK"
-    )
-  }
-  if (request.status === "completed") {
-    if (isOwnerWritten(request)) return "Answered by you"
-    const agent = agentName?.trim() || request.target.agent_name.trim()
-    return agent ? `Answered by ${agent}` : "Answered"
-  }
-  const words: Record<AgentRequest["status"], string> = {
-    pending: "Waiting",
-    approved: "Approved",
-    review: "In review",
-    rejected: "Declined",
-    completed: "Answered",
-    failed: "Failed",
-    expired: "Expired",
-    withheld: "Withheld",
-  }
-  return words[request.status]
+  if (
+    waits &&
+    request.status === "pending" &&
+    !needsOwnerReply(request) &&
+    expiresPhrase(request, reader.now)
+  )
+    return (expiresPhrase(request, reader.now) ?? "").replace(/\.$/, "")
+  return statusLabel(request, reader, agentName)
 }
 
 /** A row's time: the clock today ("5:30 PM"), how long ago before that. */

@@ -107,6 +107,15 @@ function backend({
           })
         : json({ error: { code: "forbidden", message: "Not available" } }, 403)
     }
+    // Go's count across every chat, as the runs left it.
+    if (resource === "pending-confirmations") {
+      const waiting = own
+        ? lists
+            .filter((entry) => items[entry.id]?.length)
+            .map((entry) => ({ ...entry, pending_confirmations: 1 }))
+        : []
+      return json({ threads: waiting, total: waiting.length })
+    }
     if (resource === "agents") {
       const response = () =>
         json({ agents: own ? [{ ...primary, organization_id: org }] : [] })

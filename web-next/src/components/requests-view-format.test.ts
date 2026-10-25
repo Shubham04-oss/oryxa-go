@@ -13,6 +13,7 @@ import {
   agentRequest,
   answer,
   approvedRequest,
+  reader,
   repliedRequest,
   slackRequest,
 } from "./request-card-fixtures"
@@ -24,15 +25,19 @@ describe("a row's tag", () => {
     const soon = slackRequest({
       expires_at: new Date(NOW + HOUR).toISOString(),
     })
-    expect(rowTag(soon, true, NOW)).toBe("Expires in 1 h")
+    expect(rowTag(soon, true, reader(OWNER))).toBe("Expires in 1 h")
   })
 
   it("says an ask wants the member's own reply, or that an answer is held", () => {
-    expect(rowTag(slackRequest({ answer_by: "owner" }), true, NOW)).toBe(
-      "Wants your reply"
-    )
     expect(
-      rowTag(approvedRequest("summary", { status: "review" }), true, NOW)
+      rowTag(slackRequest({ answer_by: "owner" }), true, reader(OWNER))
+    ).toBe("Wants your reply")
+    expect(
+      rowTag(
+        approvedRequest("summary", { status: "review" }),
+        true,
+        reader(OWNER)
+      )
     ).toBe("Answer held for you")
   })
 
@@ -41,21 +46,23 @@ describe("a row's tag", () => {
       status: "completed",
       result: answer("Done."),
     })
-    expect(rowTag(byAgent, false, NOW, "Krude")).toBe("Answered by Krude")
+    expect(rowTag(byAgent, false, reader(OWNER), "Krude")).toBe(
+      "Answered by Krude"
+    )
     // Without the member's agent's name, the request's own.
-    expect(rowTag(byAgent, false, NOW)).toBe("Answered by Krude")
-    expect(rowTag(repliedRequest("Yes."), false, NOW, "Krude")).toBe(
+    expect(rowTag(byAgent, false, reader(OWNER))).toBe("Answered by Krude")
+    expect(rowTag(repliedRequest("Yes."), false, reader(OWNER), "Krude")).toBe(
       "Answered by you"
     )
   })
 
   it("says where the rest stand", () => {
-    expect(rowTag(slackRequest({ status: "rejected" }), false, NOW)).toBe(
-      "Declined"
-    )
-    expect(rowTag(slackRequest({ status: "expired" }), false, NOW)).toBe(
-      "Expired"
-    )
+    expect(
+      rowTag(slackRequest({ status: "rejected" }), false, reader(OWNER))
+    ).toBe("Declined")
+    expect(
+      rowTag(slackRequest({ status: "expired" }), false, reader(OWNER))
+    ).toBe("Expired")
   })
 })
 

@@ -3,7 +3,7 @@
 // saved in their recent conversations.
 import { buildTimeline } from "@/lib/threads/timeline"
 import type { MessageEntry } from "@/lib/threads/timeline"
-import type { ThreadDetail } from "@/lib/threads/client"
+import type { Thread, ThreadDetail } from "@/lib/threads/client"
 
 export type Brief = {
   key: string
@@ -102,6 +102,35 @@ export function agentFilesOf(
   return [...files.values()]
     .sort((left, right) => (right.at ?? "").localeCompare(left.at ?? ""))
     .slice(0, max)
+}
+
+/**
+ * The files the agent saved, newest first, from the chat list alone: each
+ * chat's latest file, as its runs left it in the list (#388). No chat's
+ * history is read.
+ */
+export function agentFilesFromList(
+  threads: ReadonlyArray<
+    Pick<Thread, "id" | "updated_at" | "origin" | "latest_artifact">
+  >,
+  max = 4
+): AgentFile[] {
+  return threads
+    .filter(
+      (thread) =>
+        (!thread.origin || thread.origin === "chat") && thread.latest_artifact
+    )
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+    .slice(0, max)
+    .map((thread) => {
+      const name = thread.latest_artifact?.name ?? ""
+      return {
+        key: `${thread.id}/${name}`,
+        name,
+        threadId: thread.id,
+        at: thread.updated_at,
+      }
+    })
 }
 
 /** "12 min ago", "3 h ago", "Yesterday", then a date: how long ago, for a quiet line. */

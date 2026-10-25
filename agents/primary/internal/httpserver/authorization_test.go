@@ -263,6 +263,10 @@ var authzRoutes = []authzRoute{
 		path: "/v1/organizations/org_1/threads", identity: lastThreadsMember,
 	},
 	{
+		pattern: "GET /v1/organizations/{organizationID}/pending-confirmations", method: http.MethodGet,
+		path: "/v1/organizations/org_1/pending-confirmations", identity: lastThreadsMember,
+	},
+	{
 		pattern: "POST /v1/organizations/{organizationID}/threads", method: http.MethodPost,
 		path: "/v1/organizations/org_1/threads", body: "{}", malformedBody: unknownField, identity: lastThreadsMember,
 	},
@@ -609,8 +613,8 @@ var publicRoutePatterns = map[string]string{
 // through the full sweep below) or be named in publicRoutePatterns with a
 // reason. A future route with neither fails this test, on purpose.
 func TestEveryServerPatternIsAuthorizationTested(t *testing.T) {
-	if len(authzRoutes) != 80 {
-		t.Fatalf("authzRoutes has %d entries, want 80 - update this test if a route was intentionally added or removed", len(authzRoutes))
+	if len(authzRoutes) != 81 {
+		t.Fatalf("authzRoutes has %d entries, want 81 - update this test if a route was intentionally added or removed", len(authzRoutes))
 	}
 	covered := map[string]bool{}
 	for _, row := range authzRoutes {

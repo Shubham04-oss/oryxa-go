@@ -10,14 +10,14 @@
 // those waiting. Leaving the list and coming back starts it afresh, in Go's
 // order.
 import { useRef } from "react"
-import type { AgentRequest } from "@/lib/agents/agent-requests"
 
 export type RequestGroup = "waiting" | "earlier"
 
-export function useStableLayout(
-  requests: readonly AgentRequest[],
-  groupOf: (request: AgentRequest) => RequestGroup
-): { waiting: AgentRequest[]; earlier: AgentRequest[] } {
+/** Places requests, or conversations of them: anything with a lasting id. */
+export function useStableLayout<T extends { id: string }>(
+  requests: readonly T[],
+  groupOf: (request: T) => RequestGroup
+): { waiting: T[]; earlier: T[] } {
   const seen = useRef(new Map<string, { group: RequestGroup; rank: number }>())
   // The lowest rank given so far: whatever is new goes above it.
   const top = useRef(0)

@@ -28,9 +28,9 @@ import {
 import { useCall } from "./call-provider"
 import { listTime } from "./direct-message-format"
 import { askerName } from "./request-card-format"
-import { requestListQueryOptions } from "./requests-view-queries"
+import { INBOX_LIMIT, useInbox } from "@/hooks/use-needs-you"
 import { TeamspaceAvatar } from "./workspace-avatar"
-import { AGENT_REQUESTS_LIMIT, agentsQueryOptions } from "@/lib/agents/queries"
+import { agentsQueryOptions } from "@/lib/agents/queries"
 import { primaryAgent } from "@/lib/agents/policy"
 import { downloadFile, filesQueryOptions } from "@/lib/files/client"
 import type { Teamspace } from "@/lib/teamspaces/client"
@@ -123,10 +123,7 @@ function PaletteBody({
   const [selected, setSelected] = useState("")
   const enabled = Boolean(organizationId && viewerId)
   const org = organizationId ?? ""
-  const requests = useQuery({
-    ...requestListQueryOptions(org, "inbox"),
-    enabled,
-  })
+  const requests = useInbox(organizationId, viewerId)
   const threads = useQuery({
     ...threadListQueryOptions(org, viewerId),
     enabled,
@@ -160,7 +157,7 @@ function PaletteBody({
         .filter((file) => matches(file.filename, typed))
         .slice(0, PER_KIND)
     : []
-  const requestsCapped = (requests.data?.length ?? 0) >= AGENT_REQUESTS_LIMIT
+  const requestsCapped = (requests.data?.length ?? 0) >= INBOX_LIMIT
 
   // A parley starts in the teamspace the query names, when one does and the
   // member is not already in a call.
@@ -312,7 +309,7 @@ function PaletteBody({
       </CommandList>
       {requestsCapped && (
         <p className="workspace-palette-note">
-          Searching your latest {AGENT_REQUESTS_LIMIT} requests.
+          Searching your latest {INBOX_LIMIT} requests.
         </p>
       )}
       <div className="workspace-palette-foot" aria-hidden="true">

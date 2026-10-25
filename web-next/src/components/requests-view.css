@@ -337,3 +337,44 @@
   .workspace-requests-page[data-open] .requests-side { display: none; }
   .workspace-requests-page[data-open] .requests-back { display: block; }
 }
+
+/* A conversation's row (requests-view-group.ts): how many asks it holds, and
+   who a member is when another shares their first name. */
+.requests-row-hint { color: var(--text-soft); }
+.requests-row-count { color: var(--text-soft); }
+
+/* A conversation's thread above the open card: every ask, oldest first. */
+.requests-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.requests-thread-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.requests-thread-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  color: var(--text);
+  text-align: left;
+}
+.requests-thread-ask:hover,
+.requests-thread-ask.is-active { background: var(--raised); }
+.requests-thread-ask small,
+.requests-thread-answer { color: var(--text-soft); }
+.requests-thread-answer {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
