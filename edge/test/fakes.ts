@@ -216,6 +216,7 @@ export class FakeDriver implements BrowserDriver {
   closed = 0;
   failClose = false;
   failLaunch = false;
+  failAttach = false;
   handoffActive = false;
   handoffResult: { success: boolean; reason?: string } | null = null;
   filled = new Map<string, string>();
@@ -247,7 +248,7 @@ export class FakeDriver implements BrowserDriver {
 
   async attach(sessionId: string | undefined): Promise<boolean> {
     if (this.sessionId && browserRun.has(this.sessionId) && (!sessionId || sessionId === this.sessionId)) return true;
-    if (!sessionId || !browserRun.has(sessionId)) {
+    if (!sessionId || !browserRun.has(sessionId) || this.failAttach) {
       this.sessionId = null;
       return false;
     }

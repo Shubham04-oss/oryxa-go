@@ -330,6 +330,18 @@ describe("opening the live view", () => {
     expect(next.sessionRecreated).toBe(true);
   });
 
+  it("keeps a session that didn't answer once but is still running", async () => {
+    await post("/browser/usr_1/navigate", { url: LOGIN });
+    const session = driver().sessionId!;
+    driver().evict();
+    driver().failAttach = true;
+    expect((await watch("/browser/usr_1/live", { method: "POST", body: "{}" })).status).toBe(503);
+    driver().failAttach = false;
+    expect((await watch("/browser/usr_1/live", { method: "POST", body: "{}" })).status).toBe(200);
+    expect(driver().sessionId).toBe(session);
+    expect(driver().launched).toBe(1);
+  });
+
   it("gives a control link a short life", async () => {
     await post("/browser/usr_1/navigate", { url: LOGIN });
     const tab = (await (await watch("/browser/usr_1/live", { method: "POST", body: "{}" })).json()) as { expiresAt: string };

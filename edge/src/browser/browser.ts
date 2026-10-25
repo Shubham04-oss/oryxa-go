@@ -209,6 +209,10 @@ export class BrowserDO extends DurableObject<Env> {
   private async attached(events: ChildEvent[]): Promise<void> {
     const stored = await this.ctx.storage.get<string>("session");
     if (stored && (await this.driver().attach(stored))) return;
+    // A session Browser Run still lists didn't answer this time: keep it.
+    if (stored && (await this.driver().alive(stored).catch(() => true))) {
+      throw new EdgeError("unavailable", "the browser did not answer; try again", true);
+    }
     if (stored) {
       await this.ctx.storage.delete(["session", "handoff", "lastUsedAt"]);
       events.push({ type: "browser.stopped", summary: "Browser closed (it had ended)", data: { reason: "ended", browserSession: stored } });
