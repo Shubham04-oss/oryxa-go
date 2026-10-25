@@ -11,6 +11,7 @@ Started 2026-10-25 from the owner's walkthrough notes and a read-only walk of pr
 | [03-browser-and-live.md](03-browser-and-live.md) | Browser / sandbox sessions, Live tab, session lifecycle |
 | [04-home-requests-settings-library.md](04-home-requests-settings-library.md) | Home, Requests inbox, Settings, Library |
 | [05-core-flows.md](05-core-flows.md) | Driven end to end: search, chat, tools, files, setup, requests |
+| [06-ux-design.md](06-ux-design.md) | UX and visual design: concepts, panes, type, colour, feedback, navigation |
 
 ## Issue template
 
@@ -32,7 +33,7 @@ Severity: **blocker** means a core flow fails; **high** means it fails often or 
 
 ## Ranked summary (2026-10-25)
 
-83 issues so far: T1–T17, C1–C17, B1–B16, H1–H14, F1–F19. Ranked by how much they hurt everyday use of the main app.
+96 issues so far: T1–T17, C1–C17, B1–B16, H1–H14, F1–F19, U1–U13. Ranked by how much they hurt everyday use of the main app.
 
 **Fix first: trust and "does it work"**
 
@@ -63,6 +64,8 @@ Severity: **blocker** means a core flow fails; **high** means it fails often or 
 | 18 | [H3](04-home-requests-settings-library.md) / [C6](02-agent-chat.md) The "five newest chats" note, and its polling | Noise, plus load. |
 | 19 | [H6](04-home-requests-settings-library.md) / [H9](04-home-requests-settings-library.md) Raw tool ids in Settings, and a raw Library dump | First impressions. |
 | 20 | [H12](04-home-requests-settings-library.md) Mobile home layout breaks | 375 px is unusable in places. |
+
+**UX and design, decides how the app feels:** [U1](06-ux-design.md) too many nouns for one product; [U2](06-ux-design.md) two to four panes and two message boxes per screen; [U5](06-ux-design.md) / [U6](06-ux-design.md) text mostly 10–12 px, with no type or radius scale (about 25 sizes and 13 radii across 36 CSS files); [U3](06-ux-design.md) empty states everywhere instead of a first-run path. The fix order is at the end of that file.
 
 Not about the main app's usability, recorded so it isn't lost: [H1](04-home-requests-settings-library.md), Slack off in production because of a hidden local tfvars file.
 
