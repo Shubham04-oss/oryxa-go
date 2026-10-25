@@ -40,8 +40,8 @@ import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import { Popup, PopupFoot, PopupHead, PopupIcon } from "./popup"
 import { notifyParleyStarted } from "./workspace-toasts"
 import { agentIdentity, personIdentity } from "./teamspace-format"
-import { callDuration, whoIsIn } from "@/lib/call/client"
-import type { CallView } from "@/lib/call/client"
+import { callDuration, wakeNames, whoIsIn } from "@/lib/call/client"
+import type { CallView, VoiceTrouble } from "@/lib/call/client"
 import type { CallDevices, CallTile, DeviceKind } from "@/lib/call/media"
 import { useRoomCall } from "@/lib/call/use-room-call"
 import type { LiveRoom } from "@/lib/live/client"
@@ -206,6 +206,39 @@ export function CallCam({
   )
 }
 
+/**
+ * What the agent is doing, in a word or two: it promises notes only when
+ * the call will leave them (T1), and says when it can't answer (T2).
+ */
+export function agentDoing(
+  agent: CallView["agent"] | undefined,
+  speaking: boolean,
+  short = false
+): string {
+  if (speaking) return short ? "Speaking" : "speaking"
+  if (agent?.canAnswer === false)
+    return short ? "Can't answer" : "can't answer right now"
+  if (agent?.notes) return short ? "Notes" : "taking notes"
+  return short ? "Listening" : "listening"
+}
+
+/** 'Say "Arlo, …" to ask': how to talk to the agent (T3). */
+export function wakeHint(
+  agent: CallView["agent"] | undefined
+): string | undefined {
+  if (!agent?.present || agent.canAnswer === false) return undefined
+  const names = wakeNames(agent)
+  if (names.length === 0) return undefined
+  return `Say ${names.map((name) => `“${name}, …”`).join(" or ")} to ask`
+}
+
+/** Why the agent stayed quiet, for the member who spoke to it (T2). */
+export function troubleLine(name: string, reason: VoiceTrouble): string {
+  if (reason === "model_failed")
+    return `${name} couldn't work that out. Try again.`
+  return `${name} can't answer in calls right now.`
+}
+
 /** The agent in the call: it never has a camera, only its voice. */
 export function AgentCam({
   name,
@@ -213,14 +246,18 @@ export function AgentCam({
   size = "default",
   named = true,
   flagged = named,
+  agent,
 }: {
   name: string
   speaking: boolean
   size?: "default" | "big" | "small"
   named?: boolean
-  /** Its Taking notes / Speaking flag; the join strip's faces go without. */
+  /** Its Listening / Speaking flag; the join strip's faces go without. */
   flagged?: boolean
+  /** The call's view of it: whether it takes notes or can answer. */
+  agent?: CallView["agent"]
 }) {
+  const doing = agentDoing(agent, speaking, true)
   return (
     <div
       className="call-cam"
@@ -236,7 +273,11 @@ export function AgentCam({
           agent
           icon={speaking ? <Wave /> : <Sparkles size={11} aria-hidden="true" />}
         >
-          {speaking ? "Speaking" : size === "small" ? "Notes" : "Taking notes"}
+          {size === "small" || speaking
+            ? doing
+            : doing === "Notes"
+              ? "Taking notes"
+              : doing}
         </CallFlag>
       )}
       {named && <span className="call-name">{name}</span>}
@@ -311,6 +352,8 @@ export function ParleyButton({
   subtitle,
   member,
   name,
+  agents,
+  blocked,
 }: {
   organizationId: string
   room: LiveRoom
@@ -319,9 +362,15 @@ export function ParleyButton({
   subtitle?: string
   member: string
   name?: string
+  /** The names the room shows for its agents, which the call's agent answers to. */
+  agents?: string[]
+  /** Why the member can't parley here (not on the team, paused), if they can't. */
+  blocked?: string
 }) {
   const { active, join, show } = useCall()
-  const { call, unavailable } = useRoomCall(organizationId, room)
+  const { call, unavailable } = useRoomCall(organizationId, room, {
+    enabled: !blocked,
+  })
   const here = isThisRoom(active, organizationId, room)
   const inIt = here && active?.phase === "in"
   const live = Boolean(call) || inIt
@@ -330,14 +379,17 @@ export function ParleyButton({
       variant="outline"
       className="workspace-teamspace-parley"
       data-live={live ? "true" : undefined}
-      disabled={unavailable || (here && active?.phase === "joining")}
+      disabled={
+        Boolean(blocked) || unavailable || (here && active?.phase === "joining")
+      }
       aria-label={
         inIt ? "Open the parley" : call ? "Join the parley" : undefined
       }
       title={
-        unavailable
+        blocked ??
+        (unavailable
           ? "Parleys aren't available in this teamspace yet."
-          : undefined
+          : undefined)
       }
       onClick={() => {
         if (inIt) {
@@ -351,6 +403,7 @@ export function ParleyButton({
           subtitle,
           member,
           name,
+          agents,
           mic: true,
           camera: false,
         })
@@ -374,6 +427,8 @@ export function ParleyStrip({
   subtitle,
   member,
   name,
+  agents,
+  blocked,
 }: {
   organizationId: string
   room: LiveRoom
@@ -382,9 +437,15 @@ export function ParleyStrip({
   subtitle?: string
   member: string
   name?: string
+  /** The names the room shows for its agents, which the call's agent answers to. */
+  agents?: string[]
+  /** Why the member can't parley here; the strip then shows nothing. */
+  blocked?: string
 }) {
   const { active, join, show, leave, showingRoom } = useCall()
-  const { call, loading } = useRoomCall(organizationId, room)
+  const { call, loading } = useRoomCall(organizationId, room, {
+    enabled: !blocked,
+  })
   const key = roomKey(organizationId, room)
   // While the room's own page is on screen, its strip is the call's control
   // and the mini player stands aside.
@@ -423,6 +484,7 @@ export function ParleyStrip({
           subtitle,
           member,
           name,
+          agents,
           mic: true,
           camera: false,
         }),
@@ -440,7 +502,7 @@ export function ParleyStrip({
       </div>
     )
   }
-  if (!call) return null
+  if (!call || blocked) return null
 
   const others = call.participants.filter((person) => person.member !== member)
   const names = [
@@ -460,7 +522,10 @@ export function ParleyStrip({
           {recording ? (
             <span className="call-recording">{recording}</span>
           ) : (
-            <span>{whoIsIn(names)}</span>
+            <span>
+              {whoIsIn(names)}
+              {wakeHint(call.agent) ? ` · ${wakeHint(call.agent)}` : ""}
+            </span>
           )}
         </div>
         <div className="call-strip-acts">
@@ -493,6 +558,7 @@ export function ParleyStrip({
       subtitle,
       member,
       name,
+      agents,
       mic: withMic,
       camera: withCamera,
     })
@@ -653,6 +719,9 @@ function CallEnded({
         {ended.recorded
           ? `The recording and transcript, kept with ${ended.roomName}. Only people in it can open them.`
           : `The transcript, kept with ${ended.roomName}.`}
+        {ended.notes
+          ? " The agent's notes will appear in the room shortly."
+          : ""}
       </PopupHead>
       <PopupFoot>
         <Button ref={done} onClick={onDone}>
@@ -779,7 +848,49 @@ function CallMiniPlayer({
           Only you: {active.privateAnswer}
         </p>
       )}
+      <AgentNotices active={active} view={view} className="call-pip-note" />
     </div>
+  )
+}
+
+/**
+ * What the member should know about the agent and their own words: what
+ * it heard them say (T3), why it stayed quiet (T2), and that their words
+ * aren't reaching the room (T4).
+ */
+export function AgentNotices({
+  active,
+  view,
+  className,
+  inline = false,
+}: {
+  active: ActiveCall
+  view: CallView | null
+  className?: string
+  /** In a line of text (the dock), not a block of its own. */
+  inline?: boolean
+}) {
+  const Line = inline ? "span" : "p"
+  const name = view?.agent.name ?? "The agent"
+  return (
+    <>
+      {active.transcriptFailing && (
+        <Line className={className} role="alert">
+          Your words aren't reaching the room. The agent can't hear you;
+          retrying.
+        </Line>
+      )}
+      {active.agentTrouble && (
+        <Line className={className} role="status">
+          {troubleLine(name, active.agentTrouble)}
+        </Line>
+      )}
+      {active.agentHeard && !active.agentTrouble && (
+        <Line className={className} role="status">
+          {name} heard: “{active.agentHeard}”
+        </Line>
+      )}
+    </>
   )
 }
 
@@ -984,13 +1095,13 @@ export function CallSignals({ active }: { active: ActiveCall }) {
   )
 }
 
-/** "5 people, Krude taking notes": who the call has, for the dock. */
-function dockLine(active: ActiveCall, view: CallView | null): string {
+/** "5 people, Krude listening": who the call has, for the dock. */
+export function dockLine(active: ActiveCall, view: CallView | null): string {
   const people = view?.participants.length ?? active.tiles.length
   const agent = view?.agent
   return `${people} ${people === 1 ? "person" : "people"}${
     agent?.present
-      ? `, ${agent.name} ${active.agentSpeaking ? "speaking" : "taking notes"}`
+      ? `, ${agent.name} ${agentDoing(agent, active.agentSpeaking)}`
       : ""
   }`
 }
@@ -1037,12 +1148,16 @@ export function CallDock({
     roomUnread,
   } = useCall()
   const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState("")
   const duration = useDuration(view?.startedAt)
   const agent = view?.agent
-  const act = (work: () => Promise<void>) => {
+  const hint = wakeHint(agent)
+  // A control that fails says so, instead of quietly doing nothing (T16).
+  const act = (work: () => Promise<void>, failed: string) => {
     setBusy(true)
+    setProblem("")
     void work()
-      .catch(() => undefined)
+      .catch(() => setProblem(failed))
       .finally(() => setBusy(false))
   }
   const unread = side === "room" ? 0 : (roomUnread ?? 0)
@@ -1054,6 +1169,22 @@ export function CallDock({
         {duration && <span className="call-time">{duration}</span>}
         <span>·</span>
         <span>{dockLine(active, view)}</span>
+        {problem ? (
+          <span className="call-dock-note" role="alert">
+            {problem}
+          </span>
+        ) : active.transcriptFailing ||
+          active.agentTrouble ||
+          active.agentHeard ? (
+          <AgentNotices
+            active={active}
+            view={view}
+            className="call-dock-note"
+            inline
+          />
+        ) : (
+          hint && <span className="call-hint">· {hint}</span>
+        )}
       </div>
       <div className="call-ctrls">
         <Toggle
@@ -1098,7 +1229,14 @@ export function CallDock({
           pressed={view?.recording.on ?? false}
           aria-label={view?.recording.on ? "Stop recording" : "Record"}
           disabled={busy}
-          onPressedChange={() => act(() => setRecording(!view?.recording.on))}
+          onPressedChange={() =>
+            act(
+              () => setRecording(!view?.recording.on),
+              view?.recording.on
+                ? "Couldn't stop the recording. Try again."
+                : "Couldn't start recording. Try again."
+            )
+          }
         >
           <Circle
             size={16}
@@ -1116,7 +1254,14 @@ export function CallDock({
               : `Ask ${agent?.name ?? "the agent"} in`
           }
           disabled={busy}
-          onPressedChange={() => act(() => setAgent(!agent?.present))}
+          onPressedChange={() =>
+            act(
+              () => setAgent(!agent?.present),
+              agent?.present
+                ? `Couldn't dismiss ${agent.name}. Try again.`
+                : `Couldn't ask ${agent?.name ?? "the agent"} in. Try again.`
+            )
+          }
         >
           <Sparkles size={18} aria-hidden="true" />
         </Toggle>
@@ -1186,7 +1331,7 @@ export function CallDock({
           variant="destructive"
           className="call-quiet"
           disabled={busy}
-          onClick={() => act(end)}
+          onClick={() => act(end, "Couldn't end the parley. Try again.")}
         >
           <X size={14} aria-hidden="true" />
           End for everyone
@@ -1269,6 +1414,7 @@ function CallFullPage({
             name={agent.name}
             speaking={active.agentSpeaking}
             size={size}
+            agent={agent}
           />,
         ]
       : []),

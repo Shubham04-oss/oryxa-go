@@ -28,7 +28,11 @@ import {
   setAgentPresent,
   setRecording,
 } from "@/lib/call/client"
-import type { CallView, TranscriptSegment } from "@/lib/call/client"
+import type {
+  CallView,
+  TranscriptSegment,
+  VoiceTrouble,
+} from "@/lib/call/client"
 import { joinMedia } from "@/lib/call/media"
 import { CALL_REFRESH_MS } from "@/lib/call/use-room-call"
 import type {
@@ -45,7 +49,13 @@ import type { LiveRoom } from "@/lib/live/client"
 export const CAPTION_MS = 6_000
 /** How often the member's own transcript goes to the room. */
 export const TRANSCRIPT_FLUSH_MS = 1_500
-const VOICE_RETRY_MS = 2_000
+/** Failed sends in a row before the member is told their words aren't arriving. */
+export const TRANSCRIPT_FAILURES_SHOWN = 2
+/** How many unsent segments are kept for a retry; the oldest go first. */
+const TRANSCRIPT_KEPT = 200
+/** How long Leave waits for the member's last words to reach the room. */
+const LAST_WORDS_MS = 2_000
+const VOICE_RETRY_MS = [2_000, 4_000, 8_000, 15_000]
 
 export type Caption = {
   name: string
@@ -95,6 +105,12 @@ export type ActiveCall = {
   heard: HeardLine[]
   /** An answer the agent found with the member's own access, for them only. */
   privateAnswer?: string
+  /** What the agent heard the member say to it, for a moment (T3). */
+  agentHeard?: string
+  /** Why the agent stayed quiet after the member spoke to it (T2). */
+  agentTrouble?: VoiceTrouble
+  /** The member's words have stopped reaching the room (T4). */
+  transcriptFailing?: boolean
   /**
    * Where the call is open: the mini player (or the strip on its room's
    * page), the stage in the workspace's main column, or the full page.
@@ -123,6 +139,8 @@ export type JoinOptions = {
   subtitle?: string
   member: string
   name?: string
+  /** The names the room shows for its agents: the call's agent answers to them. */
+  agents?: string[]
   mic: boolean
   camera: boolean
 }
@@ -161,6 +179,8 @@ export type EndedCall = {
   people: number
   /** It was being recorded: the recording and transcript are kept. */
   recorded: boolean
+  /** The agent leaves notes in the room for it. */
+  notes: boolean
 }
 
 type CallContextValue = {
@@ -296,16 +316,43 @@ export function useHasCalls(): boolean {
 }
 
 /** The member's own words, gathered between flushes. */
-function transcriptBuffer() {
+/**
+ * The member's own segments on their way to the room. A segment stays until
+ * a send of it succeeds (T4): a failed send puts it back, unless a newer
+ * version of it arrived meanwhile, and the oldest go first past a bound.
+ */
+export function transcriptBuffer() {
   const pending = new Map<string, TranscriptSegment>()
+  const keep = () => {
+    for (const id of pending.keys()) {
+      if (pending.size <= TRANSCRIPT_KEPT) break
+      pending.delete(id)
+    }
+  }
   return {
     add(segment: TranscriptSegment) {
+      pending.delete(segment.id)
       pending.set(segment.id, segment)
+      keep()
     },
     take(): TranscriptSegment[] {
       const segments = [...pending.values()].slice(0, MAX_SEGMENTS)
       for (const segment of segments) pending.delete(segment.id)
       return segments
+    },
+    /** Puts back segments a send failed for; partial ones are stale by now. */
+    putBack(segments: TranscriptSegment[]) {
+      const newer = new Map(pending)
+      pending.clear()
+      for (const segment of segments) {
+        if (!segment.partial && !newer.has(segment.id))
+          pending.set(segment.id, segment)
+      }
+      for (const [id, segment] of newer) pending.set(id, segment)
+      keep()
+    },
+    get size() {
+      return pending.size
     },
     clear() {
       pending.clear()
@@ -349,6 +396,8 @@ export function CallProvider({
   const lastView = useRef<CallView | null>(null)
   const media = useRef<CallMedia | null>(null)
   const cleanups = useRef<(() => void)[]>([])
+  /** Sends what the member said last, before they leave the call. */
+  const lastWords = useRef<(() => Promise<void>) | null>(null)
   const activeRef = useRef<ActiveCall | null>(null)
   activeRef.current = active
   // Each join is one attempt; leaving or ending, or another join, makes it
@@ -379,10 +428,41 @@ export function CallProvider({
     [queryClient]
   )
 
+  /** Keeps what the "Parley ended" summary shows of the member's call. */
+  const remember = useCallback(() => {
+    const current = activeRef.current
+    if (current?.phase !== "in") return
+    const seen = lastView.current
+    setEnded({
+      roomName: current.roomName,
+      startedAt: seen?.startedAt,
+      endedAt: new Date().toISOString(),
+      people: Math.max(seen?.participants.length ?? 0, current.tiles.length),
+      recorded: seen?.recording.on ?? false,
+      notes: seen?.agent.notes ?? false,
+    })
+  }, [])
+
   const teardownAndLeave = useCallback(async () => {
     const current = activeRef.current
     // A join still under way sees this and leaves for itself.
     attempt.current += 1
+    // Words not sent yet would be lost: the room refuses them once the
+    // member has left (T4).
+    const send = lastWords.current
+    lastWords.current = null
+    if (current?.phase === "in" && send) {
+      await Promise.race([
+        send().catch(() => undefined),
+        new Promise((resolve) => setTimeout(resolve, LAST_WORDS_MS)),
+      ])
+    }
+    // The last one out ends the call on the edge: they get its summary too,
+    // as everyone does when it ends another way (T16).
+    const others = lastView.current?.participants.filter(
+      (person) => person.member !== current?.member
+    )
+    if (current?.phase === "in" && others?.length === 0) remember()
     await teardown()
     setActive(null)
     if (current?.phase === "in") {
@@ -391,7 +471,7 @@ export function CallProvider({
       )
       refreshCall(current.organizationId, current.room)
     }
-  }, [refreshCall, teardown])
+  }, [refreshCall, remember, teardown])
 
   const setHandOf = useCallback(
     (member: string, up: boolean) =>
@@ -505,7 +585,8 @@ export function CallProvider({
         const answer = await joinCall(
           options.organizationId,
           options.room,
-          options.name ?? viewerName
+          options.name ?? viewerName,
+          options.agents
         )
         callId = answer.callId
         token = answer.token
@@ -596,19 +677,49 @@ export function CallProvider({
           })
         })
       )
-      const flush = setInterval(() => {
+      // One send at a time; a failed one goes back in the buffer, and the
+      // member hears about it once it keeps failing (T4).
+      let sending: Promise<void> | undefined
+      let failures = 0
+      const send = (): Promise<void> => {
+        if (sending) return sending
         const segments = buffer.take()
-        if (segments.length === 0) return
-        void sendTranscript(
+        if (segments.length === 0) return Promise.resolve()
+        sending = sendTranscript(
           options.organizationId,
           options.room,
           callId,
           segments
-        ).catch(() => undefined)
-      }, TRANSCRIPT_FLUSH_MS)
+        )
+          .then(() => {
+            if (failures >= TRANSCRIPT_FAILURES_SHOWN)
+              update({ transcriptFailing: false })
+            failures = 0
+          })
+          .catch((error: unknown) => {
+            // The call is over or the member is out of it: nothing to retry.
+            if (error instanceof ApiError && [403, 409].includes(error.status))
+              return
+            buffer.putBack(segments)
+            failures += 1
+            if (failures === TRANSCRIPT_FAILURES_SHOWN)
+              update({ transcriptFailing: true })
+          })
+          .finally(() => {
+            sending = undefined
+          })
+        return sending
+      }
+      const flush = setInterval(() => void send(), TRANSCRIPT_FLUSH_MS)
+      lastWords.current = async () => {
+        await sending?.catch(() => undefined)
+        await send()
+      }
+      let heardTimer: ReturnType<typeof setTimeout> | undefined
       cleanups.current.push(() => {
         clearInterval(flush)
         clearTimeout(captionTimer)
+        clearTimeout(heardTimer)
         buffer.clear()
       })
 
@@ -633,6 +744,15 @@ export function CallProvider({
             ),
           onQuiet: () => update({ agentSpeaking: false }),
           onPrivate: (text) => update({ privateAnswer: text }),
+          onHeard: (text) => {
+            update({ agentHeard: text, agentTrouble: undefined })
+            clearTimeout(heardTimer)
+            heardTimer = setTimeout(
+              () => update({ agentHeard: undefined }),
+              CAPTION_MS
+            )
+          },
+          onTrouble: (reason) => update({ agentTrouble: reason }),
           onState: () => refreshCall(options.organizationId, options.room),
           onEnded: () => void endedElsewhere(id),
         })
@@ -653,19 +773,6 @@ export function CallProvider({
    * Someone else ended the call: there is no seat to give back, only the
    * media and the page's own state to clear.
    */
-  const remember = useCallback(() => {
-    const current = activeRef.current
-    if (current?.phase !== "in") return
-    const seen = lastView.current
-    setEnded({
-      roomName: current.roomName,
-      startedAt: seen?.startedAt,
-      endedAt: new Date().toISOString(),
-      people: Math.max(seen?.participants.length ?? 0, current.tiles.length),
-      recorded: seen?.recording.on ?? false,
-    })
-  }, [])
-
   const endedElsewhere = useCallback(
     async (id: number) => {
       if (attempt.current !== id) return
@@ -883,6 +990,8 @@ function followVoice(
     onSpeaking: (utteranceId: string, name: string, text: string) => void
     onQuiet: () => void
     onPrivate: (text: string) => void
+    onHeard: (text: string) => void
+    onTrouble: (reason: VoiceTrouble) => void
     onState: () => void
     /** The call ended for everyone. */
     onEnded: () => void
@@ -891,6 +1000,7 @@ function followVoice(
   let stopped = false
   let socket: WebSocket | undefined
   let retry: ReturnType<typeof setTimeout> | undefined
+  let retries = 0
   let agentName = "Agent"
   let playing: HTMLAudioElement | undefined
   let current: string | undefined
@@ -925,8 +1035,12 @@ function followVoice(
   const open = () => {
     if (stopped) return
     socket = new WebSocket(liveSocketUrl(organizationId, room, "/voice/live"))
+    socket.addEventListener("open", () => {
+      retries = 0
+    })
     socket.addEventListener("message", (message) => {
       const frame = parseVoiceFrame(message.data)
+      // A frame from a newer edge is ignored, never shown as private.
       if (!frame) return
       if (frame.type === "voice.state") {
         agentName = frame.name
@@ -944,13 +1058,23 @@ function followVoice(
       } else if (frame.type === "voice.stop") {
         stop(frame.utteranceId)
         if (frame.reason === "call_ended") on.onEnded()
-      } else {
+      } else if (frame.type === "voice.private") {
         on.onPrivate(frame.text)
+      } else if (frame.type === "voice.heard") {
+        on.onHeard(frame.text)
+      } else {
+        on.onTrouble(frame.reason)
       }
     })
-    socket.addEventListener("close", () => {
+    socket.addEventListener("close", (event) => {
       socket = undefined
-      if (!stopped) retry = setTimeout(open, VOICE_RETRY_MS)
+      // The room closed it on purpose: the member left, was removed or the
+      // call ended. Reopening would only be refused (T7).
+      if (stopped || event.code === 1000 || event.code === 4403) return
+      const delay =
+        VOICE_RETRY_MS[Math.min(retries, VOICE_RETRY_MS.length - 1)] ?? 15_000
+      retries += 1
+      retry = setTimeout(open, delay)
     })
   }
 

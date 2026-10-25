@@ -11,7 +11,15 @@ import {
   readLog,
 } from "./client"
 import type { LiveEvent } from "./client"
-import { mergeEvents, useRoomLog } from "./use-room-log"
+import {
+  CLOSE_AFTER_MS,
+  DEAD_AFTER_MS,
+  PING_MS,
+  forgetRoomLogs,
+  mergeEvents,
+  openRoomLogs,
+  useRoomLog,
+} from "./use-room-log"
 
 const room = { kind: "teamspace", id: "tsp_1" } as const
 
@@ -92,6 +100,7 @@ describe("useRoomLog", () => {
   const fetchMock = vi.fn<typeof fetch>()
 
   beforeEach(async () => {
+    forgetRoomLogs()
     FakeSocket.all = []
     vi.stubGlobal("WebSocket", FakeSocket)
     vi.stubGlobal("fetch", fetchMock)
@@ -104,6 +113,7 @@ describe("useRoomLog", () => {
 
   afterEach(() => {
     cleanup()
+    forgetRoomLogs()
     fetchMock.mockReset()
     vi.unstubAllGlobals()
     vi.useRealTimers()
@@ -168,6 +178,140 @@ describe("useRoomLog", () => {
     await waitFor(() => expect(result.current.status).toBe("refused"))
     expect(result.current.refusal?.status).toBe(403)
     expect(FakeSocket.all).toHaveLength(0)
+  })
+})
+
+describe("one subscription per room (T5, T6, T12)", () => {
+  const fetchMock = vi.fn<typeof fetch>()
+
+  beforeEach(async () => {
+    forgetRoomLogs()
+    FakeSocket.all = []
+    vi.stubGlobal("WebSocket", FakeSocket)
+    vi.stubGlobal("fetch", fetchMock)
+    forgetAdmissions()
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    await admit("org_1", room)
+    fetchMock.mockClear()
+  })
+
+  afterEach(() => {
+    cleanup()
+    forgetRoomLogs()
+    fetchMock.mockReset()
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  it("shares one read and one socket between every hook on a room", async () => {
+    fetchMock.mockImplementation(async () => logAnswer([]))
+    fetchMock.mockResolvedValueOnce(logAnswer([event(1), event(2)]))
+    const { result } = renderHook(() => [
+      useRoomLog("org_1", room),
+      useRoomLog("org_1", { kind: "teamspace", id: "tsp_1" }),
+      useRoomLog("org_1", room),
+    ])
+    await waitFor(() => expect(FakeSocket.all).toHaveLength(1))
+    const logReads = () =>
+      fetchMock.mock.calls.filter(([url]) => String(url).includes("/log?"))
+    expect(logReads()).toHaveLength(1)
+    act(() => FakeSocket.all[0]?.open())
+    await waitFor(() => expect(logReads()).toHaveLength(2))
+    for (const log of result.current) {
+      expect(log.events.map((e) => e.seq)).toEqual([1, 2])
+      expect(log.status).toBe("live")
+      expect(log.history).toBe(2)
+    }
+    act(() =>
+      FakeSocket.all[0]?.frame(
+        JSON.stringify({ type: "event", event: event(3) })
+      )
+    )
+    for (const log of result.current) {
+      expect(log.events.map((e) => e.seq)).toEqual([1, 2, 3])
+    }
+    expect(openRoomLogs()).toBe(1)
+  })
+
+  it("shows a room's events at once when it is opened again, and reads only what is new", async () => {
+    fetchMock.mockImplementation(async () => logAnswer([]))
+    fetchMock.mockResolvedValueOnce(logAnswer([event(1), event(2)]))
+    const first = renderHook(() => useRoomLog("org_1", room))
+    await waitFor(() => expect(first.result.current.events).toHaveLength(2))
+    first.unmount()
+
+    const again = renderHook(() => useRoomLog("org_1", room))
+    expect(again.result.current.events.map((e) => e.seq)).toEqual([1, 2])
+    // The socket was kept for the next hook: nothing is read from the start.
+    expect(FakeSocket.all).toHaveLength(1)
+    expect(
+      fetchMock.mock.calls.filter(([url]) => String(url).includes("after=0"))
+    ).toHaveLength(1)
+  })
+
+  it("closes a room nobody follows after a while", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    fetchMock.mockImplementation(async () => logAnswer([]))
+    const hook = renderHook(() => useRoomLog("org_1", room))
+    await waitFor(() => expect(FakeSocket.all).toHaveLength(1))
+    hook.unmount()
+    expect(openRoomLogs()).toBe(1)
+    act(() => vi.advanceTimersByTime(CLOSE_AFTER_MS + 1))
+    expect(openRoomLogs()).toBe(0)
+  })
+
+  it("counts a socket that stops answering pings as dead and opens another", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    fetchMock.mockImplementation(async () => logAnswer([]))
+    const { result } = renderHook(() => useRoomLog("org_1", room))
+    await waitFor(() => expect(FakeSocket.all).toHaveLength(1))
+    act(() => FakeSocket.all[0]?.open())
+    expect(result.current.status).toBe("live")
+
+    act(() => vi.advanceTimersByTime(PING_MS))
+    expect(FakeSocket.all[0]?.sent).toEqual(["ping"])
+    act(() => FakeSocket.all[0]?.frame("pong"))
+    // Pongs keep it alive; silence past the limit does not.
+    act(() => vi.advanceTimersByTime(DEAD_AFTER_MS + PING_MS))
+    expect(result.current.status).toBe("reconnecting")
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000)
+    })
+    await waitFor(() => expect(FakeSocket.all).toHaveLength(2))
+  })
+
+  it("survives a ping on a socket that can no longer send", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    fetchMock.mockImplementation(async () => logAnswer([]))
+    const { result } = renderHook(() => useRoomLog("org_1", room))
+    await waitFor(() => expect(FakeSocket.all).toHaveLength(1))
+    const socket = FakeSocket.all[0]
+    socket.send = () => {
+      throw new Error("InvalidStateError")
+    }
+    act(() => socket.open())
+    act(() => vi.advanceTimersByTime(PING_MS))
+    expect(result.current.status).toBe("reconnecting")
+  })
+
+  it("reads what it missed when the page comes back online", async () => {
+    fetchMock.mockImplementation(async () => logAnswer([]))
+    fetchMock.mockResolvedValueOnce(logAnswer([event(1)]))
+    const { result } = renderHook(() => useRoomLog("org_1", room))
+    await waitFor(() => expect(FakeSocket.all).toHaveLength(1))
+    act(() => FakeSocket.all[0]?.open())
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(([url]) => String(url).includes("/log?"))
+      ).toHaveLength(2)
+    )
+    fetchMock.mockResolvedValueOnce(logAnswer([event(2)]))
+    act(() => {
+      window.dispatchEvent(new Event("online"))
+    })
+    await waitFor(() =>
+      expect(result.current.events.map((e) => e.seq)).toEqual([1, 2])
+    )
   })
 })
 

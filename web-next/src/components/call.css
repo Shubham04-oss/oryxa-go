@@ -662,6 +662,15 @@
   font-size: 12px;
   white-space: nowrap;
 }
+.call-dock-side .call-hint,
+.call-dock-side .call-dock-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.call-dock-side .call-dock-note[role="alert"] {
+  color: var(--tone-e4aaa6);
+}
 .call-dock-side:last-child {
   justify-content: flex-end;
 }
@@ -781,7 +790,9 @@
 }
 
 /* The room's conversation beside the call: the page's own, moved in here. */
-.call-room { width: 380px; }
+.call-room {
+  width: 380px;
+}
 .call-room-slot {
   display: flex;
   flex: 1;
@@ -789,9 +800,16 @@
   min-height: 0;
   padding: 0 4px 4px;
 }
-.call-room-slot:empty { display: none; }
-.call-room-slot > * { flex: 1; min-height: 0; }
-.call-room-slot .workspace-conversation { border-radius: 12px; }
+.call-room-slot:empty {
+  display: none;
+}
+.call-room-slot > * {
+  flex: 1;
+  min-height: 0;
+}
+.call-room-slot .workspace-conversation {
+  border-radius: 12px;
+}
 
 /* In a side conversation (a narrow panel) the parley sits under its bar:
    the strip wraps, without the faces. */
@@ -803,13 +821,17 @@
   gap: 8px;
   padding: 8px 0 0;
 }
-.workspace-side-parley .workspace-teamspace-parley { margin-left: 0; }
+.workspace-side-parley .workspace-teamspace-parley {
+  margin-left: 0;
+}
 .workspace-side-parley .call-strip {
   align-self: stretch;
   flex-wrap: wrap;
   margin: 0;
 }
-.workspace-side-parley .call-strip-cams { display: none; }
+.workspace-side-parley .call-strip-cams {
+  display: none;
+}
 .workspace-side-parley .call-strip-acts {
   width: 100%;
   justify-content: flex-end;
@@ -827,12 +849,30 @@
   padding: 14px;
   border-radius: 14px;
   background: var(--raised);
-  box-shadow: 0 0 0 1px var(--border-quiet), 0 8px 24px var(--shade-66);
+  box-shadow:
+    0 0 0 1px var(--border-quiet),
+    0 8px 24px var(--shade-66);
 }
-.call-devices-head { display: flex; align-items: center; justify-content: space-between; }
-.call-devices-head strong { color: var(--text); font-size: 13px; }
-.call-devices-head .call-btn { width: 28px; height: 28px; }
-.call-device { display: grid; gap: 6px; color: var(--text-muted); font-size: 11.5px; font-weight: 600; }
+.call-devices-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.call-devices-head strong {
+  color: var(--text);
+  font-size: 13px;
+}
+.call-devices-head .call-btn {
+  width: 28px;
+  height: 28px;
+}
+.call-device {
+  display: grid;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
 .call-device select {
   height: 34px;
   padding: 0 10px;
@@ -842,9 +882,19 @@
   color: var(--text);
   font-size: 12.5px;
 }
-.call-device small { color: var(--text-muted); font-size: 12px; font-weight: 500; }
-.call-devices-note { margin: 0; color: var(--text-muted); font-size: 12px; }
-.call-devices-note[role="alert"] { color: var(--tone-e4aaa6); }
+.call-device small {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+.call-devices-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.call-devices-note[role="alert"] {
+  color: var(--tone-e4aaa6);
+}
 
 /* The shared dock's controls are the library's toggles and buttons, in the
    call's round shapes. */

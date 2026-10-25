@@ -19,7 +19,29 @@ export type CallView = {
   startedBy: string
   participants: CallParticipant[]
   recording: RecordingState
-  agent: { present: boolean; name: string }
+  agent: {
+    present: boolean
+    name: string
+    /** Every name it answers to, its own first (older edges send none). */
+    names?: string[]
+    /** False while it has no voice model or speech here. */
+    canAnswer?: boolean
+    /** Whether the call leaves notes in the room when it ends. */
+    notes?: boolean
+  }
+}
+
+/**
+ * The names to tell members to say, room agents' first: they are the names
+ * the room shows. Each is its first word ("Arlo" for "Arlo-UJVX").
+ */
+export function wakeNames(agent: CallView["agent"], max = 2): string[] {
+  const names = agent.names?.length ? agent.names : [agent.name]
+  const ordered = [...names.slice(1), names[0] ?? agent.name]
+  const words = ordered
+    .map((name) => name.split(/[\s\-_]+/)[0] ?? "")
+    .filter(Boolean)
+  return [...new Set(words)].slice(0, max)
 }
 
 export type JoinAnswer = {
@@ -61,15 +83,26 @@ export async function readCall(
   return answer.call
 }
 
-/** Joins the room's call, starting it when there is none. */
+/**
+ * Joins the room's call, starting it when there is none. `agents` are the
+ * names the room shows for its agents: the agent in the call answers to them.
+ */
 export function joinCall(
   organizationId: string,
   room: LiveRoom,
-  name?: string
+  name?: string,
+  agents?: string[]
 ): Promise<JoinAnswer> {
+  const named = (agents ?? [])
+    .map((agent) => agent.trim().slice(0, 60))
+    .filter(Boolean)
+    .slice(0, 20)
   return liveRequest<JoinAnswer>(organizationId, room, "/call/join", {
     method: "POST",
-    body: name ? { name } : {},
+    body: {
+      ...(name ? { name } : {}),
+      ...(named.length ? { agents: named } : {}),
+    },
   })
 }
 
@@ -146,12 +179,29 @@ export type VoiceFrame =
     }
   | { type: "voice.state"; present: boolean; name: string }
   | { type: "voice.private"; dispatchId: string; text: string }
+  /** What the agent heard the member say to it. */
+  | { type: "voice.heard"; text: string }
+  /** Why the agent stayed quiet after the member spoke to it. */
+  | { type: "voice.trouble"; reason: VoiceTrouble }
+
+export type VoiceTrouble = "no_model" | "model_failed" | "no_speech"
+
+const VOICE_FRAMES = new Set([
+  "voice.speaking",
+  "voice.audio",
+  "voice.stop",
+  "voice.state",
+  "voice.private",
+  "voice.heard",
+  "voice.trouble",
+])
 
 export function parseVoiceFrame(data: unknown): VoiceFrame | undefined {
   if (typeof data !== "string") return undefined
   try {
     const frame = JSON.parse(data) as { type?: unknown }
-    return typeof frame.type === "string" && frame.type.startsWith("voice.")
+    // Only the frames this page knows: a newer one is not mistaken for any.
+    return typeof frame.type === "string" && VOICE_FRAMES.has(frame.type)
       ? (frame as VoiceFrame)
       : undefined
   } catch {
