@@ -137,3 +137,27 @@
     max-height: 30dvh;
   }
 }
+/* A row's ⋯ menu (rename, delete) shows on hover or focus, and always where
+   there is no hover. */
+.chats-list-item {
+  position: relative;
+}
+.chats-list-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  opacity: 0;
+}
+.chats-list-item:hover .chats-list-actions,
+.chats-list-item:focus-within .chats-list-actions,
+.chats-list-actions[aria-expanded="true"] {
+  opacity: 1;
+}
+@media (hover: none) {
+  .chats-list-actions {
+    opacity: 1;
+  }
+}
+.chats-list-item .chats-list-row {
+  padding-right: 40px;
+}

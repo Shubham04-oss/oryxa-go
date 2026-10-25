@@ -14,14 +14,21 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useReducer, useState } from "react"
 import type { ReactElement } from "react"
-import { AgentChat, RUN_WATCHDOG_MS } from "./agent-chat"
+import {
+  AgentChat,
+  BACKGROUND_RUN_POLL_MS,
+  RUN_WATCHDOG_MS,
+} from "./agent-chat"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
 import {
   initialPrimaryChat,
   primaryChatReducer,
+  clearPrimaryChatRunning,
   lastChosenChat,
   rememberLastChosenChat,
+  requestPrimaryChat,
   usePrimaryChatActivity,
+  usePrimaryChatRequest,
 } from "@/lib/threads/chat-choice"
 import type { PrimaryChat } from "@/lib/threads/chat-choice"
 import { itemsToChatMessages } from "@/lib/threads/chat-messages"
@@ -339,6 +346,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   window.sessionStorage.clear()
   window.localStorage.clear()
+  clearPrimaryChatRunning()
 })
 
 describe("AgentChat", () => {
@@ -1604,6 +1612,74 @@ describe("primary chat history actions", () => {
       screen.queryByRole("button", { name: /Chat 7.*Needs approval/ })
     ).toBeNull()
   })
+  it("lets the member leave a chat while it works, marks it, and clears the mark once Go says its run ended (C3, C9)", async () => {
+    stubApi({
+      threads: [thread("th_1", "Running"), thread("th_2", "Other", 2 * HOUR)],
+    })
+    let ended = false
+    const fetcher = vi.mocked(fetch)
+    const answer = fetcher.getMockImplementation()!
+    fetcher.mockImplementation(async (input, init) =>
+      ended && String(input).endsWith("/threads/th_1")
+        ? json({
+            ...thread("th_1", "Running"),
+            items: [],
+            pending_confirmations: [],
+            active_run: false,
+          })
+        : answer(input, init)
+    )
+    hooks.chat.status = "streaming"
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] })
+    renderChat()
+    await waitFor(() =>
+      expect(hooks.agentOptions.map((item) => item.name)).toContain(
+        "org_1~th_1"
+      )
+    )
+    open("org_1~th_1")
+
+    fireEvent.click(screen.getByRole("button", { name: "History" }))
+    const other = await screen.findByRole("button", { name: /Other.*ago/ })
+    expect(other.hasAttribute("disabled")).toBe(false)
+    fireEvent.click(other)
+    await waitFor(() =>
+      expect(hooks.agentOptions.map((item) => item.name)).toContain(
+        "org_1~th_2"
+      )
+    )
+    updateChat({ status: "ready" })
+    // The chat it left still works: its row carries the dot.
+    const running = () =>
+      within(screen.getByRole("button", { name: /Running.*ago/ })).queryByRole(
+        "img",
+        { name: "Working" }
+      )
+    expect(running()).toBeTruthy()
+
+    ended = true
+    await act(async () => {
+      vi.advanceTimersByTime(BACKGROUND_RUN_POLL_MS)
+    })
+    await waitFor(() => expect(running()).toBeNull())
+    vi.useRealTimers()
+  })
+
+  it("shows a message sent from Home while it waits for the chat to take it, and lets the member cancel it (C16)", async () => {
+    stubApi({ threads: [] })
+    renderChat()
+    act(() =>
+      requestPrimaryChat(scope, { kind: "new", message: "Draft the plan" })
+    )
+    expect(await screen.findByText("Draft the plan")).toBeTruthy()
+    expect(screen.getByText(/Waiting for your agent/)).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+    await waitFor(() => expect(screen.queryByText("Draft the plan")).toBeNull())
+    // Taken back: nothing is left for the panel to send.
+    const { result } = renderHook(() => usePrimaryChatRequest(scope))
+    expect(result.current).toBeNull()
+  })
+
   it("opens an exact history id and deletes it through the chat object while preserving draft/unsent", async () => {
     const calls = stubApi({
       threads: [thread("th_1", "Earlier", 24 * HOUR), thread("th_2", "Latest")],

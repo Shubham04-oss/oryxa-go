@@ -6,6 +6,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
@@ -14,9 +15,16 @@ import { AgentChatMenu } from "./agent-chat-menu"
 import { ApiError } from "@/lib/api/client"
 import { threadListQueryOptions } from "@/lib/threads/client"
 import type { Thread } from "@/lib/threads/client"
+import {
+  clearPrimaryChatRunning,
+  setPrimaryChatRunning,
+} from "@/lib/threads/chat-choice"
 import type { PrimaryChatTarget } from "@/lib/threads/chat-choice"
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  clearPrimaryChatRunning()
+})
 
 const now = new Date("2026-10-15T12:00:00Z")
 const thread = (id: string, title: string, updated_at: string): Thread => ({
@@ -125,11 +133,11 @@ describe("ChatsList", () => {
     const onOpen = renderList()
     const list = screen.getByRole("region", { name: "Chats" })
     const open = within(list).getByRole("button", {
-      name: /Plan the EU launch/,
+      name: /^Plan the EU launch/,
     })
     expect(open.getAttribute("aria-current")).toBe("true")
     fireEvent.click(
-      within(list).getByRole("button", { name: /Compare the hosting quotes/ })
+      within(list).getByRole("button", { name: /^Compare the hosting quotes/ })
     )
     expect(onOpen).toHaveBeenCalledWith({ kind: "thread", threadId: "th_3" })
     fireEvent.click(within(list).getByRole("button", { name: "New chat" }))
@@ -138,12 +146,12 @@ describe("ChatsList", () => {
 
   it("shows a row's file count and its latest file's kind", () => {
     renderList()
-    const row = screen.getByRole("button", { name: /Plan the EU launch/ })
+    const row = screen.getByRole("button", { name: /^Plan the EU launch/ })
     expect(row.textContent).toContain("3 files")
     expect(row.textContent).toContain("PDF")
     expect(
       screen
-        .getByRole("button", { name: /Compare the hosting quotes/ })
+        .getByRole("button", { name: /^Compare the hosting quotes/ })
         .textContent.includes("file")
     ).toBe(false)
   })
@@ -153,18 +161,56 @@ describe("ChatsList", () => {
     expect(screen.getByText("Needs approval")).toBeTruthy()
   })
 
-  it("holds the chat while the agent works", () => {
-    renderList({ busy: true })
+  it("lets the member switch chats while one works, and marks the working one (C9, F10)", () => {
+    setPrimaryChatRunning(
+      { organizationId: "org_1", userId: "u_1" },
+      "th_1",
+      true
+    )
+    const onOpen = renderList({ busy: true })
+    const other = screen.getByRole("button", {
+      name: /^Compare the hosting quotes/,
+    })
+    expect(other.hasAttribute("disabled")).toBe(false)
+    fireEvent.click(other)
+    expect(onOpen).toHaveBeenCalledWith({ kind: "thread", threadId: "th_3" })
     expect(
-      screen
-        .getByRole("button", { name: /Compare the hosting quotes/ })
-        .hasAttribute("disabled")
-    ).toBe(true)
-    expect(
-      screen.getByText(
-        "Your agent is working. You can switch chats once it finishes."
-      )
-    ).toBeTruthy()
+      screen.getByRole("button", { name: "New chat" }).hasAttribute("disabled")
+    ).toBe(false)
+    // The running chat carries the dot; the others don't.
+    expect(screen.getAllByRole("img", { name: "Working" })).toHaveLength(1)
+    expect(screen.queryByText(/switch chats once it finishes/)).toBeNull()
+  })
+
+  it("renames and deletes a chat from its row, and leaves the open one for New when it goes (F11)", async () => {
+    const calls: string[] = []
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push(
+          `${init?.method ?? "GET"} ${new URL(String(input), "http://localhost").pathname}`
+        )
+        return new Response(null, { status: 204 })
+      })
+    )
+    const onOpen = renderList()
+    fireEvent.click(
+      screen.getByRole("button", { name: "Options for Plan the EU launch" })
+    )
+    expect(await screen.findByRole("menuitem", { name: "Rename" })).toBeTruthy()
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete chat" }))
+    const dialog = await screen.findByRole("dialog")
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }))
+    await waitFor(() =>
+      expect(calls).toContain("DELETE /agents/thread-chat-agent/org_1~th_1")
+    )
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: /^Plan the EU launch/ })
+      ).toBeNull()
+    )
+    expect(onOpen).toHaveBeenCalledWith({ kind: "new" })
+    vi.unstubAllGlobals()
   })
 
   it("searches by title", () => {

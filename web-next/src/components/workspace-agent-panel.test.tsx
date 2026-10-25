@@ -31,8 +31,8 @@ import type { Inbox } from "@/lib/dms"
 import {
   MAX_WAITING_MESSAGES,
   claimPrimaryChatRequest,
-  rememberedChoice,
-  rememberChoice,
+  lastChosenChat,
+  rememberLastChosenChat,
   requestPrimaryChat,
   usePrimaryChatActivity,
   usePrimaryChatRequest,
@@ -113,7 +113,11 @@ function stubGo(seed: Seed = {}) {
           item.title.trim() && Date.now() - Date.parse(item.updated_at) < HOUR
       )
       if (last)
-        rememberChoice({ organizationId: ORG, userId }, primary.id, last.id)
+        rememberLastChosenChat(
+          { organizationId: ORG, userId },
+          primary.id,
+          last.id
+        )
     }
   }
   const backend = fakeAgentsBackend({
@@ -329,6 +333,7 @@ afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
   window.sessionStorage.clear()
+  window.localStorage.clear()
 })
 
 describe("what the agents' chats keep across a switch", () => {
@@ -479,9 +484,7 @@ describe("a first message on its way", () => {
     expect(leoBox().value).toBe("")
     // The socket is made during render; the choice is saved in a passive
     // effect that may flush after waitFor saw the socket.
-    await waitFor(() =>
-      expect(rememberedChoice(scope, primary.id)).toBe("th_b")
-    )
+    await waitFor(() => expect(lastChosenChat(scope, primary.id)).toBe("th_b"))
   })
 
   it("keeps the member from starting another conversation over it, until its conversation has it", async () => {
@@ -563,7 +566,7 @@ describe("a member who takes over the page", () => {
       expect(seen.result.current).toEqual({ threadId: "th_b", state: "idle" })
     )
     // The last member's remembered choice stays theirs.
-    expect(rememberedChoice(otherScope, primary.id)).toBe("th_b")
+    expect(lastChosenChat(otherScope, primary.id)).toBe("th_b")
   })
 
   it("does not carry a message the last member could not send", async () => {
@@ -639,7 +642,7 @@ describe("a request to open a conversation", () => {
     expect(
       document.querySelector(".workspace-agent-thread-title")?.textContent
     ).toBe("Older")
-    expect(rememberedChoice(scope, primary.id)).toBe("th_1")
+    expect(lastChosenChat(scope, primary.id)).toBe("th_1")
   })
 
   it("brings the Agents tab forward", async () => {
@@ -672,7 +675,7 @@ describe("a request to open a conversation", () => {
     await socketOn(chatName("th_1"))
     // It never opened the fresh conversation first.
     expect(roomSockets.named(chatName("th_2"))).toHaveLength(0)
-    expect(rememberedChoice(scope, primary.id)).toBe("th_1")
+    expect(lastChosenChat(scope, primary.id)).toBe("th_1")
   })
 
   it("applies a request made before the panel first mounted", async () => {
@@ -734,7 +737,7 @@ describe("a request to open a conversation", () => {
     })
     socket.open()
     expect(chat.sendMessage).toHaveBeenCalledOnce()
-    expect(rememberedChoice(scope, primary.id)).toBe("th_new")
+    expect(lastChosenChat(scope, primary.id)).toBe("th_new")
 
     // Nothing waits to be sent into the next new conversation.
     fireEvent.click(screen.getByRole("button", { name: "New chat" }))
@@ -796,7 +799,7 @@ describe("a request to open a conversation", () => {
     expect(go.calls.filter((call) => call === START)).toHaveLength(2)
     expect(roomSockets.all.at(-1)?.options.name).toBe(chatName("th_new_2"))
     await waitFor(() =>
-      expect(rememberedChoice(scope, primary.id)).toBe("th_new_2")
+      expect(lastChosenChat(scope, primary.id)).toBe("th_new_2")
     )
     // Neither message went into the other's conversation.
     expect(
@@ -832,7 +835,7 @@ describe("a request to open a conversation", () => {
     expect(go.calls.filter((call) => call === START)).toHaveLength(2)
     expect(roomSockets.all.at(-1)?.options.name).toBe(chatName("th_new_2"))
     await waitFor(() =>
-      expect(rememberedChoice(scope, primary.id)).toBe("th_new_2")
+      expect(lastChosenChat(scope, primary.id)).toBe("th_new_2")
     )
     expect(notSent()).toEqual([])
     // Neither went into the other's conversation, and each went once.
@@ -855,7 +858,7 @@ describe("a request to open a conversation", () => {
     withQueries(panel())
     await socketOn(chatName("th_1"))
     expect(roomSockets.named(chatName("th_2"))).toHaveLength(0)
-    expect(rememberedChoice(scope, primary.id)).toBe("th_1")
+    expect(lastChosenChat(scope, primary.id)).toBe("th_1")
   })
 
   it("refuses the message after the last it has room for, and keeps its words as not sent", async () => {
@@ -1028,7 +1031,7 @@ describe("a request to open a conversation", () => {
     act(() => release())
     await socketOn(chatName("th_1"))
     expect(roomSockets.named(chatName("th_2"))).toHaveLength(0)
-    expect(rememberedChoice(scope, primary.id)).toBe("th_1")
+    expect(lastChosenChat(scope, primary.id)).toBe("th_1")
   })
 
   it("opens a blank chat, and remembers it, for a request with no message", async () => {
@@ -1038,7 +1041,7 @@ describe("a request to open a conversation", () => {
 
     act(() => requestPrimaryChat(scope, { kind: "new" }))
     expect(await screen.findByText(blank)).toBeTruthy()
-    expect(rememberedChoice(scope, primary.id)).toBe("new")
+    expect(lastChosenChat(scope, primary.id)).toBe("new")
     await act(async () => {})
     expect(go.calls.some((call) => call.startsWith("POST"))).toBe(false)
   })
@@ -1058,7 +1061,7 @@ describe("a request to open a conversation", () => {
     )
     await act(async () => {})
     expect(roomSockets.named(chatName("th_1"))).toHaveLength(0)
-    expect(rememberedChoice(scope, primary.id)).toBe("th_2")
+    expect(lastChosenChat(scope, primary.id)).toBe("th_2")
   })
 })
 
@@ -1097,7 +1100,7 @@ describe("in StrictMode, as the dev server runs the app", () => {
     await socketOn(chatName("th_1"))
     await act(async () => {})
     expect(roomSockets.named(chatName("th_2"))).toHaveLength(0)
-    expect(rememberedChoice(scope, primary.id)).toBe("th_1")
+    expect(lastChosenChat(scope, primary.id)).toBe("th_1")
   })
 
   it("sends a typed first message once", async () => {
@@ -1435,9 +1438,7 @@ describe("the panel's header, switch and chips", () => {
       selector: ".workspace-agent-thread-title",
     })
     // The row over the log only names the conversation now.
-    expect(
-      screen.queryByRole("button", { name: "New conversation" })
-    ).toBeNull()
+    expect(document.querySelector(".workspace-agent-new-chat")).toBeNull()
     expect(document.querySelector(".workspace-chat-history-list")).toBeNull()
 
     const history = screen.getByRole("button", { name: "History" })

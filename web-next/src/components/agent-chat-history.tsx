@@ -4,11 +4,24 @@ import { timeAgo } from "./agents-format"
 import type { Thread } from "@/lib/threads/client"
 import "./agent-chat-history.css"
 
+/** The mark on a conversation whose run goes on, with words for a screen reader. */
+export function RunningDot() {
+  return (
+    <span
+      className="chat-running-dot"
+      role="img"
+      aria-label="Working"
+      title="Working"
+    />
+  )
+}
+
 /** A compact, optional view of the agent's real conversations. */
 export function AgentChatHistory({
   threads,
   selected,
   waiting = new Set(),
+  running = new Set(),
   loading,
   error,
   disabled,
@@ -23,6 +36,8 @@ export function AgentChatHistory({
   threads: readonly Thread[]
   selected?: string | null
   waiting?: ReadonlySet<string>
+  /** Conversations with a run going: marked, and open like any other. */
+  running?: ReadonlySet<string>
   loading?: boolean
   error?: string
   disabled?: boolean
@@ -128,7 +143,10 @@ export function AgentChatHistory({
                       disabled={busy}
                       onClick={() => onOpen(thread.id)}
                     >
-                      <span title={title}>{title}</span>
+                      <span title={title}>
+                        {running.has(thread.id) && <RunningDot />}
+                        {title}
+                      </span>
                       <span className="workspace-chat-history-meta">
                         {waiting.has(thread.id) && (
                           <span>Needs approval · </span>

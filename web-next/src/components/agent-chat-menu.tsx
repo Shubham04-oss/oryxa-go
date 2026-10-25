@@ -25,13 +25,16 @@ import {
 import { renameFailureText } from "@/lib/threads/rename"
 
 /**
- * The open conversation's ⋯ menu: Rename, in a small dialog, and Delete,
- * after a confirm. Each is offered only when it is handed its action.
+ * A conversation's ⋯ menu: Rename, in a small dialog, and Delete, after a
+ * confirm. Each is offered only when it is handed its action. The open
+ * chat's header and every row of the Chats list use it (F11).
  */
 export function AgentChatMenu({
   title,
   editableTitle = title,
   agentName,
+  label = "Chat options",
+  className,
   disabled,
   onRename,
   onDelete,
@@ -41,6 +44,9 @@ export function AgentChatMenu({
   editableTitle?: string
   /** Who answers in the chat, for "Krude is answering". */
   agentName?: string
+  /** The menu button's name: a list names whose chat it is. */
+  label?: string
+  className?: string
   /** While a run works, or the chat has no conversation yet. */
   disabled: boolean
   /** PATCHes the title (already checked); rejects with Go's refusal. */
@@ -101,7 +107,9 @@ export function AgentChatMenu({
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label="Chat options"
+              aria-label={label}
+              title={label}
+              className={className}
               disabled={disabled}
             />
           }

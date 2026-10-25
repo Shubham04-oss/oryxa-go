@@ -376,6 +376,26 @@ export function usePrimaryChatRequest(
   )
 }
 
+/**
+ * Every request nobody has claimed yet, oldest first, for the chat to show
+ * the messages among them as waiting (C16): one sent from Home before the
+ * member's agents have loaded is in view, not only in this queue. Filter it
+ * by scope where it is read; the list itself is the same until it changes.
+ */
+export function useWaitingPrimaryChatRequests(): readonly PrimaryChatRequest[] {
+  return useSyncExternalStore(
+    subscribe,
+    () => waiting,
+    () => NO_REQUESTS
+  )
+}
+const NO_REQUESTS: readonly PrimaryChatRequest[] = []
+
+/** The member takes back a request nobody has claimed: it is never acted on. */
+export function cancelPrimaryChatRequest(id: number): boolean {
+  return claimPrimaryChatRequest(id)
+}
+
 /** What the rest of the app may see of the primary chat: which conversation it has open, and whether it works or waits. */
 export type PrimaryChatActivity = {
   /** The conversation the primary chat has open; null for a new, empty chat. */
@@ -457,6 +477,60 @@ export function usePrimaryChatActivity(
     subscribeToActivity,
     () => (sameScope(latestActivityScope, scope) ? latestActivity : null),
     () => null
+  )
+}
+
+// Every conversation with a run going, not only the open one: the member can
+// leave a chat while it answers (C3, C9), and the lists mark it with a dot
+// until Go says the run is over.
+let running: ReadonlySet<string> = new Set()
+let runningScope: ChatScope | null = null
+const runningListeners = new Set<() => void>()
+const NOTHING_RUNNING: ReadonlySet<string> = new Set()
+
+/** Says whether `threadId`'s run goes on, for `scope`'s chat. Only a change wakes anyone. */
+export function setPrimaryChatRunning(
+  scope: ChatScope,
+  threadId: string,
+  isRunning: boolean
+) {
+  // Another member's runs are forgotten: one page holds one member's chat.
+  const current =
+    runningScope && sameScope(runningScope, scope) ? running : NOTHING_RUNNING
+  if (current.has(threadId) === isRunning) return
+  const next = new Set(current)
+  if (isRunning) next.add(threadId)
+  else next.delete(threadId)
+  running = next
+  runningScope = { organizationId: scope.organizationId, userId: scope.userId }
+  for (const listener of runningListeners) listener()
+}
+
+/** Forgets every run (tests, or another member taking the page). */
+export function clearPrimaryChatRunning() {
+  running = new Set()
+  runningScope = null
+  for (const listener of runningListeners) listener()
+}
+
+function subscribeToRunning(listener: () => void) {
+  runningListeners.add(listener)
+  return () => {
+    runningListeners.delete(listener)
+  }
+}
+
+/** The conversations of `scope`'s primary chat with a run going, open or not. */
+export function usePrimaryChatRunning(
+  scope: ChatScope | undefined
+): ReadonlySet<string> {
+  return useSyncExternalStore(
+    subscribeToRunning,
+    () =>
+      scope && runningScope && sameScope(runningScope, scope)
+        ? running
+        : NOTHING_RUNNING,
+    () => NOTHING_RUNNING
   )
 }
 
