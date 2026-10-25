@@ -144,6 +144,18 @@ func (runs *fakeRuns) Renew(context.Context, string, time.Duration) error {
 	return runs.renewErr
 }
 
+func (runs *fakeRuns) Active(_ context.Context, sessionID, userID string) (bool, error) {
+	runs.mu.Lock()
+	defer runs.mu.Unlock()
+	for _, run := range runs.started {
+		_, finished := runs.finished[run.ID]
+		if run.SessionID == sessionID && run.UserID == userID && !finished && !slices.Contains(runs.cancelled, run.ID) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (runs *fakeRuns) Finish(_ context.Context, runID string, outcome runstore.Outcome, event events.Event) error {
 	runs.mu.Lock()
 	defer runs.mu.Unlock()
@@ -391,6 +403,42 @@ func TestAToolThatAsksWaitsForTheMembersAnswer(t *testing.T) {
 	history := find(thread.Items, ItemConfirmation)
 	if len(history) != 1 || history[0].Status != ConfirmationApproved {
 		t.Fatalf("confirmation in history = %+v", history)
+	}
+}
+
+func TestAThreadSaysWhetherARunAnswersItNow(t *testing.T) {
+	h := newHarness(t, func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("Hello.", genai.RoleModel), nil
+	})
+	created, err := h.service.Create(context.Background(), asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := func() bool {
+		t.Helper()
+		thread, err := h.service.Get(context.Background(), asha, created.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if thread.ActiveRun == nil {
+			t.Fatal("active_run is unsaid, want the run store's answer")
+		}
+		return *thread.ActiveRun
+	}
+	if active() {
+		t.Fatal("active_run = true before any run")
+	}
+	run, err := h.service.StartRun(context.Background(), asha, created.ID, RunInput{Message: "Say hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !active() {
+		t.Fatal("active_run = false while a run holds the thread")
+	}
+	// The run ends, whether or not any client saw it end.
+	run.Execute(context.Background(), func(Item) error { return nil })
+	if active() {
+		t.Fatal("active_run = true after the run ended")
 	}
 }
 

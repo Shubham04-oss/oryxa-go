@@ -139,6 +139,17 @@ type Detail struct {
 	// call ID each answer names. A run on this thread has to answer every one
 	// of them before anything else.
 	Pending []string `json:"pending_confirmations"`
+	// ActiveRun says whether a run is answering the thread now, from the run
+	// store's lease rather than its history (a start with no end is not a
+	// live run). Absent when the run store can't say, so a client keeps to
+	// its own stream: a client that missed a run's end reads it here.
+	ActiveRun *bool `json:"active_run,omitempty"`
+}
+
+// activeRuns is a RunStore that can say whether a thread has a live run.
+// runstore.Store is one.
+type activeRuns interface {
+	Active(ctx context.Context, sessionID, userID string) (bool, error)
 }
 
 // RunStore keeps the record of every run and holds a thread for the run
@@ -416,11 +427,20 @@ func (service *Service) Get(ctx context.Context, member Member, threadID string)
 	tally := tallyArtifacts(history)
 	thread.ArtifactCount, thread.LatestArtifact = len(tally.names), artifactRef(tally.latest)
 	pending, expired := waitingConfirmations(history, service.agent.Name(), service.now())
-	return Detail{
+	detail := Detail{
 		Thread:  thread,
 		Items:   expireItems(displayAgent(historyItems(history), service.agent.Name(), member.AgentName), expired),
 		Pending: nonNil(pending),
-	}, nil
+	}
+	if runs, ok := service.runs.(activeRuns); ok {
+		// A failed read leaves it unsaid, rather than failing the thread.
+		if active, err := runs.Active(ctx, threadID, member.UserID); err == nil {
+			detail.ActiveRun = &active
+		} else {
+			service.logger.WarnContext(ctx, "read a thread's active run", "thread_id", threadID, "error", err)
+		}
+	}
+	return detail, nil
 }
 
 // Origin says why one of the member's threads exists: OriginChat,
