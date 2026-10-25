@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
@@ -69,30 +70,46 @@ func (relay *Relay) takeTurn(ctx context.Context, seat Seat, room Situation, tra
 // asked and could not give one: a line that names it, and says why in plain
 // words. It never carries what went wrong, only which of a few things did,
 // because what went wrong is not for the whole team to read.
+//
+// These lines name a seat as the room shows it, by its display name, never
+// by its handle: a handle is for typing an @mention, and it changes with a
+// rename or a namesake joining (T8).
 func unanswered(seat Seat, taken turn) string {
+	name := seatName(seat)
 	switch {
 	case errors.Is(taken.err, threads.ErrConfirmationPending):
-		return fmt.Sprintf("@%s is waiting on its owner's confirmation, so it can't answer yet.", seat.Handle)
+		return fmt.Sprintf("%s is waiting on its owner's confirmation, so it can't answer yet.", name)
 	case errors.Is(taken.err, threads.ErrRunInProgress):
-		return fmt.Sprintf("@%s is busy answering something else, so it couldn't answer this.", seat.Handle)
+		return fmt.Sprintf("%s is busy answering something else, so it couldn't answer this.", name)
 	case taken.slow:
-		return fmt.Sprintf("@%s is taking too long to answer, so the room stopped waiting.", seat.Handle)
+		return fmt.Sprintf("%s is taking too long to answer, so the room stopped waiting.", name)
 	default:
-		return fmt.Sprintf("@%s couldn't answer right now.", seat.Handle)
+		return fmt.Sprintf("%s couldn't answer right now.", name)
 	}
 }
 
-// passedFor is the line for seat, standing in for the away person whose handle
-// is away, when it had nothing to say in their place: they were asked, so the
-// room is told the question waits for them rather than hearing nothing.
-func passedFor(seat Seat, away string) string {
-	return fmt.Sprintf("@%s is away, and @%s has nothing to add for them, so this waits for @%s.", away, seat.Handle, away)
+// seatName is what the room calls seat: its display name, or its handle
+// when it has none.
+func seatName(seat Seat) string {
+	if name := strings.TrimSpace(seat.DisplayName); name != "" {
+		return name
+	}
+	return seat.Handle
+}
+
+// passedFor is the line for seat, standing in for the away person whose
+// handle is away and whose name is awayName, when it had nothing to say in
+// their place: they were asked, so the room is told the question waits for
+// them rather than hearing nothing. The last mention stays an @handle: it is
+// what tells them they were asked.
+func passedFor(seat Seat, away, awayName string) string {
+	return fmt.Sprintf("%s is away, and %s has nothing to add for them, so this waits for @%s.", awayName, seatName(seat), away)
 }
 
 // noTurn is the line for a seat a person named that the turns one message
 // may cause ran out before.
 func noTurn(seat Seat) string {
-	return fmt.Sprintf("@%s wasn't given a turn: one message wakes at most %d agents.", seat.Handle, maxAgentTurns)
+	return fmt.Sprintf("%s wasn't given a turn: one message wakes at most %d agents.", seatName(seat), maxAgentTurns)
 }
 
 // note says, as seat, that it has no answer for trigger: line, which the

@@ -123,34 +123,34 @@ func TestASeatThatCannotAnswerSaysSoInTheRoom(t *testing.T) {
 			func(context.Context) (string, error) {
 				return "", errors.New("vertex: 429 quota exceeded for project acme-prod")
 			},
-			"@mira couldn't answer right now.",
+			"mira couldn't answer right now.",
 		},
 		{
 			"it said nothing at all",
 			func(context.Context) (string, error) { return " \n", nil },
-			"@mira couldn't answer right now.",
+			"mira couldn't answer right now.",
 		},
 		{
 			"its turn panicked",
 			func(context.Context) (string, error) { panic("boom: acme-prod credentials") },
-			"@mira couldn't answer right now.",
+			"mira couldn't answer right now.",
 		},
 		{
 			"its thread waits for its owner",
 			func(context.Context) (string, error) {
 				return "", fmt.Errorf("start the turn: %w", threads.ErrConfirmationPending)
 			},
-			"@mira is waiting on its owner's confirmation, so it can't answer yet.",
+			"mira is waiting on its owner's confirmation, so it can't answer yet.",
 		},
 		{
 			"its thread stays busy with another message",
 			func(context.Context) (string, error) { return "", threads.ErrRunInProgress },
-			"@mira is busy answering something else, so it couldn't answer this.",
+			"mira is busy answering something else, so it couldn't answer this.",
 		},
 		{
 			"it runs out of its turn's budget",
 			func(ctx context.Context) (string, error) { <-ctx.Done(); return "", ctx.Err() },
-			"@mira is taking too long to answer, so the room stopped waiting.",
+			"mira is taking too long to answer, so the room stopped waiting.",
 		},
 	}
 	for _, test := range cases {
@@ -226,7 +226,7 @@ func (speaker *turnsScriptedSpeaker) timesAsked(handle string) int {
 // the guard could not read is still said as it is, since it holds nothing to
 // find, and is not turned into a claim that an answer is being held.
 func TestTheGuardReadsWhatASeatSaysWhenItCannotAnswer(t *testing.T) {
-	const line = "@mira couldn't answer right now."
+	const line = "mira couldn't answer right now."
 	bo := relayPersonSeat("bo", "user-bo", true)
 	mira := relayAgentSeat("mira", "user-mira", "agt_mira")
 	broken := func(context.Context) (string, error) { return "", errors.New("down") }
@@ -273,7 +273,7 @@ func TestAPendingConfirmationDoesNotMuteASeatForGood(t *testing.T) {
 	}}
 	relay := &Relay{Store: &relayFakeStore{}, Speaker: speaker}
 	room := Situation{Seats: []Seat{bo, mira}}
-	const waitingLine = "@mira is waiting on its owner's confirmation, so it can't answer yet."
+	const waitingLine = "mira is waiting on its owner's confirmation, so it can't answer yet."
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		results, err := relay.Post(context.Background(), room, relayMessage("room-1", bo, "@mira what did we agree?"), Verdict{})
@@ -403,7 +403,7 @@ func TestASeatNamedPastTheTurnsAMessageWakesSaysSo(t *testing.T) {
 	}
 	for index, handle := range []string{"a5", "a6"} {
 		line := results[1+maxAgentTurns+index]
-		if want := fmt.Sprintf("@%s wasn't given a turn: one message wakes at most %d agents.", handle, maxAgentTurns); line.AuthorHandle != handle || line.Body != want {
+		if want := fmt.Sprintf("%s wasn't given a turn: one message wakes at most %d agents.", handle, maxAgentTurns); line.AuthorHandle != handle || line.Body != want {
 			t.Errorf("line for %s = %+v, want %q", handle, line, want)
 		}
 	}
@@ -462,7 +462,7 @@ func TestARequestThatHasGoneAwayStillLeavesTheLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 2 || results[1].Body != "@mira couldn't answer right now." {
+	if len(results) != 2 || results[1].Body != "mira couldn't answer right now." {
 		t.Fatalf("got %+v, want the post and mira's line", results)
 	}
 }
@@ -520,25 +520,25 @@ func TestWhatTheRoomsOwnSpeakerRunsIntoIsSaidInTheRoom(t *testing.T) {
 			func(context.Context) (managedagents.StartedRun, error) {
 				return managedagents.StartedRun{}, threads.ErrConfirmationPending
 			},
-			"@mira is waiting on its owner's confirmation, so it can't answer yet.",
+			"mira is waiting on its owner's confirmation, so it can't answer yet.",
 		},
 		"the seat's thread is busy": {
 			func(context.Context) (managedagents.StartedRun, error) {
 				return managedagents.StartedRun{}, threads.ErrRunInProgress
 			},
-			"@mira is busy answering something else, so it couldn't answer this.",
+			"mira is busy answering something else, so it couldn't answer this.",
 		},
 		"the seat's run never finishes": {
 			func(context.Context) (managedagents.StartedRun, error) {
 				return managedagents.StartedRun{ThreadID: "thread_1", Run: turnsStuckRun{}}, nil
 			},
-			"@mira is taking too long to answer, so the room stopped waiting.",
+			"mira is taking too long to answer, so the room stopped waiting.",
 		},
 		"the seat's agent cannot be started": {
 			func(context.Context) (managedagents.StartedRun, error) {
 				return managedagents.StartedRun{}, errors.New("build the agent for an unwatched run: no key for acme-prod")
 			},
-			"@mira couldn't answer right now.",
+			"mira couldn't answer right now.",
 		},
 	}
 	for name, test := range cases {
@@ -560,5 +560,30 @@ func TestWhatTheRoomsOwnSpeakerRunsIntoIsSaidInTheRoom(t *testing.T) {
 				t.Fatalf("got %+v, want mira's line %q", results, test.want)
 			}
 		})
+	}
+}
+
+// TestStatusLinesNameSeatsAsTheRoomShowsThem: a status line names a seat by
+// its display name, not by a handle nobody chose ("@arlo-ujvx", T8). Only
+// the away person keeps an @mention, which is what tells them.
+func TestStatusLinesNameSeatsAsTheRoomShowsThem(t *testing.T) {
+	arlo := Seat{Handle: "arlo-ujvx", Kind: SeatAgent, UserID: "user-ada", AgentID: "agt_ada", AgentName: "Arlo", DisplayName: "Arlo"}
+	if got, want := unanswered(arlo, turn{err: errSaidNothing}), "Arlo couldn't answer right now."; got != want {
+		t.Errorf("unanswered = %q, want %q", got, want)
+	}
+	if got, want := noTurn(arlo), fmt.Sprintf("Arlo wasn't given a turn: one message wakes at most %d agents.", maxAgentTurns); got != want {
+		t.Errorf("noTurn = %q, want %q", got, want)
+	}
+	room := Situation{Seats: []Seat{{Handle: "dan-2", Kind: SeatPerson, UserID: "user-dan", DisplayName: "Dan Ruiz"}, arlo}}
+	if got, want := passedFor(arlo, "dan-2", awayName(room, "dan-2")), "Dan Ruiz is away, and Arlo has nothing to add for them, so this waits for @dan-2."; got != want {
+		t.Errorf("passedFor = %q, want %q", got, want)
+	}
+	// A seat without a display name, or an away person no longer seated,
+	// falls back to the handle.
+	if got := seatName(Seat{Handle: "krude"}); got != "krude" {
+		t.Errorf("seatName = %q, want the handle", got)
+	}
+	if got := awayName(room, "gone"); got != "gone" {
+		t.Errorf("awayName = %q, want the handle", got)
 	}
 }

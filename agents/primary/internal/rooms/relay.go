@@ -298,7 +298,7 @@ func (relay *Relay) round(ctx context.Context, room Situation, trigger Message, 
 		case taken.reply == Pass:
 			passes++
 			if away := responder.summons.StandingInFor; away != "" {
-				line, err := relay.note(ctx, room, trigger, seat, passedFor(seat, away))
+				line, err := relay.note(ctx, room, trigger, seat, passedFor(seat, away, awayName(room, away)))
 				if err == nil {
 					added = append(added, addition{Message: line})
 				}
@@ -579,4 +579,15 @@ func (relay *Relay) perPost() time.Duration {
 		return relay.Budget
 	}
 	return relayBudget
+}
+
+// awayName is the display name of the person whose handle is away, as the
+// room shows them, or the handle when the room no longer seats them.
+func awayName(room Situation, away string) string {
+	for _, seat := range room.Seats {
+		if seat.Kind == SeatPerson && seat.Handle == away {
+			return seatName(seat)
+		}
+	}
+	return away
 }
