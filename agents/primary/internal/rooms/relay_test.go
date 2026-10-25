@@ -489,7 +489,7 @@ func TestRelayPost_SpeakerErrorDoesNotStopOthers(t *testing.T) {
 	if len(results) != 3 {
 		t.Fatalf("got %d messages, want 3 (post, a1's line saying it could not answer, a2's reply): %+v", len(results), results)
 	}
-	if results[1].AuthorHandle != "a1" || results[1].Body != "@a1 couldn't answer right now." {
+	if results[1].AuthorHandle != "a1" || results[1].Body != "a1 couldn't answer right now." {
 		t.Errorf("first line = %+v, want a1 saying it could not answer", results[1])
 	}
 	if results[2].AuthorHandle != "a2" || results[2].Body != "all good here" {
@@ -846,8 +846,8 @@ func TestAStandInThatPassesSaysTheQuestionWaits(t *testing.T) {
 		t.Fatalf("got %+v, want the post and a line saying it waits for dan", results)
 	}
 	line := results[1]
-	if line.AuthorHandle != "krude" || line.Body != passedFor(krude, "dan") || line.InReplyToSeq != results[0].Seq {
-		t.Errorf("line = %+v, want krude saying %q in reply to the post", line, passedFor(krude, "dan"))
+	if line.AuthorHandle != "krude" || line.Body != passedFor(krude, "dan", "dan") || line.InReplyToSeq != results[0].Seq {
+		t.Errorf("line = %+v, want krude saying %q in reply to the post", line, passedFor(krude, "dan", "dan"))
 	}
 	if !slices.Equal(line.AddressedTo, []string{"dan"}) {
 		t.Errorf("line addresses %v, want dan, so dan hears they were asked", line.AddressedTo)

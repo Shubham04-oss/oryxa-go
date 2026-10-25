@@ -232,6 +232,32 @@ export function TeamspaceConversation({
   )
 }
 
+/**
+ * The seat a message came from, found by who it is rather than by handle: a
+ * handle is recomputed from names on every read, so a rename or a namesake
+ * joining moves it (T8). The handle is the fallback for an author with no ids.
+ */
+export function speakerSeat(
+  message: RoomMessage,
+  seats: readonly RoomSeat[]
+): RoomSeat | undefined {
+  const byId =
+    message.author_kind === "agent"
+      ? message.author_agent_id
+        ? seats.find(
+            (item) =>
+              item.kind === "agent" && item.agent_id === message.author_agent_id
+          )
+        : undefined
+      : message.author_user_id
+        ? seats.find(
+            (item) =>
+              item.kind === "person" && item.user_id === message.author_user_id
+          )
+        : undefined
+  return byId ?? seats.find((item) => item.handle === message.author_handle)
+}
+
 function RoomLine({
   message,
   seats,
@@ -244,12 +270,20 @@ function RoomLine({
   /** The organization's agent, who posts a parley's notes and has no seat. */
   organizationAgent?: Teamspace["organization_agent"]
 }) {
-  const seat = seats.find((item) => item.handle === message.author_handle)
+  const seat = speakerSeat(message, seats)
   const isAgent = message.author_kind === "agent"
   const mine = !isAgent && message.author_user_id === viewerId
+  const byOrganizationAgent =
+    isAgent &&
+    !seat &&
+    !!organizationAgent?.name &&
+    message.author_agent_id === organizationAgent.id
   const name = mine
     ? "You"
-    : (seat?.display_name ?? `@${message.author_handle}`)
+    : (seat?.display_name ??
+      (byOrganizationAgent
+        ? organizationAgent.name
+        : `@${message.author_handle}`))
   const identity = isAgent
     ? agentIdentity(
         message.author_agent_id ?? seat?.agent_id ?? message.author_handle,
@@ -264,20 +298,16 @@ function RoomLine({
   // it doesn't know, read as the words their body says.
   const notes = parleyNotesOf(message)
   if (notes) {
-    const byOrganization =
-      !seat &&
-      !!organizationAgent?.name &&
-      message.author_agent_id === organizationAgent.id
     return (
       <ParleyNotesCard
         message={message}
         notes={notes}
         poster={
-          byOrganization
+          byOrganizationAgent
             ? agentIdentity(organizationAgent.id, organizationAgent.name)
             : identity
         }
-        posterName={byOrganization ? organizationAgent.name : name}
+        posterName={name}
         seats={seats}
         viewerId={viewerId}
       />

@@ -103,8 +103,9 @@ export function TeamspaceInviteDialog({
           <DialogTitle>Invite to {space.name}</DialogTitle>
           <DialogDescription>
             Adding someone to the {space.team_name} team opens this teamspace to
-            them. To bring in someone new to the workspace, invite them from
-            Settings first.
+            them. They can post in its room once they have an active agent of
+            their own. To bring in someone new to the workspace, invite them
+            from Settings first.
           </DialogDescription>
         </div>
         <label className="workspace-teamspace-invite-search">
