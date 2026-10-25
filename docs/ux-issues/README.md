@@ -12,6 +12,9 @@ Started 2026-10-25 from the owner's walkthrough notes and a read-only walk of pr
 | [04-home-requests-settings-library.md](04-home-requests-settings-library.md) | Home, Requests inbox, Settings, Library |
 | [05-core-flows.md](05-core-flows.md) | Driven end to end: search, chat, tools, files, setup, requests |
 | [06-ux-design.md](06-ux-design.md) | UX and visual design: concepts, panes, type, colour, feedback, navigation |
+| [07-duplication.md](07-duplication.md) | Many ways to do one job in the UI (N1–N12) |
+| [07a-code-duplication.md](07a-code-duplication.md) | Many pieces of code doing one job (D1–D26), plus dead code |
+| [plan-design-tokens.md](plan-design-tokens.md) | Plan: one type, radius and colour scale (fixes U5–U7); owner decisions first |
 
 ## Issue template
 
@@ -33,7 +36,7 @@ Severity: **blocker** means a core flow fails; **high** means it fails often or 
 
 ## Ranked summary (2026-10-25)
 
-96 issues so far: T1–T17, C1–C17, B1–B16, H1–H14, F1–F19, U1–U13. Ranked by how much they hurt everyday use of the main app.
+134 issues so far: T1–T17, C1–C17, B1–B16, H1–H14, F1–F19, U1–U13, N1–N12, D1–D26. Ranked by how much they hurt everyday use of the main app.
 
 **Fix first: trust and "does it work"**
 
@@ -66,6 +69,8 @@ Severity: **blocker** means a core flow fails; **high** means it fails often or 
 | 20 | [H12](04-home-requests-settings-library.md) Mobile home layout breaks | 375 px is unusable in places. |
 
 **UX and design, decides how the app feels:** [U1](06-ux-design.md) too many nouns for one product; [U2](06-ux-design.md) two to four panes and two message boxes per screen; [U5](06-ux-design.md) / [U6](06-ux-design.md) text mostly 10–12 px, with no type or radius scale (about 25 sizes and 13 radii across 36 CSS files); [U3](06-ux-design.md) empty states everywhere instead of a first-run path. The fix order is at the end of that file.
+
+**Neatness, one way and one component per job:** [N1](07-duplication.md) four message boxes and eight ways into the same agent; [N5](07-duplication.md) + [D4](07a-code-duplication.md) "what needs you" is counted in five places by two different rules; [N8](07-duplication.md) "team" means three things; [D1](07a-code-duplication.md) nine time formatters and [D5](07a-code-duplication.md) five wordings for one request status.
 
 Not about the main app's usability, recorded so it isn't lost: [H1](04-home-requests-settings-library.md), Slack off in production because of a hidden local tfvars file.
 
