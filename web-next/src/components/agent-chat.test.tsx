@@ -19,9 +19,8 @@ import { WorkspaceAgentPanel } from "./workspace-agent-panel"
 import {
   initialPrimaryChat,
   primaryChatReducer,
-  rememberChoice,
-  rememberedChoice,
-  rememberedView,
+  lastChosenChat,
+  rememberLastChosenChat,
   usePrimaryChatActivity,
 } from "@/lib/threads/chat-choice"
 import type { PrimaryChat } from "@/lib/threads/chat-choice"
@@ -157,12 +156,12 @@ function stubApi({
   gone = [] as string[],
   rememberLatest = true,
 } = {}) {
-  if (rememberLatest && rememberedChoice(scope, LEO) === null) {
+  if (rememberLatest && lastChosenChat(scope, LEO) === null) {
     const last = threads.find(
       (item) => (!item.origin || item.origin === "chat") && item.title.trim()
     )
     if (last && Date.now() - Date.parse(last.updated_at) < HOUR)
-      rememberChoice(scope, LEO, last.id)
+      rememberLastChosenChat(scope, LEO, last.id)
   }
   const calls: string[] = []
   vi.stubGlobal(
@@ -336,6 +335,7 @@ afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
   window.sessionStorage.clear()
+  window.localStorage.clear()
 })
 
 describe("AgentChat", () => {
@@ -539,9 +539,7 @@ describe("AgentChat", () => {
     expect(hooks.agentOptions).toHaveLength(0)
     expect(composer().hasAttribute("disabled")).toBe(false)
     expect(
-      screen
-        .getByRole("button", { name: "New conversation" })
-        .hasAttribute("disabled")
+      screen.getByRole("button", { name: "New chat" }).hasAttribute("disabled")
     ).toBe(false)
 
     type("Plan the launch")
@@ -573,11 +571,11 @@ describe("AgentChat", () => {
     await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
     open("org_1~th_1")
 
-    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }))
     expect(
       screen.getByText("Ask anything to start a conversation.")
     ).toBeTruthy()
-    expect(screen.getByText("New conversation")).toBeTruthy()
+    expect(screen.getByText("New chat", { selector: "p" })).toBeTruthy()
     expect(composer().hasAttribute("disabled")).toBe(false)
     // Nothing is created until there is something to say, and nothing goes.
     expect(calls.filter((call) => call.startsWith("POST"))).toEqual([])
@@ -738,7 +736,7 @@ describe("which conversation the chat opens", () => {
     renderChat()
 
     expect(await screen.findByText(blank)).toBeTruthy()
-    expect(screen.getByText("New conversation")).toBeTruthy()
+    expect(screen.getByText("New chat", { selector: "p" })).toBeTruthy()
     // No socket: nothing is opened until there is something to say.
     expect(hooks.agentOptions).toHaveLength(0)
     expect(composer().hasAttribute("disabled")).toBe(false)
@@ -834,7 +832,7 @@ describe("which conversation the chat opens", () => {
       expect(screen.getByText("Loading the conversation…")).toBeTruthy()
       await later(300)
       expect(screen.getByText(blank)).toBeTruthy()
-      expect(screen.getByText("New conversation")).toBeTruthy()
+      expect(screen.getByText("New chat", { selector: "p" })).toBeTruthy()
       expect((composer() as HTMLTextAreaElement).value).toBe("Quick question")
 
       // The list comes in at last: the chat does not leave the new chat.
@@ -857,7 +855,7 @@ describe("which conversation the chat opens", () => {
       act(() => {
         vi.advanceTimersByTime(30_000)
       })
-      expect(screen.queryByText("New conversation")).toBeNull()
+      expect(screen.queryByText("New chat", { selector: "p" })).toBeNull()
       expect(screen.getByText("Plan the launch")).toBeTruthy()
     })
   })
@@ -872,9 +870,9 @@ describe("which conversation the chat opens", () => {
       await screen.findByText("That conversation no longer exists.")
     ).toBeTruthy()
     expect(screen.getByText(blank)).toBeTruthy()
-    expect(screen.getByText("New conversation")).toBeTruthy()
+    expect(screen.getByText("New chat", { selector: "p" })).toBeTruthy()
     // And a reload stays on the new chat, not the conversation that is gone.
-    expect(rememberedChoice(scope, LEO)).toBe("new")
+    expect(lastChosenChat(scope, LEO)).toBe("new")
   })
 
   it("keeps a first message as not sent, and leaves the composer alone, when the conversation made for it is gone before it was sent", async () => {
@@ -891,11 +889,11 @@ describe("which conversation the chat opens", () => {
     expect(hooks.sendMessage).not.toHaveBeenCalled()
     expect(notSentWords()).toEqual(["Plan the launch"])
     expect((composer() as HTMLTextAreaElement).value).toBe("")
-    expect(screen.getByText("New conversation")).toBeTruthy()
+    expect(screen.getByText("New chat", { selector: "p" })).toBeTruthy()
   })
 
   it("opens the conversation the member chose in this session, however old", async () => {
-    rememberChoice(scope, LEO, "th_1")
+    rememberLastChosenChat(scope, LEO, "th_1")
     stubApi({
       threads: [
         thread("th_2", "Fresh", 60_000),
@@ -907,14 +905,14 @@ describe("which conversation the chat opens", () => {
   })
 
   it("ignores a chosen conversation that no longer exists and opens New", async () => {
-    rememberChoice(scope, LEO, "th_gone")
+    rememberLastChosenChat(scope, LEO, "th_gone")
     stubApi({ threads: [thread("th_1", "Fresh", 60_000)] })
     renderChat()
     expect(await screen.findByText(blank)).toBeTruthy()
   })
 
   it("keeps a member's choice of a new chat over a fresh conversation, over pending approvals", async () => {
-    rememberChoice(scope, LEO, null)
+    rememberLastChosenChat(scope, LEO, null)
     const calls = stubApi({ threads: [thread("th_1", "Fresh", 60_000)] })
     renderChat()
 
@@ -928,33 +926,13 @@ describe("which conversation the chat opens", () => {
     const first = renderChat()
     await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
     open("org_1~th_1")
-    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
-    expect(rememberedChoice(scope, LEO)).toBe("new")
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }))
+    expect(lastChosenChat(scope, LEO)).toBe("new")
 
     // The same tab, loaded again: the conversation they left is still fresh.
     first.unmount()
     cleanup()
     hooks.agentOptions.length = 0
-    renderChat()
-    expect(await screen.findByText(blank)).toBeTruthy()
-    expect(hooks.agentOptions).toHaveLength(0)
-  })
-
-  it("records the latest real leave after a recent explicit New is restored on reload", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] })
-    const now = Date.now()
-    rememberChoice(scope, LEO, null, now - 4 * 60_000)
-    stubApi({
-      threads: [thread("pending", "Waiting")],
-      pending: ["approval"],
-      rememberLatest: false,
-    })
-    const first = renderChat()
-    expect(await screen.findByText(blank)).toBeTruthy()
-    expect(rememberedView(scope, LEO)?.leftAt).toBe(now)
-    vi.setSystemTime(now + 3 * 60_000)
-    first.unmount()
-    expect(rememberedView(scope, LEO)?.leftAt).toBe(now + 3 * 60_000)
     renderChat()
     expect(await screen.findByText(blank)).toBeTruthy()
     expect(hooks.agentOptions).toHaveLength(0)
@@ -967,7 +945,7 @@ describe("which conversation the chat opens", () => {
     expect(await screen.findByText(blank)).toBeTruthy()
     type("Plan the launch")
     await opensThread("th_new")
-    expect(rememberedChoice(scope, LEO)).toBe("th_new")
+    expect(lastChosenChat(scope, LEO)).toBe("th_new")
 
     first.unmount()
     cleanup()
@@ -976,7 +954,7 @@ describe("which conversation the chat opens", () => {
     await opensThread("th_new")
   })
 
-  it("reopens an old conversation that still waits on the member's confirmation", async () => {
+  it("opens New chat, not an old conversation that still waits on the member's confirmation (C1)", async () => {
     const items: Item[] = [
       { type: "message", id: "ev_1", author: "member", text: "Email Sam" },
       {
@@ -989,20 +967,36 @@ describe("which conversation the chat opens", () => {
         status: "pending",
       },
     ]
-    const calls = stubApi({
+    stubApi({
       threads: [thread("th_1", "Email Sam", 6 * HOUR)],
       items,
       pending: ["call_1"],
     })
-    hooks.chat.messages = itemsToChatMessages(items)
     renderChat()
 
-    await opensThread("th_1")
-    expect(calls).toContain(detailPath("th_1"))
-    open("org_1~th_1")
-    expect(
-      await screen.findByRole("group", { name: "Confirm Send email" })
-    ).toBeTruthy()
+    expect(await screen.findByText(blank)).toBeTruthy()
+    await act(async () => {})
+    expect(hooks.agentOptions).toHaveLength(0)
+    // Every remount still lands on New: an automatic New is never outranked
+    // by a confirmation nobody answers.
+    cleanup()
+    renderChat()
+    expect(await screen.findByText(blank)).toBeTruthy()
+    expect(hooks.agentOptions).toHaveLength(0)
+  })
+
+  it("reopens the chat the member last chose, even while another waits on a confirmation", async () => {
+    rememberLastChosenChat(scope, LEO, "th_2")
+    stubApi({
+      threads: [
+        thread("th_1", "Email Sam", 60_000),
+        thread("th_2", "Chosen", 30 * HOUR),
+      ],
+      pending: ["call_1"],
+      rememberLatest: false,
+    })
+    renderChat()
+    await opensThread("th_2")
   })
 
   it("opens a new chat when the old conversation waits on nothing, having asked Go once", async () => {
@@ -1068,7 +1062,7 @@ describe("which conversation the chat opens", () => {
     stubApi({ threads: [thread("th_1", "Old", 6 * HOUR)] })
     renderWithQueries(<ChatHost remember={false} />)
     expect(await screen.findByText(blank)).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }))
     expect(window.sessionStorage.length).toBe(0)
   })
 })
@@ -1095,7 +1089,7 @@ describe("a mounted conversation", () => {
     expect(screen.getByText("Plan the launch")).toBeTruthy()
     expect((composer() as HTMLTextAreaElement).value).toBe("Half a thought")
     expect(notSentWords()).toEqual(["Waiting message"])
-    expect(rememberedChoice(scope, LEO)).toBe("th_1")
+    expect(lastChosenChat(scope, LEO)).toBe("th_1")
   })
 })
 
@@ -1122,7 +1116,7 @@ describe("a first message that was not sent", () => {
     expect(notSentWords()).toEqual(["Lost words"])
     expect(screen.getByText(`Not sent. ${down}`)).toBeTruthy()
 
-    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }))
     expect(notSentWords()).toEqual(["Lost words"])
     // The words replace the invitation, not the composer.
     expect(screen.queryByText(blank)).toBeNull()
@@ -1206,7 +1200,7 @@ describe("a member who takes over the page", () => {
 
   it("does not choose, show or publish a conversation from the last member's cached list, and waits for its own", async () => {
     stubApi({ threads: [thread("th_b", "Your plan")], rememberLatest: false })
-    rememberChoice(theirs, LEO, "th_b")
+    rememberLastChosenChat(theirs, LEO, "th_b")
     // The other member's list is warm in the cache the two share.
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -1226,7 +1220,7 @@ describe("a member who takes over the page", () => {
     expect(screen.queryByText("Their plan")).toBeNull()
     expect(hooks.agentOptions).toHaveLength(0)
     expect(activity.result.current).toBeNull()
-    expect(rememberedChoice(scope, LEO)).toBeNull()
+    expect(lastChosenChat(scope, LEO)).toBeNull()
 
     act(() => release())
     await waitFor(() =>
@@ -1392,7 +1386,7 @@ describe("the primary chat's activity", () => {
     await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
     open("org_1~th_1")
 
-    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }))
     expect(activity()).toEqual({ threadId: null, state: "idle" })
 
     type("Something new")
@@ -1417,7 +1411,7 @@ describe("the primary chat's activity", () => {
     expect(activity()).toEqual({ threadId: "th_1", state: "running" })
 
     // The member leaves for a new conversation while it still runs.
-    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }))
     expect(activity()).toEqual({ threadId: null, state: "idle" })
   })
 
@@ -1575,7 +1569,7 @@ describe("primary chat history actions", () => {
         screen.queryByRole("button", { name: "Delete Earlier" })
       ).toBeNull()
     )
-    expect(screen.getByText("New conversation")).toBeTruthy()
+    expect(screen.getByText("New chat", { selector: "p" })).toBeTruthy()
     expect((composer() as HTMLTextAreaElement).value).toBe("Keep my draft")
     expect(notSentWords()).toEqual(["Still waiting"])
   })
@@ -1613,13 +1607,13 @@ describe("primary chat history actions", () => {
     expect(
       await screen.findByText("Ask anything to start a conversation.")
     ).toBeTruthy()
-    expect(rememberedChoice(scope, LEO)).toBeNull()
+    expect(lastChosenChat(scope, LEO)).toBeNull()
   })
 })
 
 describe("the open conversation's ⋯ menu", () => {
   async function menuItems(id: string, title: string) {
-    rememberChoice(scope, LEO, id)
+    rememberLastChosenChat(scope, LEO, id)
     stubApi({ threads: [thread(id, title)], rememberLatest: false })
     renderChat()
     await waitFor(() =>

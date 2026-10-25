@@ -26,13 +26,12 @@ import { reopenSocket } from "@/lib/threads/agent-socket"
 import {
   PRIMARY_DRAFT,
   firstMessage,
-  openingThread,
+  lastChosenChat,
+  primaryOpeningThread,
   publishPrimaryChatActivity,
-  rememberedView,
-  recentNewView,
   chatHistory,
   approvalCandidates,
-  useRememberedView,
+  useLastChosenChat,
   shownThread,
 } from "@/lib/threads/chat-choice"
 import type {
@@ -143,33 +142,15 @@ const START_TIMEOUT_MS = 30_000
 const SENT_SETTLE_MS = 400
 
 /**
- * How long the chat looks for the conversation to open (the lists it waits
- * for, and Go's word on a conversation waiting on the member) before it
- * gives up and opens a new one, so the member is never held at a chat that
- * cannot start.
+ * How long the chat waits for the member's list of conversations before it
+ * opens a new chat, so the member is never held at a chat that cannot start.
  */
 const OPENING_FALLBACK_MS = 5000
 
 /**
- * Whether a conversation waits on the member's confirmation, from Go's
- * detail of it. One that can't be read counts as not waiting.
- */
-async function waitsOnMember(
-  queryClient: QueryClient,
-  organizationId: string,
-  threadId: string,
-  viewerId?: string
-): Promise<boolean> {
-  const detail = await queryClient
-    .fetchQuery(threadApprovalQueryOptions(organizationId, threadId, viewerId))
-    .catch(() => undefined)
-  return (detail?.pending_confirmations.length ?? 0) > 0
-}
-
-/**
- * The Agents tab's chat with the member's primary agent. It opens the
- * last view in this tab for less than five minutes, then the newest one waiting
- * on their approval, otherwise a new one that their first message starts.
+ * The Agents tab's chat with the member's primary agent. It opens the chat
+ * the member last chose (in any tab), otherwise a new one that their first
+ * message starts.
  * While mounted it keeps the open conversation (chat-choice.ts). It runs through the thread's
  * Durable Object (REALTIME.md), in the browser only.
  *
@@ -238,11 +219,10 @@ export function AgentChat({
   // member's list has loaded.
   const listed = threads.data !== undefined
   const threadId = shownThread(chat)
-  useRememberedView(
+  useLastChosenChat(
     threadId,
     scope,
     agentId,
-    visible,
     chat.chosen || firstMessage(chat) !== null
   )
   const history = chatHistory(threads.data ?? [])
@@ -326,34 +306,19 @@ export function AgentChat({
   }, [threadId, listed, state, scopeOrganization, scopeUser])
   useEffect(() => () => publishPrimaryChatActivity(null), [])
 
-  // Once the list is here: a last view younger than five minutes, otherwise
-  // the newest pending approval, otherwise New chat.
-  // Unless something else moved the chat while this was asked: the reducer
-  // takes a decision only for a chat still undecided.
+  // Once the list is here: the chat the member last chose, otherwise New
+  // chat. A chat waiting on a confirmation never opens on its own (C1). The
+  // reducer takes a decision only for a chat still undecided.
   useEffect(() => {
     if (threadId !== undefined || !threads.data) return
     if (scope && !agentId) return
-    let stale = false
-    const remembered = scope && agentId ? rememberedView(scope, agentId) : null
-    const now = Date.now()
-    void openingThread({
-      threads: threads.data,
-      choice: remembered?.choice ?? null,
-      leftAt: remembered?.leftAt,
-      now,
-      waiting: (id) =>
-        waitsOnMember(queryClient, organizationId, id, scope?.userId),
-    }).then((chosen) => {
-      if (!stale)
-        dispatch({
-          type: "decide",
-          thread: chosen,
-          resumeNew: chosen === null && recentNewView(remembered, now),
-        })
+    const last = scope && agentId ? lastChosenChat(scope, agentId) : null
+    const opening = primaryOpeningThread(threads.data, last)
+    dispatch({
+      type: "decide",
+      thread: opening.thread,
+      resumeNew: opening.restored,
     })
-    return () => {
-      stale = true
-    }
   }, [threadId, threads.data, agentId])
 
   // The choice is not worth a wait without end: the member can type at once
@@ -441,7 +406,7 @@ export function AgentChat({
     (threadId &&
       threads.data?.find((thread) => thread.id === threadId)?.title) ||
     ""
-  const title = listedTitle || "New conversation"
+  const title = listedTitle || "New chat"
 
   function startNew() {
     dispatch({ type: "move", thread: null })
@@ -622,8 +587,8 @@ export function AgentChat({
           <button
             className="workspace-agent-new workspace-agent-new-chat"
             type="button"
-            aria-label="New conversation"
-            title="New conversation"
+            aria-label="New chat"
+            title="New chat"
             disabled={first !== null}
             onClick={startNew}
           >

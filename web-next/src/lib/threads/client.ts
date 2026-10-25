@@ -76,7 +76,8 @@ export type ItemType =
   | "run_completed"
   | "run_failed"
 
-export type ConfirmationStatus = "pending" | "approved" | "declined"
+/** `expired`: nobody answered it within a day; its tool never runs (Go's ConfirmationTTL). */
+export type ConfirmationStatus = "pending" | "approved" | "declined" | "expired"
 
 /** A request pointer's recorded state; the card reads its current state from Go. */
 export type RequestItemStatus =

@@ -514,7 +514,11 @@ export function ConfirmationCard({
       ) : (
         status !== "pending" && (
           <p className="workspace-agent-confirmation-status">
-            {status === "approved" ? "Approved" : "Declined"}
+            {status === "approved"
+              ? "Approved"
+              : status === "expired"
+                ? "Expired: nobody answered it within a day"
+                : "Declined"}
           </p>
         )
       )}

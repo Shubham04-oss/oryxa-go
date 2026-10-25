@@ -5,9 +5,11 @@ import type { ScreenContext } from "@/lib/agents/screen-context"
 // Which conversation the primary agent's chat opens, and how the rest of the
 // app (Home, for one) asks it to open a particular conversation or a new one.
 //
-// A mounted chat stays where the member left it. On remount or reload,
-// their last view in this tab reopens for five minutes (including New chat),
-// then the newest conversation waiting on their approval, then New chat.
+// A mounted chat stays where the member left it. On remount, reload or in a
+// new tab, the primary chat reopens the chat the member last chose (New chat
+// included) while it still exists, otherwise New chat
+// (`primaryOpeningThread`). A conversation waiting on a confirmation never
+// opens on its own: Home and Requests show it as needing the member.
 // Server update times never imply the member was recently present.
 //
 // The chat also says what it is doing (`publishPrimaryChatActivity`), so a
@@ -135,7 +137,11 @@ export function recentNewView(
   )
 }
 
-/** Recent view (including explicit New), otherwise newest pending among five recent chats, otherwise New. */
+/**
+ * Recent view (including explicit New), otherwise newest pending among five
+ * recent chats, otherwise New. The specialist chat's rule; the primary chat
+ * uses `primaryOpeningThread`, where a pending confirmation never steers.
+ */
 export async function openingThread({
   threads,
   choice,
@@ -156,6 +162,71 @@ export async function openingThread({
     history.map((thread) => waiting(thread.id).catch(() => false))
   )
   return history.find((_, index) => held[index])?.id ?? null
+}
+
+function lastChosenKey(scope: ChatScope, agentId: string) {
+  return `oryxa.chat.last.${scope.organizationId}.${scope.userId}.${agentId}`
+}
+
+/** The chat the member last chose with the primary agent, in any tab: a thread id, "new", or null when none is known. */
+export function lastChosenChat(
+  scope: ChatScope,
+  agentId: string
+): string | null {
+  try {
+    const value = window.localStorage.getItem(lastChosenKey(scope, agentId))
+    return value === null || value === "" ? null : value
+  } catch {
+    return null
+  }
+}
+
+/** Records the chat the member chose (null for New chat). */
+export function rememberLastChosenChat(
+  scope: ChatScope,
+  agentId: string,
+  threadId: string | null
+) {
+  try {
+    window.localStorage.setItem(
+      lastChosenKey(scope, agentId),
+      threadId ?? NEW_CHAT
+    )
+  } catch {
+    /* Storage may be unavailable; the chat still works. */
+  }
+}
+
+/**
+ * Which chat the primary chat opens with: the one the member last chose
+ * while it is still in their history, New chat when they last chose New,
+ * otherwise New. `restored` says the choice is the member's own, kept from
+ * before, rather than the fallback.
+ */
+export function primaryOpeningThread(
+  threads: readonly ListedThread[],
+  last: string | null
+): { thread: string | null; restored: boolean } {
+  if (last === NEW_CHAT) return { thread: null, restored: true }
+  if (last && chatHistory(threads).some((thread) => thread.id === last))
+    return { thread: last, restored: true }
+  return { thread: null, restored: false }
+}
+
+/** Keeps the chat the member chose (`chosen`) as their last choice, whatever page or tab they are on. */
+export function useLastChosenChat(
+  thread: string | null | undefined,
+  scope: ChatScope | undefined,
+  agentId: string | undefined,
+  chosen: boolean
+) {
+  const organizationId = scope?.organizationId
+  const userId = scope?.userId
+  useEffect(() => {
+    if (thread === undefined || !chosen || !organizationId || !userId) return
+    if (!agentId) return
+    rememberLastChosenChat({ organizationId, userId }, agentId, thread)
+  }, [thread, chosen, organizationId, userId, agentId])
 }
 
 /** Record leaves and activity only while this view is visible; hidden panels never extend the grace. */
@@ -471,7 +542,7 @@ export type PrimaryChatAction =
     }
   /** The member sent the first message of a new chat from the composer. */
   | { type: "submit"; text: string; screen?: ScreenContext }
-  /** The rules chose the conversation to open. Only fills in a chat still undecided and idle. */
+  /** The rules chose the conversation to open. Only fills in a chat still undecided and idle. `resumeNew` marks it the member's own earlier choice (a thread or New). */
   | { type: "decide"; thread: string | null; resumeNew?: boolean }
   /** The member (or a conversation that is gone) moved the chat. Waits while a first message is on its way. */
   | { type: "move"; thread: string | null; notice?: string }
