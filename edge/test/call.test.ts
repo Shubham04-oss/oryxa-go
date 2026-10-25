@@ -2,6 +2,7 @@
 // (B1), the shared transcript (B2), recording (B3), the agent's voice (B4)
 // and the dispatch round trip (B5). RealtimeKit, the voice model, speech and
 // Go are faked; the room, its log, R2 and the VoiceDO are the real ones.
+import { runDurableObjectAlarm } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { DispatchRequest, VoiceFrame } from "../src/call/contracts";
@@ -11,8 +12,10 @@ import { handleRealtimeKitWebhook, recordingPrefix } from "../src/call/webhook";
 import type { Event, LogResponse } from "../src/contracts";
 import type { Env } from "../src/env";
 import { base64Encode } from "../src/http";
-import { Agents, DispatchError } from "../src/voice/dispatch";
-import { Gemini, type Ask, type Reply } from "../src/voice/brain";
+import { AUDIENCE_AGENTS, ISSUER_EDGE, roomDOName } from "../src/contracts";
+import { addressedTo } from "../src/voice/address";
+import { Agents, DispatchError, type ParleyNotes, type TokenSubject } from "../src/voice/dispatch";
+import { Gemini, parseSummary, type Ask, type Line, type Reply, type Summary } from "../src/voice/brain";
 import { setVoiceProviders } from "../src/voice/providers";
 import { call } from "./tokens";
 
@@ -61,11 +64,19 @@ let rtk: FakeRealtimeKit;
 let asks: Ask[];
 let reply: (ask: Ask) => Reply;
 let dispatched: DispatchRequest[];
+let summarized: Line[][];
+let summary: () => Summary;
+let posted: { subject: TokenSubject; notes: ParleyNotes }[];
+let postStatus: () => number;
 
 beforeEach(() => {
   rtk = new FakeRealtimeKit();
   asks = [];
   dispatched = [];
+  summarized = [];
+  posted = [];
+  summary = () => ({ decisions: ["Ship on Friday"], actions: [{ text: "Write the release note", owner: "Asha" }] });
+  postStatus = () => 201;
   reply = (ask) => ({ kind: "say", text: `Hi ${ask.memberName}. Sure thing.` });
   setCallProvider(() => rtk);
   setVoiceProviders(() => ({
@@ -77,6 +88,8 @@ beforeEach(() => {
         return { dispatchId: request.dispatchId, threadId: "thr_side", runId: `run_${dispatched.length}` };
       },
     },
+    notesWriter: { summarize: async ({ lines }) => (summarized.push(lines), summary()) },
+    notes: { postNotes: async (subject, notes) => (posted.push({ subject, notes }), postStatus()) },
   }));
 });
 
@@ -164,7 +177,7 @@ describe("the call's lifecycle (B1)", () => {
     const view = (await (await asMember("usr_b", room, "/call")).json()) as { call: { participants: { name: string }[]; recording: { on: boolean }; agent: { present: boolean; name: string } } };
     expect(view.call.participants.map((p) => p.name)).toEqual(["Asha", "Ben"]);
     expect(view.call.recording.on).toBe(false);
-    expect(view.call.agent).toEqual({ present: true, name: "Krude" });
+    expect(view.call.agent).toEqual({ present: true, name: "Krude", names: ["Krude"], canAnswer: true, notes: true });
 
     expect((await post("usr_a", room, "/call/leave")).status).toBe(200);
     expect(rtk.deleted).toEqual([first.participantId]);
@@ -697,3 +710,173 @@ describe("the real clients, in workerd", () => {
     expect(apiURL("not a url")).toBe(real);
   });
 });
+
+describe("a call's notes (T1)", () => {
+  it("summarizes the call when it ends and posts the notes to Go for the room", async () => {
+    const room = await newRoom("usr_a", "usr_b");
+    const { callId } = await join("usr_a", room, "Asha");
+    await join("usr_b", room, "Ben");
+    await say("usr_a", room, callId, "Let's ship on Friday.");
+    await say("usr_b", room, callId, "Fine by me.");
+    await post("usr_a", room, "/call/end");
+
+    await waitFor(() => posted, (all) => all.length === 1, "the notes posted");
+    expect(summarized[0]).toEqual([
+      { name: "Asha", text: "Let's ship on Friday." },
+      { name: "Ben", text: "Fine by me." },
+    ]);
+    const { subject, notes } = posted[0]!;
+    expect(subject).toEqual({ org: "org_1", room: { kind: "teamspace", id: room }, member: "usr_a" });
+    expect(notes).toMatchObject({
+      call_id: callId,
+      decisions: ["Ship on Friday"],
+      // The owner is named in the call; Go is told the member.
+      actions: [{ text: "Write the release note", owner_user_id: "usr_a" }],
+    });
+    expect(notes.duration_ms).toBeGreaterThanOrEqual(0);
+    const events = await waitFor(
+      () => log("usr_a", room),
+      (all) => all.some((event) => event.type === "call.notes.posted"),
+      "the notes in the log",
+    );
+    expect(events.find((event) => event.type === "call.notes.posted")!.data).toMatchObject({ callId, decisions: 1, actions: 1 });
+  });
+
+  it("keeps a private answer out of the notes", async () => {
+    const room = await newRoom("usr_a");
+    const { callId } = await join("usr_a", room, "Asha");
+    await say("usr_a", room, callId, "Pricing is settled.");
+    await env.ROOM.getByName(roomDOName("org_1", { kind: "teamspace", id: room })).callOp({
+      type: "agentSegment", callId, segmentId: "utt_private", text: "Your salary is secret.", at: Date.now(), name: "Krude", privateFor: "usr_a",
+    });
+    await post("usr_a", room, "/call/end");
+    await waitFor(() => posted, (all) => all.length === 1, "the notes posted");
+    expect(summarized[0]!.map((line) => line.text)).toEqual(["Pricing is settled."]);
+  });
+
+  it("tries again from the room's alarm when Go can't take them yet, and posts the same notes", async () => {
+    const room = await newRoom("usr_a");
+    const { callId } = await join("usr_a", room, "Asha");
+    await say("usr_a", room, callId, "We agreed on per-seat pricing.");
+    postStatus = () => 409; // a paused teamspace
+    await post("usr_a", room, "/call/end");
+    await waitFor(() => posted, (all) => all.length === 1, "the first try");
+    expect((await log("usr_a", room)).some((event) => event.type === "call.notes.posted")).toBe(false);
+
+    postStatus = () => 201;
+    const stub = env.ROOM.getByName(roomDOName("org_1", { kind: "teamspace", id: room }));
+    // The retry is due later; run the alarm once it is.
+    await runInRoom(stub, (sql) => sql.exec("UPDATE call_notes SET next_at = 0"));
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    await waitFor(() => posted, (all) => all.length === 2, "the retry");
+    expect(posted[1]!.notes).toEqual(posted[0]!.notes);
+    expect(summarized).toHaveLength(1);
+    expect((await log("usr_a", room)).some((event) => event.type === "call.notes.posted")).toBe(true);
+  });
+
+  it("gives up on notes Go refuses outright, and says so in the room", async () => {
+    const room = await newRoom("usr_a");
+    const { callId } = await join("usr_a", room, "Asha");
+    await say("usr_a", room, callId, "Something to note.");
+    postStatus = () => 400;
+    await post("usr_a", room, "/call/end");
+    const events = await waitFor(
+      () => log("usr_a", room),
+      (all) => all.some((event) => event.type === "call.notes.failed"),
+      "the notes given up on",
+    );
+    expect(events.some((event) => event.type === "call.notes.posted")).toBe(false);
+  });
+
+  it("says why there are no notes when nothing said reached the room", async () => {
+    const room = await newRoom("usr_a");
+    await join("usr_a", room, "Asha");
+    await post("usr_a", room, "/call/end");
+    const events = await waitFor(
+      () => log("usr_a", room),
+      (all) => all.some((event) => event.type === "call.notes.skipped"),
+      "the skipped notes",
+    );
+    expect(events.find((event) => event.type === "call.notes.skipped")!.data).toMatchObject({ reason: "no_transcript" });
+    expect(posted).toEqual([]);
+  });
+
+  it("doesn't promise notes when there is no model to write them", async () => {
+    setVoiceProviders(() => ({}));
+    const room = await newRoom("usr_a");
+    await join("usr_a", room, "Asha");
+    const view = (await (await asMember("usr_a", room, "/call")).json()) as { call: { agent: { notes: boolean; canAnswer: boolean } } };
+    expect(view.call.agent).toMatchObject({ notes: false, canAnswer: false });
+  });
+
+  it("signs the notes with a log:write token for the room, and posts them to Go's notes route", async () => {
+    const requests: { url: string; authorization: string; body: ParleyNotes }[] = [];
+    const agents = new Agents("https://agents.test", (env as unknown as { TEST_SIGNING_KEY: string }).TEST_SIGNING_KEY, async (input, init) => {
+      requests.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization") ?? "", body: JSON.parse(String(init?.body)) });
+      return new Response("{}", { status: 201 });
+    });
+    const notes: ParleyNotes = { call_id: "call_1", duration_ms: 1000, decisions: ["Ship"], actions: [] };
+    const status = await agents.postNotes({ org: "org_1", team: "team_1", room: { kind: "teamspace", id: "ts_1" }, member: "usr_a" }, notes);
+    expect(status).toBe(201);
+    expect(requests[0]!.url).toBe("https://agents.test/v1/edge/teamspaces/ts_1/parley-notes");
+    expect(requests[0]!.body).toEqual(notes);
+    const claims = JSON.parse(atob(requests[0]!.authorization.replace(/^Bearer /, "").split(".")[1]!.replace(/-/g, "+").replace(/_/g, "/")));
+    expect(claims).toMatchObject({
+      iss: ISSUER_EDGE, aud: AUDIENCE_AGENTS, org: "org_1", team: "team_1", room: { kind: "teamspace", id: "ts_1" }, member: "usr_a", scopes: ["log:write"],
+    });
+  });
+
+  it("reads the notes model's JSON, dropping what isn't an item", () => {
+    expect(parseSummary('{"decisions":["A",3],"actions":[{"text":"B","owner":"Asha"},{"owner":"x"},{"text":"C"}]}')).toEqual({
+      decisions: ["A"],
+      actions: [{ text: "B", owner: "Asha" }, { text: "C", owner: "" }],
+    });
+    expect(() => parseSummary("not json")).toThrow();
+  });
+});
+
+describe("who the agent answers to (T3)", () => {
+  it("answers to the names the room shows for its agents, and tells the asker what it heard", async () => {
+    const room = await newRoom("usr_a", "usr_b");
+    const { callId } = await join("usr_a", room, "Asha");
+    await post("usr_b", room, "/call/join", { name: "Ben", agents: ["Arlo-UJVX", "Maya"] });
+    const view = (await (await asMember("usr_a", room, "/call")).json()) as { call: { agent: { names: string[] } } };
+    expect(view.call.agent.names).toEqual(["Krude", "Arlo-UJVX", "Maya"]);
+
+    const live = await listen("usr_a", room);
+    await say("usr_a", room, callId, "Arlo, what's on our plate today?");
+    await waitFor(() => asks, (all) => all.length === 1, "the answer to Arlo");
+    expect(asks[0]!.request).toBe("what's on our plate today?");
+    const heard = await waitFor(() => live.frames, (all) => all.some((frame) => frame.type === "voice.heard"), "what it heard");
+    expect(heard.find((frame) => frame.type === "voice.heard")).toEqual({ type: "voice.heard", text: "Arlo, what's on our plate today?" });
+    live.close();
+  });
+
+  it("says why it stayed quiet when there is no voice model", async () => {
+    const room = await newRoom("usr_a");
+    const { callId } = await join("usr_a", room, "Asha");
+    setVoiceProviders(() => ({}));
+    const live = await listen("usr_a", room);
+    await say("usr_a", room, callId, "Krude, are you there?");
+    const frames = await waitFor(() => live.frames, (all) => all.some((frame) => frame.type === "voice.trouble"), "the trouble frame");
+    expect(frames.find((frame) => frame.type === "voice.trouble")).toEqual({ type: "voice.trouble", reason: "no_model" });
+    live.close();
+  });
+
+  it("hears a name the way speech recognition spells it", () => {
+    expect(addressedTo("hey crude what's next", ["Krude"], false)).toEqual({ addressed: true, request: "what's next" });
+    expect(addressedTo("Krudy, what's next?", ["Krude"], false).addressed).toBe(true);
+    expect(addressedTo("Maya can you check", ["Krude", "Maya"], false)).toEqual({ addressed: true, request: "can you check" });
+    expect(addressedTo("arlo ujvx are you there", ["Arlo-UJVX"], false).addressed).toBe(true);
+    // Short names must match: "may" is not Maya, "rude" is not Krude's start.
+    expect(addressedTo("we may be late", ["Maya"], false).addressed).toBe(false);
+    expect(addressedTo("that was rude of them", ["Krude"], false).addressed).toBe(false);
+    expect(addressedTo("I think the launch slipped a week.", ["Krude", "Arlo"], false).addressed).toBe(false);
+  });
+});
+
+// runInRoom runs SQL in a room's own storage.
+async function runInRoom(stub: DurableObjectStub, work: (sql: SqlStorage) => void): Promise<void> {
+  const { runInDurableObject } = await import("cloudflare:test");
+  await runInDurableObject(stub, (_instance: unknown, state: DurableObjectState) => work(state.storage.sql));
+}

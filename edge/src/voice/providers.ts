@@ -1,14 +1,18 @@
-// Where VoiceDO gets its model, its voice and its way to Go. Production
+// Where VoiceDO gets its model, its voice and its way to Go, and where a
+// call's notes get theirs. Production
 // builds them from the Worker's settings; tests set fakes for the isolate.
 import type { Env } from "../env";
-import { type VoiceBrain, Gemini } from "./brain";
-import { type AgentsClient, Agents } from "./dispatch";
+import { type NotesWriter, type VoiceBrain, Gemini } from "./brain";
+import { type AgentsClient, Agents, type NotesClient } from "./dispatch";
 import { type Speech, WorkersAISpeech } from "./speech";
 
 export interface VoiceProviders {
   brain?: VoiceBrain;
   speech?: Speech;
   agents?: AgentsClient;
+  // notesWriter summarizes a finished call; notes posts the summary to Go.
+  notesWriter?: NotesWriter;
+  notes?: NotesClient;
 }
 
 let override: ((env: Env) => VoiceProviders) | undefined;
@@ -20,5 +24,7 @@ export function setVoiceProviders(factory: ((env: Env) => VoiceProviders) | unde
 
 export function voiceProviders(env: Env): VoiceProviders {
   if (override) return override(env);
-  return { brain: Gemini.fromEnv(env), speech: WorkersAISpeech.fromEnv(env), agents: Agents.fromEnv(env) };
+  const gemini = Gemini.fromEnv(env);
+  const agents = Agents.fromEnv(env);
+  return { brain: gemini, speech: WorkersAISpeech.fromEnv(env), agents, notesWriter: gemini, notes: agents };
 }

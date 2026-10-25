@@ -20,9 +20,15 @@ export const PRESET_GUEST = "oryxa-guest";
 
 export const MAX_DISPLAY_NAME = 80;
 
+export const MAX_AGENT_NAME = 60;
+
 export const JoinRequest = z.strictObject({
   // name is what the call shows for the member; web-next knows it.
   name: z.string().trim().min(1).max(MAX_DISPLAY_NAME).optional(),
+  // agents are the names the room shows for its agents, which the agent in
+  // the call answers to as well as its own (T3). They only decide when it
+  // listens, so a member's word for them is enough.
+  agents: z.array(z.string().trim().min(1).max(MAX_AGENT_NAME)).max(20).optional(),
 });
 export type JoinRequest = z.infer<typeof JoinRequest>;
 
@@ -87,7 +93,16 @@ export const CallView = z.strictObject({
   startedBy: z.string(),
   participants: z.array(CallParticipant),
   recording: RecordingState,
-  agent: z.strictObject({ present: z.boolean(), name: z.string() }),
+  agent: z.strictObject({
+    present: z.boolean(),
+    name: z.string(),
+    // names is every name it answers to, its own first.
+    names: z.array(z.string()),
+    // canAnswer is false while the voice model or speech isn't set up here.
+    canAnswer: z.boolean(),
+    // notes is whether the call leaves notes in the room when it ends.
+    notes: z.boolean(),
+  }),
 });
 export type CallView = z.infer<typeof CallView>;
 
@@ -148,6 +163,12 @@ export type VoiceFrame =
   | { type: "voice.audio"; utteranceId: string; seq: number; format: "mp3"; data: string; last: boolean }
   | { type: "voice.stop"; utteranceId: string; reason: "barge_in" | "dismissed" | "call_ended" }
   | { type: "voice.state"; present: boolean; name: string }
+  // voice.heard tells the member who addressed the agent what it heard, so
+  // a miss is visible (T3).
+  | { type: "voice.heard"; text: string }
+  // voice.trouble says the agent heard and could not answer: no model, or
+  // the model failed (T2). The member sees why it stayed quiet.
+  | { type: "voice.trouble"; reason: "no_model" | "model_failed" | "no_speech" }
   // voice.private is an answer for one member only, sent to their own
   // sockets: the work agent used their access to find it.
   | { type: "voice.private"; dispatchId: string; text: string };
@@ -168,4 +189,9 @@ export const CALL_EVENTS = {
   agentLeft: "call.agent.left",
   dispatched: "voice.dispatch",
   result: "voice.result",
+  // A teamspace call's notes: posted in the room by Go, given up on, or not
+  // made because nothing said in the call reached the room.
+  notesPosted: "call.notes.posted",
+  notesFailed: "call.notes.failed",
+  notesSkipped: "call.notes.skipped",
 } as const;

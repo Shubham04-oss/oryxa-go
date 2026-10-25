@@ -6,12 +6,35 @@
 // token's organization, room and member. The answer comes back later at
 // /voice/result.
 import { DispatchAccepted, type DispatchRequest } from "../call/contracts";
-import { AUDIENCE_AGENTS, ISSUER_EDGE, type TokenClaims } from "../contracts";
+import { AUDIENCE_AGENTS, ISSUER_EDGE, type Room, type Scope, type TokenClaims } from "../contracts";
 import type { Env } from "../env";
 import { base64UrlEncode } from "../http";
 
 export interface AgentsClient {
   dispatch(request: DispatchRequest): Promise<DispatchAccepted>;
+}
+
+// TokenSubject is whom and where an edge→agents token speaks for.
+export interface TokenSubject {
+  org: string;
+  team?: string;
+  room: Room;
+  member: string;
+}
+
+// ParleyNotes is Go's rooms.ParleyNotes: what a call in a teamspace left
+// behind, posted at POST /v1/edge/teamspaces/{id}/parley-notes.
+export interface ParleyNotes {
+  call_id: string;
+  duration_ms: number;
+  decisions: string[];
+  actions: { text: string; owner_user_id?: string }[];
+}
+
+// NotesClient posts a call's notes to Go. It answers Go's status: 200 or 201
+// mean the room has them.
+export interface NotesClient {
+  postNotes(subject: TokenSubject, notes: ParleyNotes): Promise<number>;
 }
 
 // TOKEN_LIFETIME_SECONDS matches the Go issuer's: a token per request.
@@ -38,19 +61,25 @@ function signingKey(jwk: string): Promise<CryptoKey> {
   return key;
 }
 
-// signEdgeToken signs an edge→agents token for request's organization, room
-// and member.
-export async function signEdgeToken(jwk: string, request: DispatchRequest, nowSeconds = Math.floor(Date.now() / 1000)): Promise<string> {
+// signEdgeToken signs an edge→agents token for subject's organization, room
+// and member. A dispatch speaks in the call (call:speak); a call's notes are
+// written into the room's record (log:write), which Go's notes route needs.
+export async function signEdgeToken(
+  jwk: string,
+  subject: TokenSubject,
+  nowSeconds = Math.floor(Date.now() / 1000),
+  scopes: Scope[] = ["call:speak"],
+): Promise<string> {
   const claims: TokenClaims = {
     iss: ISSUER_EDGE,
     aud: AUDIENCE_AGENTS,
-    org: request.org,
-    team: request.team ?? "",
-    room: request.room,
-    member: request.member,
+    org: subject.org,
+    team: subject.team ?? "",
+    room: subject.room,
+    member: subject.member,
     agent: "",
     run: "",
-    scopes: ["call:speak"],
+    scopes,
     private: false,
     iat: nowSeconds,
     exp: nowSeconds + TOKEN_LIFETIME_SECONDS,
@@ -62,7 +91,7 @@ export async function signEdgeToken(jwk: string, request: DispatchRequest, nowSe
   return `${input}.${base64UrlEncode(new Uint8Array(signature))}`;
 }
 
-export class Agents implements AgentsClient {
+export class Agents implements AgentsClient, NotesClient {
   constructor(
     private readonly baseURL: string,
     private readonly jwk: string,
@@ -95,5 +124,24 @@ export class Agents implements AgentsClient {
     const parsed = DispatchAccepted.safeParse(await response.json().catch(() => null));
     if (!parsed.success) throw new DispatchError("agents' acknowledgement could not be read", false);
     return parsed.data;
+  }
+
+  async postNotes(subject: TokenSubject, notes: ParleyNotes): Promise<number> {
+    if (subject.room.kind !== "teamspace") throw new DispatchError("notes are for teamspace rooms", false);
+    const token = await signEdgeToken(this.jwk, subject, undefined, ["log:write"]);
+    let response: Response;
+    try {
+      response = await this.fetcher(`${this.baseURL}/v1/edge/teamspaces/${encodeURIComponent(subject.room.id)}/parley-notes`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify(notes),
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+        redirect: "manual",
+      });
+    } catch (error) {
+      throw new DispatchError(`agents did not answer: ${String(error)}`, true);
+    }
+    await response.body?.cancel();
+    return response.status;
   }
 }
