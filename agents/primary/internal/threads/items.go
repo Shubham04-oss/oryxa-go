@@ -397,6 +397,14 @@ func waitingConfirmations(events []*session.Event, agentName string, now time.Ti
 	return pending, expired
 }
 
+// pendingConfirmations lists the confirmations agentName asked for that the
+// member can still answer, in the order they were asked: those nobody has
+// answered and that have not expired by now.
+func pendingConfirmations(events []*session.Event, agentName string) []string {
+	pending, _ := waitingConfirmations(events, agentName, time.Now())
+	return pending
+}
+
 // expireInvocation names the invocation an expiry's event belongs to. It is
 // no run's: it answers confirmations nobody answered in time.
 const expireInvocation = "oryxa-expire-confirmations"
