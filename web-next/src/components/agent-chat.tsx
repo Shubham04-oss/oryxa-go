@@ -25,14 +25,19 @@ import { getSession } from "@/lib/auth/client"
 import { reopenSocket } from "@/lib/threads/agent-socket"
 import {
   PRIMARY_DRAFT,
+  cancelPrimaryChatRequest,
   firstMessage,
-  openingThread,
+  requestMessage,
+  sameChatScope,
+  useWaitingPrimaryChatRequests,
+  lastChosenChat,
+  primaryOpeningThread,
   publishPrimaryChatActivity,
-  rememberedView,
-  recentNewView,
+  setPrimaryChatRunning,
+  usePrimaryChatRunning,
   chatHistory,
   approvalCandidates,
-  useRememberedView,
+  useLastChosenChat,
   shownThread,
 } from "@/lib/threads/chat-choice"
 import type {
@@ -40,6 +45,7 @@ import type {
   PrimaryChat,
   PrimaryChatAction,
   PrimaryChatActivity,
+  PrimaryChatRequest,
   UnsentMessage,
 } from "@/lib/threads/chat-choice"
 import {
@@ -52,9 +58,7 @@ import type { ThreadChatMessage } from "@/lib/threads/chat-messages"
 import {
   canRenameThread,
   createThread,
-  deleteThreadChat,
   getThreadChatMessages,
-  renameThread,
   threadApprovalQueryOptions,
   threadDetailQueryOptions,
   threadKeys,
@@ -62,10 +66,11 @@ import {
 } from "@/lib/threads/client"
 import type {
   ConfirmationAnswer,
+  Item,
   Thread,
   ThreadDetail,
 } from "@/lib/threads/client"
-import { renameCachedThread } from "@/lib/threads/rename"
+import { deleteConversation, renameConversation } from "@/lib/threads/actions"
 import { buildTimeline, pendingConfirmationIds } from "@/lib/threads/timeline"
 import type { ArtifactEntry } from "@/lib/threads/timeline"
 import { socketProtocol } from "@/lib/socket-protocol"
@@ -86,6 +91,43 @@ type ChatState = PrimaryChatActivity["state"]
  * so a run that hasn't resumed by then has ended.
  */
 const RUN_SETTLE_MS = 2000
+
+/**
+ * How long a run may stream nothing before the chat asks Go whether it is
+ * still running, and how often it asks again while it stays quiet: a stream
+ * whose last frame never arrived would otherwise read "Working" for ever.
+ */
+export const RUN_WATCHDOG_MS = 45_000
+
+/**
+ * How long after a run starts in this chat Go's word that nothing runs is
+ * believed: a thread read just as the member sent may predate the run.
+ */
+const RUN_START_GRACE_MS = 5000
+
+/**
+ * Whether the conversation's latest message is the agent's and ends with its
+ * run's recorded end (Go's run_completed or run_failed): the run is over,
+ * whatever the stream says, as when its finish frame never arrived. A
+ * session-expired failure is the chat's own, and is sent again.
+ */
+export function endsWithRunEnd(
+  messages: readonly ThreadChatMessage[]
+): boolean {
+  const last = messages.at(-1)
+  if (last?.role !== "assistant") return false
+  for (let index = last.parts.length - 1; index >= 0; index -= 1) {
+    const part = last.parts[index]
+    if (part.type !== "data-oryxa") continue
+    const item = part.data
+    if (item.type === "delta") continue
+    return (
+      item.type === "run_completed" ||
+      (item.type === "run_failed" && item.code !== sessionExpiredCode)
+    )
+  }
+  return false
+}
 
 function composerLabel(agentName?: string): string {
   return agentName ? `Message ${agentName}` : "Message your agent"
@@ -143,33 +185,15 @@ const START_TIMEOUT_MS = 30_000
 const SENT_SETTLE_MS = 400
 
 /**
- * How long the chat looks for the conversation to open (the lists it waits
- * for, and Go's word on a conversation waiting on the member) before it
- * gives up and opens a new one, so the member is never held at a chat that
- * cannot start.
+ * How long the chat waits for the member's list of conversations before it
+ * opens a new chat, so the member is never held at a chat that cannot start.
  */
 const OPENING_FALLBACK_MS = 5000
 
 /**
- * Whether a conversation waits on the member's confirmation, from Go's
- * detail of it. One that can't be read counts as not waiting.
- */
-async function waitsOnMember(
-  queryClient: QueryClient,
-  organizationId: string,
-  threadId: string,
-  viewerId?: string
-): Promise<boolean> {
-  const detail = await queryClient
-    .fetchQuery(threadApprovalQueryOptions(organizationId, threadId, viewerId))
-    .catch(() => undefined)
-  return (detail?.pending_confirmations.length ?? 0) > 0
-}
-
-/**
- * The Agents tab's chat with the member's primary agent. It opens the
- * last view in this tab for less than five minutes, then the newest one waiting
- * on their approval, otherwise a new one that their first message starts.
+ * The Agents tab's chat with the member's primary agent. It opens the chat
+ * the member last chose (in any tab), otherwise a new one that their first
+ * message starts.
  * While mounted it keeps the open conversation (chat-choice.ts). It runs through the thread's
  * Durable Object (REALTIME.md), in the browser only.
  *
@@ -238,13 +262,13 @@ export function AgentChat({
   // member's list has loaded.
   const listed = threads.data !== undefined
   const threadId = shownThread(chat)
-  useRememberedView(
+  useLastChosenChat(
     threadId,
     scope,
     agentId,
-    visible,
     chat.chosen || firstMessage(chat) !== null
   )
+  const runs = usePrimaryChatRunning(scope)
   const history = chatHistory(threads.data ?? [])
   const candidates = approvalCandidates(history)
   const historyDetails = useQueries({
@@ -290,13 +314,26 @@ export function AgentChat({
   // The first messages that were not sent stay in view in whichever
   // conversation's log is open: they belong to none. Edit takes only an empty
   // composer, so what the member typed is never replaced.
+  // Messages asked for elsewhere (Home) that the panel has yet to take, as
+  // it does once the member's agents load: in view, and the member can take
+  // one back (C16).
+  const allQueued = useWaitingPrimaryChatRequests()
+  const queued = scope
+    ? allQueued.filter(
+        (request) =>
+          sameChatScope(request.scope, scope) && requestMessage(request) !== ""
+      )
+    : []
   const notSent =
-    chat.unsent.length > 0 ? (
-      <NotSentMessages
-        messages={chat.unsent}
-        canEdit={draft.trim() === ""}
-        dispatch={dispatch}
-      />
+    chat.unsent.length > 0 || queued.length > 0 ? (
+      <>
+        <NotSentMessages
+          messages={chat.unsent}
+          canEdit={draft.trim() === ""}
+          dispatch={dispatch}
+        />
+        <QueuedMessages requests={queued} />
+      </>
     ) : undefined
   // What the open thread's chat says it is doing, and of which thread.
   const [reported, setReported] = useState<{
@@ -326,34 +363,19 @@ export function AgentChat({
   }, [threadId, listed, state, scopeOrganization, scopeUser])
   useEffect(() => () => publishPrimaryChatActivity(null), [])
 
-  // Once the list is here: a last view younger than five minutes, otherwise
-  // the newest pending approval, otherwise New chat.
-  // Unless something else moved the chat while this was asked: the reducer
-  // takes a decision only for a chat still undecided.
+  // Once the list is here: the chat the member last chose, otherwise New
+  // chat. A chat waiting on a confirmation never opens on its own (C1). The
+  // reducer takes a decision only for a chat still undecided.
   useEffect(() => {
     if (threadId !== undefined || !threads.data) return
     if (scope && !agentId) return
-    let stale = false
-    const remembered = scope && agentId ? rememberedView(scope, agentId) : null
-    const now = Date.now()
-    void openingThread({
-      threads: threads.data,
-      choice: remembered?.choice ?? null,
-      leftAt: remembered?.leftAt,
-      now,
-      waiting: (id) =>
-        waitsOnMember(queryClient, organizationId, id, scope?.userId),
-    }).then((chosen) => {
-      if (!stale)
-        dispatch({
-          type: "decide",
-          thread: chosen,
-          resumeNew: chosen === null && recentNewView(remembered, now),
-        })
+    const last = scope && agentId ? lastChosenChat(scope, agentId) : null
+    const opening = primaryOpeningThread(threads.data, last)
+    dispatch({
+      type: "decide",
+      thread: opening.thread,
+      resumeNew: opening.restored,
     })
-    return () => {
-      stale = true
-    }
   }, [threadId, threads.data, agentId])
 
   // The choice is not worth a wait without end: the member can type at once
@@ -441,38 +463,16 @@ export function AgentChat({
     (threadId &&
       threads.data?.find((thread) => thread.id === threadId)?.title) ||
     ""
-  const title = listedTitle || "New conversation"
+  const title = listedTitle || "New chat"
 
   function startNew() {
     dispatch({ type: "move", thread: null })
   }
 
   // Clears the live chat object first, then the Go thread (DESIGN.md §3).
-  async function deleteConversation(id: string) {
-    await deleteThreadChat(organizationId, id)
-    await queryClient.cancelQueries({ queryKey: list.queryKey })
-    queryClient.setQueryData<Thread[]>(list.queryKey, (old) =>
-      old?.filter((thread) => thread.id !== id)
-    )
-    queryClient.removeQueries({
-      queryKey: threadKeys.detail(organizationId, id),
-    })
+  async function deleteChat(id: string) {
+    await deleteConversation(queryClient, organizationId, id)
     if (threadId === id) startNew()
-    void queryClient.invalidateQueries({
-      queryKey: threadKeys.list(organizationId),
-    })
-  }
-
-  // Go's copy replaces the optimistic one in every list and detail entry.
-  async function renameConversation(id: string, next: string) {
-    await renameCachedThread({
-      queryClient,
-      listKey: threadKeys.list(organizationId),
-      detailKey: threadKeys.detail(organizationId, id),
-      threadId: id,
-      title: next,
-      rename: (normalized) => renameThread(organizationId, id, normalized),
-    })
   }
 
   // The message its conversation's chat has yet to take.
@@ -521,6 +521,7 @@ export function AgentChat({
           onStateChange={(id, next) =>
             setReported({ threadId: id, state: next })
           }
+          runScope={scope}
           {...composer}
         />
       </Suspense>
@@ -601,10 +602,16 @@ export function AgentChat({
             disabled={first !== null || state === "running"}
             onRename={
               canRenameThread(threadId)
-                ? (next) => renameConversation(threadId, next)
+                ? (next) =>
+                    renameConversation(
+                      queryClient,
+                      organizationId,
+                      threadId,
+                      next
+                    )
                 : undefined
             }
-            onDelete={() => deleteConversation(threadId)}
+            onDelete={() => deleteChat(threadId)}
           />
         )}
         {onOpenOverview && !inOverview && (
@@ -622,8 +629,8 @@ export function AgentChat({
           <button
             className="workspace-agent-new workspace-agent-new-chat"
             type="button"
-            aria-label="New conversation"
-            title="New conversation"
+            aria-label="New chat"
+            title="New chat"
             disabled={first !== null}
             onClick={startNew}
           >
@@ -646,13 +653,82 @@ export function AgentChat({
             : undefined
         }
         onRetry={() => void threads.refetch()}
-        disabled={first !== null || state === "running"}
+        disabled={first !== null}
+        running={runs}
         onOpen={(id) => dispatch({ type: "move", thread: id })}
-        onDelete={deleteConversation}
+        onDelete={deleteChat}
       />
       {body}
+      {scope && (
+        <BackgroundRuns
+          organizationId={organizationId}
+          scope={scope}
+          runs={runs}
+          shown={threadId}
+        />
+      )}
     </>
   )
+}
+
+/** How often a run the member left is checked on until Go says it is over. */
+export const BACKGROUND_RUN_POLL_MS = 10_000
+
+/** Whether Go's history of a thread ends with its last run's end. */
+function historyEndsWithRunEnd(items: readonly Item[]): boolean {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index]
+    if (item.type === "delta") continue
+    return item.type === "run_completed" || item.type === "run_failed"
+  }
+  return false
+}
+
+/**
+ * Watches the runs of conversations the member left while they answered:
+ * each is read from Go every `BACKGROUND_RUN_POLL_MS` until Go's run store
+ * (or, where it can't say, the history's last run end) says the run is
+ * over, and its mark goes. The open conversation's own chat says that of
+ * its run.
+ */
+function BackgroundRuns({
+  organizationId,
+  scope,
+  runs,
+  shown,
+}: {
+  organizationId: string
+  scope: ChatScope
+  runs: ReadonlySet<string>
+  shown: string | null | undefined
+}) {
+  const queryClient = useQueryClient()
+  const left = [...runs].filter((id) => id !== shown)
+  const details = useQueries({
+    queries: left.map((id) => ({
+      ...threadDetailQueryOptions(organizationId, id),
+      refetchInterval: BACKGROUND_RUN_POLL_MS,
+    })),
+  })
+  const over = left.filter((_, index) => {
+    const result = details[index]
+    if (result.error instanceof ApiError && result.error.status === 404)
+      return true
+    const detail = result.data
+    if (!detail) return false
+    return detail.active_run === undefined
+      ? historyEndsWithRunEnd(detail.items)
+      : !detail.active_run
+  })
+  const key = over.join("|")
+  useEffect(() => {
+    if (!key) return
+    for (const id of key.split("|")) setPrimaryChatRunning(scope, id, false)
+    void queryClient.invalidateQueries({
+      queryKey: threadKeys.list(organizationId),
+    })
+  }, [key])
+  return null
 }
 
 /**
@@ -721,6 +797,42 @@ function NotSentMessages({
           </Fragment>
         )
       })}
+    </>
+  )
+}
+
+/**
+ * Messages sent from elsewhere that the chat has yet to take: each in a
+ * member bubble, saying it waits, with Cancel to take it back before it goes.
+ */
+function QueuedMessages({
+  requests,
+}: {
+  requests: readonly PrimaryChatRequest[]
+}) {
+  return (
+    <>
+      {requests.map((request) => (
+        <Fragment key={request.id}>
+          <p
+            className="workspace-agent-message"
+            data-from="member"
+            data-status="queued"
+          >
+            {requestMessage(request)}
+          </p>
+          <p className="workspace-agent-empty" role="status">
+            Waiting for your agent…{" "}
+            <button
+              className="workspace-agent-text-button"
+              type="button"
+              onClick={() => cancelPrimaryChatRequest(request.id)}
+            >
+              Cancel
+            </button>
+          </p>
+        </Fragment>
+      ))}
     </>
   )
 }
@@ -811,6 +923,7 @@ function ThreadChat({
   onComposingChange,
   onFileCreated,
   onStateChange,
+  runScope,
 }: ComposerHandlers & {
   organizationId: string
   threadId: string
@@ -827,6 +940,8 @@ function ThreadChat({
   /** Counts what the member or the app just did here (a request, a first message), such as opening the conversation already open. */
   /** What this thread is doing: a run streams, a confirmation waits on the member, or neither. */
   onStateChange: (threadId: string, state: ChatState) => void
+  /** Whose chat it is, for the runs every list marks; none without one. */
+  runScope?: ChatScope
   onFileCreated?: (file: {
     threadId: string
     name: string
@@ -961,11 +1076,26 @@ function ThreadChat({
       })
   }
 
-  const running =
+  const streaming =
     resending ||
     chat.status === "submitted" ||
     chat.status === "streaming" ||
     chat.isServerStreaming
+
+  // What says a run is over besides the stream (C2): its recorded end at
+  // the end of the conversation, or Go's run store, read after it started.
+  // Either ends "Working" though the stream never finished.
+  const recordedEnd = endsWithRunEnd(chat.messages)
+  // When the latest run started streaming here (0 for none yet).
+  const ranSince = useRef(0)
+  const wasStreaming = useRef(false)
+  if (streaming && !wasStreaming.current) ranSince.current = Date.now()
+  wasStreaming.current = streaming
+  const serverIdle =
+    detail.data?.active_run === false &&
+    detail.dataUpdatedAt >=
+      (ranSince.current === 0 ? 0 : ranSince.current + RUN_START_GRACE_MS)
+  const running = streaming && !recordedEnd && !serverIdle
 
   // Whether the run is over, as far as this chat can tell: the member
   // stopped it, or nothing has streamed while the socket has been open a
@@ -983,7 +1113,25 @@ function ThreadChat({
     const timer = setTimeout(() => setSettled(true), RUN_SETTLE_MS)
     return () => clearTimeout(timer)
   }, [connection, running])
-  const ended = !running && (stopped || settled)
+  const ended = !running && (stopped || settled || recordedEnd || serverIdle)
+
+  // While a run looks alive, a stream quiet for a while, or the page coming
+  // back into view, asks Go again (`active_run`, and the history the merge
+  // below takes in), so a run whose end never arrived stops "Working".
+  const refetchDetail = detail.refetch
+  const looksLive = streaming || !ended
+  useEffect(() => {
+    if (!looksLive) return
+    const timer = setInterval(() => void refetchDetail(), RUN_WATCHDOG_MS)
+    const visible = () => {
+      if (document.visibilityState === "visible") void refetchDetail()
+    }
+    document.addEventListener("visibilitychange", visible)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener("visibilitychange", visible)
+    }
+  }, [looksLive, chat.messages, refetchDetail])
 
   // A new conversation's first message goes once its socket is open. Not
   // on mount: useChat stops a request its effects' cleanup finds in flight,
@@ -1003,12 +1151,14 @@ function ThreadChat({
   const reconciled = useRef<unknown>(undefined)
   useEffect(() => {
     const history = detail.data
-    if (!history || running || connection !== "open") return
+    // Once Go says nothing runs, its history is whole: merge it even with a
+    // socket that is down or a stream that never said it finished.
+    if (!history || running || (connection !== "open" && !serverIdle)) return
     if (reconciled.current === history) return
     reconciled.current = history
     const merged = reconcileChatMessages(chat.messages, history.items)
     if (merged !== chat.messages) chat.setMessages(merged)
-  }, [chat, connection, detail.data, running])
+  }, [chat, connection, detail.data, running, serverIdle])
 
   // A thread deleted elsewhere: its socket would only be turned away.
   const missing =
@@ -1074,6 +1224,19 @@ function ThreadChat({
     onStateChange(threadId, state)
     return () => onStateChange(threadId, "idle")
   }, [threadId, state])
+  // Whether its run goes on is kept past this chat: the member may leave it
+  // while it answers, and its run stays marked until Go says it is over
+  // (`BackgroundRuns`).
+  const runOrganization = runScope?.organizationId
+  const runUser = runScope?.userId
+  useEffect(() => {
+    if (!runOrganization || !runUser) return
+    setPrimaryChatRunning(
+      { organizationId: runOrganization, userId: runUser },
+      threadId,
+      state === "running"
+    )
+  }, [runOrganization, runUser, threadId, state])
 
   function stop() {
     setStopped(true)

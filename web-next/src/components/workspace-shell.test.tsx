@@ -387,36 +387,14 @@ describe("WorkspaceShell navigation", () => {
       screen.getByRole("textbox", { name: "Start a new conversation" }),
       { target: { value: "Still composing on Home" } }
     )
-    const all = within(
-      screen.getByRole("region", { name: "Pick up where you left off" })
-    ).getByRole("button", { name: "All conversations" })
-    fireEvent.click(all)
-    // The panel's header holds History: it opens on the list.
-    const history = await screen.findByRole("button", { name: "History" })
-    await waitFor(() =>
-      expect(history.getAttribute("aria-pressed")).toBe("true")
-    )
-    expect(
-      screen.getByRole("region", { name: "Conversation history" })
-    ).toBeTruthy()
-    fireEvent.click(history)
-    expect(history.getAttribute("aria-pressed")).toBe("false")
+    // Home's "Chats" opens the Chats page, as every Chats link does (N3).
     fireEvent.click(
-      screen.getByRole("button", { name: "Collapse agent panel" })
+      within(
+        screen.getByRole("region", { name: "Pick up where you left off" })
+      ).getByRole("button", { name: "Chats" })
     )
-    fireEvent.click(all)
-    await waitFor(() =>
-      expect(
-        screen
-          .getByRole("button", { name: "History" })
-          .getAttribute("aria-pressed")
-      ).toBe("true")
-    )
-    expect(screen.getByDisplayValue("Still composing on Home")).toBeTruthy()
-    expect(
-      screen.getByRole("heading", { name: "My workspace", level: 1 })
-    ).toBeTruthy()
-    expect(shell?.getAttribute("data-primary-work")).toBeNull()
+    expect(await screen.findByRole("heading", { name: "Chats" })).toBeTruthy()
+    expect(shell?.getAttribute("data-primary-work")).not.toBeNull()
     expect(request).toHaveBeenCalledTimes(3)
     expect(api.calls.every((call) => call.method === "GET")).toBe(true)
   })
@@ -542,7 +520,7 @@ describe("WorkspaceShell navigation", () => {
     for (const name of [
       "My workspace",
       "Requests",
-      "Chats with your agent",
+      "Chats",
       "People",
       "Specialists",
       "Agent teams",
@@ -601,7 +579,7 @@ describe("WorkspaceShell navigation", () => {
           .map((button) => button.textContent)
       ).toEqual(["Launch room", "Design reviews"])
     )
-    for (const name of ["My workspace", "Chats with your agent", "Library"])
+    for (const name of ["My workspace", "Chats", "Library"])
       expect(within(nav).getByRole("button", { name })).toBeTruthy()
     // No unread DMs: the rail shows no messages tile.
     expect(
@@ -644,7 +622,9 @@ describe("WorkspaceShell navigation", () => {
     const shell = container.querySelector(".workspace-shell")
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Chats with your agent" })
+      within(
+        await screen.findByRole("navigation", { name: "Workspace" })
+      ).getByRole("button", { name: "Chats" })
     )
     // The Chats page is the agent session, its header "Chats"; the agent
     // panel steps aside for it.

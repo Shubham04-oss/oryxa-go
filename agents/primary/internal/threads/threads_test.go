@@ -144,6 +144,18 @@ func (runs *fakeRuns) Renew(context.Context, string, time.Duration) error {
 	return runs.renewErr
 }
 
+func (runs *fakeRuns) Active(_ context.Context, sessionID, userID string) (bool, error) {
+	runs.mu.Lock()
+	defer runs.mu.Unlock()
+	for _, run := range runs.started {
+		_, finished := runs.finished[run.ID]
+		if run.SessionID == sessionID && run.UserID == userID && !finished && !slices.Contains(runs.cancelled, run.ID) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (runs *fakeRuns) Finish(_ context.Context, runID string, outcome runstore.Outcome, event events.Event) error {
 	runs.mu.Lock()
 	defer runs.mu.Unlock()
@@ -391,6 +403,103 @@ func TestAToolThatAsksWaitsForTheMembersAnswer(t *testing.T) {
 	history := find(thread.Items, ItemConfirmation)
 	if len(history) != 1 || history[0].Status != ConfirmationApproved {
 		t.Fatalf("confirmation in history = %+v", history)
+	}
+}
+
+func TestAThreadSaysWhetherARunAnswersItNow(t *testing.T) {
+	h := newHarness(t, func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("Hello.", genai.RoleModel), nil
+	})
+	created, err := h.service.Create(context.Background(), asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := func() bool {
+		t.Helper()
+		thread, err := h.service.Get(context.Background(), asha, created.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if thread.ActiveRun == nil {
+			t.Fatal("active_run is unsaid, want the run store's answer")
+		}
+		return *thread.ActiveRun
+	}
+	if active() {
+		t.Fatal("active_run = true before any run")
+	}
+	run, err := h.service.StartRun(context.Background(), asha, created.ID, RunInput{Message: "Say hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !active() {
+		t.Fatal("active_run = false while a run holds the thread")
+	}
+	// The run ends, whether or not any client saw it end.
+	run.Execute(context.Background(), func(Item) error { return nil })
+	if active() {
+		t.Fatal("active_run = true after the run ended")
+	}
+}
+
+func TestAConfirmationNobodyAnswersExpires(t *testing.T) {
+	h := newHarness(t, func(request *model.LLMRequest) (*genai.Content, error) {
+		if lastFunctionResponse(request) != nil {
+			return genai.NewContentFromText("I left it alone.", genai.RoleModel), nil
+		}
+		if contentText(request.Contents[len(request.Contents)-1]) == "Something else" {
+			return genai.NewContentFromText("Sure, something else.", genai.RoleModel), nil
+		}
+		return &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{
+			ID: "call_1", Name: "delete_file", Args: map[string]any{"name": "plan.txt"},
+		}}}}, nil
+	})
+	created, err := h.service.Create(context.Background(), asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, _ := h.run(asha, created.ID, RunInput{Message: "Delete plan.txt"})
+	confirmationID := find(items, ItemConfirmation)[0].CallID
+
+	// A day on, nobody has answered it.
+	later := time.Now().Add(ConfirmationTTL + time.Minute)
+	h.service.now = func() time.Time { return later }
+
+	thread, err := h.service.Get(context.Background(), asha, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(thread.Pending) != 0 {
+		t.Fatalf("pending = %v, want an expired confirmation no longer waiting", thread.Pending)
+	}
+	if got := find(thread.Items, ItemConfirmation); len(got) != 1 || got[0].Status != ConfirmationExpired {
+		t.Fatalf("confirmation = %+v, want expired", got)
+	}
+	if _, err := h.service.StartRun(context.Background(), asha, created.ID, RunInput{Confirmations: []Answer{{ID: confirmationID, Confirmed: true}}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an answer to an expired confirmation = %v, want ErrInvalid", err)
+	}
+
+	// The member's next message goes ahead, and the tool never runs.
+	items, _ = h.run(asha, created.ID, RunInput{Message: "Something else"})
+	if answers := find(items, ItemMessage); len(answers) == 0 || answers[len(answers)-1].Text != "Sure, something else." {
+		t.Fatalf("answer = %+v", answers)
+	}
+	if len(*h.deleted) != 0 {
+		t.Fatalf("deleted = %v, want an expired confirmation's tool never run", *h.deleted)
+	}
+	h.service.now = time.Now
+	thread, err = h.service.Get(context.Background(), asha, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(thread.Pending) != 0 {
+		t.Fatalf("pending after the expiry was stored = %v", thread.Pending)
+	}
+	if got := find(thread.Items, ItemConfirmation); len(got) != 1 || got[0].Status != ConfirmationExpired {
+		t.Fatalf("stored confirmation = %+v, want expired", got)
+	}
+	if prompts := find(thread.Items, ItemMessage); len(prompts) != 3 {
+		t.Fatalf("messages = %+v, want the expiry adding none", prompts)
 	}
 }
 

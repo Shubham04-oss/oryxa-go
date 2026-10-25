@@ -9,7 +9,11 @@ import {
   claimPrimaryChatRequest,
   firstMessage,
   initialPrimaryChat,
+  lastChosenChat,
   openingThread,
+  primaryOpeningThread,
+  rememberLastChosenChat,
+  useLastChosenChat,
   primaryChatReducer,
   publishPrimaryChatActivity,
   rememberChoice,
@@ -159,6 +163,54 @@ describe("opening a conversation", () => {
           throw new Error("offline")
         },
       })
+    ).toBeNull()
+  })
+})
+
+describe("the primary chat's opening rule", () => {
+  afterEach(() => window.localStorage.clear())
+  const threads = [
+    { id: "newest", title: "Latest", updated_at: ago(1000), origin: "chat" },
+    { id: "old", title: "Old", updated_at: ago(30 * 24 * 3600_000) },
+    { id: "wake", title: "Apps", updated_at: ago(0), origin: "wakeup" },
+  ]
+  it("opens the chat the member last chose, however old, else New; never one for a pending confirmation (C1)", () => {
+    expect(primaryOpeningThread(threads, "old")).toEqual({
+      thread: "old",
+      restored: true,
+    })
+    expect(primaryOpeningThread(threads, "new")).toEqual({
+      thread: null,
+      restored: true,
+    })
+    // Gone, never chosen, or not a chat: New, as the rules' own decision.
+    for (const last of ["gone", null, "wake"])
+      expect(primaryOpeningThread(threads, last)).toEqual({
+        thread: null,
+        restored: false,
+      })
+  })
+  it("keeps the last choice across tabs, per organization, member and agent", () => {
+    const hook = renderHook(
+      ({ thread, chosen }) => useLastChosenChat(thread, scope, "agent", chosen),
+      {
+        initialProps: {
+          thread: null as string | null | undefined,
+          chosen: false,
+        },
+      }
+    )
+    // A decision the rules made is not the member's choice.
+    expect(lastChosenChat(scope, "agent")).toBeNull()
+    hook.rerender({ thread: "th_1", chosen: true })
+    expect(lastChosenChat(scope, "agent")).toBe("th_1")
+    hook.rerender({ thread: null, chosen: true })
+    expect(lastChosenChat(scope, "agent")).toBe("new")
+    expect(window.localStorage.length).toBe(1)
+    rememberLastChosenChat(scope, "other", "th_2")
+    expect(lastChosenChat(scope, "agent")).toBe("new")
+    expect(
+      lastChosenChat({ organizationId: "org-2", userId: "user-1" }, "agent")
     ).toBeNull()
   })
 })

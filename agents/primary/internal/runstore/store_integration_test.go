@@ -532,3 +532,34 @@ func TestCancelForgetsARunThatNeverRanAndFreesItsSession(t *testing.T) {
 		t.Fatalf("Cancel() of an unknown run = %v, want ErrNotRunning", err)
 	}
 }
+
+func TestActiveFollowsTheRunAndItsLease(t *testing.T) {
+	database := openTestDatabase(t)
+	store := New(database)
+	ctx := context.Background()
+
+	sessionID := testID("session")
+	run := testRun(sessionID)
+	event := testEvent(t, run.ID, agentsv1.RunCompletedDetailType)
+	t.Cleanup(func() { deleteRuns(t, database, run.ID) })
+	t.Cleanup(func() { deleteOutboxEvents(t, database, event.ID) })
+
+	if active, err := store.Active(ctx, sessionID, run.UserID); err != nil || active {
+		t.Fatalf("Active() before any run = %v, %v; want false", active, err)
+	}
+	if err := store.Start(ctx, run, time.Minute); err != nil {
+		t.Fatalf("Start(): %v", err)
+	}
+	if active, err := store.Active(ctx, sessionID, run.UserID); err != nil || !active {
+		t.Fatalf("Active() while running = %v, %v; want true", active, err)
+	}
+	if active, err := store.Active(ctx, sessionID, "someone_else"); err != nil || active {
+		t.Fatalf("Active() for another member = %v, %v; want false", active, err)
+	}
+	if err := store.Finish(ctx, run.ID, Outcome{Status: StatusCompleted}, event); err != nil {
+		t.Fatalf("Finish(): %v", err)
+	}
+	if active, err := store.Active(ctx, sessionID, run.UserID); err != nil || active {
+		t.Fatalf("Active() after the run finished = %v, %v; want false", active, err)
+	}
+}

@@ -478,7 +478,9 @@ export function buildTimeline(
       }
       case "confirmation": {
         const status: ConfirmationStatus =
-          item.status === "approved" || item.status === "declined"
+          item.status === "approved" ||
+          item.status === "declined" ||
+          item.status === "expired"
             ? item.status
             : "pending"
         let entry = item.call_id ? confirmations.get(item.call_id) : undefined
@@ -519,7 +521,9 @@ export function buildTimeline(
               ? "waiting_approval"
               : status === "declined"
                 ? "declined"
-                : "running"
+                : status === "expired"
+                  ? "interrupted"
+                  : "running"
         }
         break
       }

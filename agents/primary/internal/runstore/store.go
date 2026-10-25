@@ -138,6 +138,22 @@ func (store *Store) Start(ctx context.Context, run Run, lease time.Duration) err
 	return err
 }
 
+// Active reports whether a run is answering the member's conversation now:
+// one still running whose lease has not run out. A run whose replica died
+// stops counting once its lease lapses, as it stops holding the
+// conversation then.
+func (store *Store) Active(ctx context.Context, sessionID, userID string) (bool, error) {
+	var active bool
+	if err := store.database.Pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM agents_primary.agent_runs
+			WHERE session_id = $1 AND user_id = $2 AND status = 'running' AND lease_until > now()
+		)`, sessionID, userID).Scan(&active); err != nil {
+		return false, fmt.Errorf("read active run: %w", err)
+	}
+	return active, nil
+}
+
 // Renew extends a running run's hold on its conversation to lease from now.
 // It answers ErrNotRunning when the run is no longer running.
 func (store *Store) Renew(ctx context.Context, runID string, lease time.Duration) error {

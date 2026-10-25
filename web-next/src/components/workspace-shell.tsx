@@ -37,10 +37,7 @@ import { usePeerOnline } from "./direct-message-presence"
 import { people, TeamspaceAvatar } from "./workspace-avatar"
 import { WorkspaceTools } from "./workspace-tools"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
-import type {
-  AgentPanelChatRequest,
-  AgentPanelTabRequest,
-} from "./workspace-agent-panel"
+import type { AgentPanelChatRequest } from "./workspace-agent-panel"
 import { MessagesPage } from "./messages-page"
 import { PeopleDirectory } from "./people-directory"
 import type { PeopleViewer } from "./people-directory"
@@ -204,9 +201,6 @@ function WorkspaceShellContent({
     string | null | undefined
   >()
   const [chatRequest, setChatRequest] = useState<AgentPanelChatRequest | null>(
-    null
-  )
-  const [tabRequest, setTabRequest] = useState<AgentPanelTabRequest | null>(
     null
   )
   // Direct messages: the member's inbox (Team's recent conversations, the
@@ -532,12 +526,6 @@ function WorkspaceShellContent({
     )
   }
 
-  function openHomeHistory() {
-    closePrimaryWork()
-    expandAgentPanel()
-    setTabRequest({ tab: "agents", history: true })
-  }
-
   function navigateFromHome(mode: PrimaryMode, next: Section) {
     closePrimaryWork()
     teamspaces.close()
@@ -647,7 +635,8 @@ function WorkspaceShellContent({
     onOpenConversation: (threadId: string) =>
       openHomeConversation({ kind: "thread", threadId }),
     onOpenRequests: openHomeRequests,
-    onOpenAgent: openHomeHistory,
+    // Every "Chats" link opens the Chats page (N3, C5).
+    onOpenAgent: openChats,
     onOpenTools: () => navigateFromHome("home", "tools"),
     onOpenKnowledge: () => navigateFromHome("home", "knowledge"),
     onOpenTeamspace: openTeamspace,
@@ -1041,7 +1030,6 @@ function WorkspaceShellContent({
         onPrimaryComposingChange={setPrimaryComposing}
         getScreenContext={getScreenContext}
         chatRequest={chatRequest}
-        tabRequest={tabRequest}
         directMessages={directMessages}
         teamspaceId={pageTeamspaceId}
         place={panelPlace}

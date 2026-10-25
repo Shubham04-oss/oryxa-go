@@ -490,6 +490,25 @@ describe("buildTimeline", () => {
     ).toMatchObject({ state: "done" })
   })
 
+  it("marks a tool whose confirmation expired as interrupted, never waiting (C1)", () => {
+    const items = [
+      { type: "tool_call", call_id: "call_1", tool: "browser_open" },
+      {
+        type: "confirmation",
+        call_id: "confirm_1",
+        tool_call_id: "call_1",
+        status: "expired",
+      },
+    ] as const
+    expect(toolOf([...items])).toMatchObject({ state: "interrupted" })
+    expect(
+      buildTimeline([...items]).find((entry) => entry.kind === "confirmation")
+    ).toMatchObject({ status: "expired" })
+    expect(
+      pendingConfirmationIds({ items: [...items], pending_confirmations: [] })
+    ).toEqual([])
+  })
+
   it("marks a declined tool call as declined when no result ever arrives", () => {
     expect(
       toolOf([

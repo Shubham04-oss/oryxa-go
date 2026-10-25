@@ -205,7 +205,7 @@ describe("Requests in the workspace shell", () => {
         .getAllByRole("button")
         .slice(0, 3)
         .map((button) => button.textContent)
-    ).toEqual(["My workspace", "Requests", "Chats with your agent"])
+    ).toEqual(["My workspace", "Requests", "Chats"])
     // How many wait on the member, from the inbox.
     expect(
       await within(navigation).findByRole("button", {

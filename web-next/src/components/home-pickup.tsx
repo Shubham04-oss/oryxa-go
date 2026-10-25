@@ -53,7 +53,7 @@ export function HomePickup({
           New chat
         </Button>
         <Button variant="ghost" size="sm" onClick={onOpenAgent}>
-          All conversations
+          Chats
         </Button>
         <Button
           variant="ghost"

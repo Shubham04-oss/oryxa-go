@@ -321,7 +321,7 @@ function ExpandedSidebar({
                 onClick={() => onNavigate("requests")}
               />
               <NavItem
-                label="Chats with your agent"
+                label="Chats"
                 icon={<MessageSquare />}
                 current={page === "chats"}
                 onClick={() => onNavigate("chats")}
@@ -637,7 +637,7 @@ function CollapsedSidebar({
                 onClick={() => onNavigate("requests")}
               />
               <NavItem
-                label="Chats with your agent"
+                label="Chats"
                 icon={<MessageSquare />}
                 current={page === "chats"}
                 collapsed

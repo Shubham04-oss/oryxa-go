@@ -3,15 +3,19 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { SquarePen } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { chatHistory } from "@/lib/threads/chat-choice"
+import { chatHistory, usePrimaryChatRunning } from "@/lib/threads/chat-choice"
 import type { PrimaryChatTarget } from "@/lib/threads/chat-choice"
 import {
+  canRenameThread,
   threadApprovalQueryOptions,
   threadListQueryOptions,
 } from "@/lib/threads/client"
+import { deleteConversation, renameConversation } from "@/lib/threads/actions"
 import type { Thread, ThreadDetail } from "@/lib/threads/client"
 import { timeAgo } from "./agents-format"
 import { FileKindBadge, fileKindLabel } from "./file-kind"
+import { AgentChatMenu } from "./agent-chat-menu"
+import { RunningDot } from "./agent-chat-history"
 import "./chats-page.css"
 
 /** Whether `at` falls on the member's today. */
@@ -82,7 +86,9 @@ export function chatListGroups(
  * their agent, searchable by title, in Today and Earlier groups, the open
  * one raised, and New chat. Picking one moves the shared primary chat beside
  * it to that conversation, through the same queue Home uses, so its draft,
- * socket and unsent messages behave as they do anywhere else.
+ * socket and unsent messages behave as they do anywhere else. A chat whose
+ * run goes on carries a dot, and the member can leave it and come back
+ * while it answers (C9, F10).
  */
 export function ChatsList({
   organizationId,
@@ -90,7 +96,6 @@ export function ChatsList({
   agentName,
   selected,
   waitingThread,
-  busy,
   onOpen,
 }: {
   organizationId: string
@@ -100,12 +105,16 @@ export function ChatsList({
   selected?: string | null
   /** The open conversation, when it waits on the member's approval. */
   waitingThread?: string | null
-  /** While a run works or a first message is on its way, the chat stays. */
-  busy: boolean
+  /**
+   * Once locked the list while a run worked. A running chat no longer holds
+   * the member in it, so this is ignored; kept so callers need not change.
+   */
+  busy?: boolean
   onOpen: (target: PrimaryChatTarget) => void
 }) {
   const queryClient = useQueryClient()
   const [query, setQuery] = useState("")
+  const running = usePrimaryChatRunning({ organizationId, userId: viewerId })
   // The member's own list, as the chat reads it: the same cache entry.
   const threads = useQuery(threadListQueryOptions(organizationId, viewerId))
   // Approval markers come from what is already known (the open chat, and the
@@ -149,7 +158,6 @@ export function ChatsList({
           size="icon-sm"
           aria-label="New chat"
           title={agentName ? `New chat with ${agentName}` : "New chat"}
-          disabled={busy}
           onClick={() => onOpen({ kind: "new" })}
         >
           <SquarePen aria-hidden="true" />
@@ -189,18 +197,20 @@ export function ChatsList({
                   const current = selected === thread.id
                   const files = chatFiles(thread)
                   return (
-                    <li key={thread.id}>
+                    <li key={thread.id} className="chats-list-item">
                       <Button
                         className="chats-list-row"
                         variant="ghost"
                         aria-current={current ? "true" : undefined}
-                        disabled={busy && !current}
                         onClick={() => {
                           if (!current)
                             onOpen({ kind: "thread", threadId: thread.id })
                         }}
                       >
-                        <strong title={title}>{title}</strong>
+                        <strong title={title}>
+                          {running.has(thread.id) && <RunningDot />}
+                          {title}
+                        </strong>
                         <span className="chats-list-meta">
                           <time dateTime={thread.updated_at}>
                             {timeAgo(thread.updated_at)}
@@ -229,17 +239,40 @@ export function ChatsList({
                           )}
                         </span>
                       </Button>
+                      <AgentChatMenu
+                        className="chats-list-actions"
+                        label={`Options for ${title}`}
+                        title={title}
+                        editableTitle={thread.title.trim()}
+                        agentName={agentName}
+                        disabled={false}
+                        onRename={
+                          canRenameThread(thread.id)
+                            ? (next) =>
+                                renameConversation(
+                                  queryClient,
+                                  organizationId,
+                                  thread.id,
+                                  next
+                                )
+                            : undefined
+                        }
+                        onDelete={async () => {
+                          await deleteConversation(
+                            queryClient,
+                            organizationId,
+                            thread.id
+                          )
+                          // The chat beside the list leaves it for New.
+                          if (current) onOpen({ kind: "new" })
+                        }}
+                      />
                     </li>
                   )
                 })}
               </ul>
             </div>
           ))
-        )}
-        {busy && (
-          <p className="chats-list-note">
-            Your agent is working. You can switch chats once it finishes.
-          </p>
         )}
       </div>
     </section>

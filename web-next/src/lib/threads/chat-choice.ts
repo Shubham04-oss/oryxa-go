@@ -5,9 +5,11 @@ import type { ScreenContext } from "@/lib/agents/screen-context"
 // Which conversation the primary agent's chat opens, and how the rest of the
 // app (Home, for one) asks it to open a particular conversation or a new one.
 //
-// A mounted chat stays where the member left it. On remount or reload,
-// their last view in this tab reopens for five minutes (including New chat),
-// then the newest conversation waiting on their approval, then New chat.
+// A mounted chat stays where the member left it. On remount, reload or in a
+// new tab, the primary chat reopens the chat the member last chose (New chat
+// included) while it still exists, otherwise New chat
+// (`primaryOpeningThread`). A conversation waiting on a confirmation never
+// opens on its own: Home and Requests show it as needing the member.
 // Server update times never imply the member was recently present.
 //
 // The chat also says what it is doing (`publishPrimaryChatActivity`), so a
@@ -135,7 +137,11 @@ export function recentNewView(
   )
 }
 
-/** Recent view (including explicit New), otherwise newest pending among five recent chats, otherwise New. */
+/**
+ * Recent view (including explicit New), otherwise newest pending among five
+ * recent chats, otherwise New. The specialist chat's rule; the primary chat
+ * uses `primaryOpeningThread`, where a pending confirmation never steers.
+ */
 export async function openingThread({
   threads,
   choice,
@@ -156,6 +162,71 @@ export async function openingThread({
     history.map((thread) => waiting(thread.id).catch(() => false))
   )
   return history.find((_, index) => held[index])?.id ?? null
+}
+
+function lastChosenKey(scope: ChatScope, agentId: string) {
+  return `oryxa.chat.last.${scope.organizationId}.${scope.userId}.${agentId}`
+}
+
+/** The chat the member last chose with the primary agent, in any tab: a thread id, "new", or null when none is known. */
+export function lastChosenChat(
+  scope: ChatScope,
+  agentId: string
+): string | null {
+  try {
+    const value = window.localStorage.getItem(lastChosenKey(scope, agentId))
+    return value === null || value === "" ? null : value
+  } catch {
+    return null
+  }
+}
+
+/** Records the chat the member chose (null for New chat). */
+export function rememberLastChosenChat(
+  scope: ChatScope,
+  agentId: string,
+  threadId: string | null
+) {
+  try {
+    window.localStorage.setItem(
+      lastChosenKey(scope, agentId),
+      threadId ?? NEW_CHAT
+    )
+  } catch {
+    /* Storage may be unavailable; the chat still works. */
+  }
+}
+
+/**
+ * Which chat the primary chat opens with: the one the member last chose
+ * while it is still in their history, New chat when they last chose New,
+ * otherwise New. `restored` says the choice is the member's own, kept from
+ * before, rather than the fallback.
+ */
+export function primaryOpeningThread(
+  threads: readonly ListedThread[],
+  last: string | null
+): { thread: string | null; restored: boolean } {
+  if (last === NEW_CHAT) return { thread: null, restored: true }
+  if (last && chatHistory(threads).some((thread) => thread.id === last))
+    return { thread: last, restored: true }
+  return { thread: null, restored: false }
+}
+
+/** Keeps the chat the member chose (`chosen`) as their last choice, whatever page or tab they are on. */
+export function useLastChosenChat(
+  thread: string | null | undefined,
+  scope: ChatScope | undefined,
+  agentId: string | undefined,
+  chosen: boolean
+) {
+  const organizationId = scope?.organizationId
+  const userId = scope?.userId
+  useEffect(() => {
+    if (thread === undefined || !chosen || !organizationId || !userId) return
+    if (!agentId) return
+    rememberLastChosenChat({ organizationId, userId }, agentId, thread)
+  }, [thread, chosen, organizationId, userId, agentId])
 }
 
 /** Record leaves and activity only while this view is visible; hidden panels never extend the grace. */
@@ -305,6 +376,26 @@ export function usePrimaryChatRequest(
   )
 }
 
+/**
+ * Every request nobody has claimed yet, oldest first, for the chat to show
+ * the messages among them as waiting (C16): one sent from Home before the
+ * member's agents have loaded is in view, not only in this queue. Filter it
+ * by scope where it is read; the list itself is the same until it changes.
+ */
+export function useWaitingPrimaryChatRequests(): readonly PrimaryChatRequest[] {
+  return useSyncExternalStore(
+    subscribe,
+    () => waiting,
+    () => NO_REQUESTS
+  )
+}
+const NO_REQUESTS: readonly PrimaryChatRequest[] = []
+
+/** The member takes back a request nobody has claimed: it is never acted on. */
+export function cancelPrimaryChatRequest(id: number): boolean {
+  return claimPrimaryChatRequest(id)
+}
+
 /** What the rest of the app may see of the primary chat: which conversation it has open, and whether it works or waits. */
 export type PrimaryChatActivity = {
   /** The conversation the primary chat has open; null for a new, empty chat. */
@@ -386,6 +477,60 @@ export function usePrimaryChatActivity(
     subscribeToActivity,
     () => (sameScope(latestActivityScope, scope) ? latestActivity : null),
     () => null
+  )
+}
+
+// Every conversation with a run going, not only the open one: the member can
+// leave a chat while it answers (C3, C9), and the lists mark it with a dot
+// until Go says the run is over.
+let running: ReadonlySet<string> = new Set()
+let runningScope: ChatScope | null = null
+const runningListeners = new Set<() => void>()
+const NOTHING_RUNNING: ReadonlySet<string> = new Set()
+
+/** Says whether `threadId`'s run goes on, for `scope`'s chat. Only a change wakes anyone. */
+export function setPrimaryChatRunning(
+  scope: ChatScope,
+  threadId: string,
+  isRunning: boolean
+) {
+  // Another member's runs are forgotten: one page holds one member's chat.
+  const current =
+    runningScope && sameScope(runningScope, scope) ? running : NOTHING_RUNNING
+  if (current.has(threadId) === isRunning) return
+  const next = new Set(current)
+  if (isRunning) next.add(threadId)
+  else next.delete(threadId)
+  running = next
+  runningScope = { organizationId: scope.organizationId, userId: scope.userId }
+  for (const listener of runningListeners) listener()
+}
+
+/** Forgets every run (tests, or another member taking the page). */
+export function clearPrimaryChatRunning() {
+  running = new Set()
+  runningScope = null
+  for (const listener of runningListeners) listener()
+}
+
+function subscribeToRunning(listener: () => void) {
+  runningListeners.add(listener)
+  return () => {
+    runningListeners.delete(listener)
+  }
+}
+
+/** The conversations of `scope`'s primary chat with a run going, open or not. */
+export function usePrimaryChatRunning(
+  scope: ChatScope | undefined
+): ReadonlySet<string> {
+  return useSyncExternalStore(
+    subscribeToRunning,
+    () =>
+      scope && runningScope && sameScope(runningScope, scope)
+        ? running
+        : NOTHING_RUNNING,
+    () => NOTHING_RUNNING
   )
 }
 
@@ -471,7 +616,7 @@ export type PrimaryChatAction =
     }
   /** The member sent the first message of a new chat from the composer. */
   | { type: "submit"; text: string; screen?: ScreenContext }
-  /** The rules chose the conversation to open. Only fills in a chat still undecided and idle. */
+  /** The rules chose the conversation to open. Only fills in a chat still undecided and idle. `resumeNew` marks it the member's own earlier choice (a thread or New). */
   | { type: "decide"; thread: string | null; resumeNew?: boolean }
   /** The member (or a conversation that is gone) moved the chat. Waits while a first message is on its way. */
   | { type: "move"; thread: string | null; notice?: string }

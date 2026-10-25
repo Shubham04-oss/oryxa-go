@@ -22,3 +22,8 @@
 .workspace-chat-history-note { padding: 7px 8px; margin: 0; }
 .workspace-agent-new.workspace-agent-new-chat { display: inline-flex; align-items: center; justify-content: center; width: auto; gap: 5px; padding: 0 9px; border-radius: 15px; white-space: nowrap; font-size: 11px; }
 @media (max-width: 800px) { .workspace-chat-history-delete { width: 38px; min-height: 38px; } .workspace-chat-history-list { max-height: min(190px, 24dvh); } }
+/* A conversation whose run goes on: a small dot before its title, in the
+   text colour (no new accent), gently pulsing unless motion is reduced. */
+.chat-running-dot { display: inline-block; flex-shrink: 0; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--text); vertical-align: middle; animation: chat-running-pulse 1.6s ease-in-out infinite; }
+@keyframes chat-running-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .chat-running-dot { animation: none; } }

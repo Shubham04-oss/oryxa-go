@@ -634,7 +634,7 @@ it("orders Pick up where you left off by what was touched last, four at most", a
   fireEvent.click(within(row).getByRole("button", { name: "Open Library" }))
   expect(view.onOpenKnowledge).toHaveBeenCalledTimes(2)
   fireEvent.click(
-    within(row).getByRole("button", { name: "All conversations" })
+    within(row).getByRole("button", { name: "Chats" })
   )
   expect(view.onOpenAgent).toHaveBeenCalledOnce()
 })

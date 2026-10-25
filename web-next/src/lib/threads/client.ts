@@ -62,6 +62,12 @@ export type ThreadDetail = Thread & {
    * a message is refused with `confirmation_pending` until it does.
    */
   pending_confirmations: string[]
+  /**
+   * Whether a run answers the thread now, from Go's run store (its lease),
+   * not its history. Absent when Go can't say. A chat that missed a run's
+   * last frame learns from it that the run is over (C2).
+   */
+  active_run?: boolean
 }
 
 export type ItemType =
@@ -76,7 +82,8 @@ export type ItemType =
   | "run_completed"
   | "run_failed"
 
-export type ConfirmationStatus = "pending" | "approved" | "declined"
+/** `expired`: nobody answered it within a day; its tool never runs (Go's ConfirmationTTL). */
+export type ConfirmationStatus = "pending" | "approved" | "declined" | "expired"
 
 /** A request pointer's recorded state; the card reads its current state from Go. */
 export type RequestItemStatus =
