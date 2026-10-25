@@ -202,22 +202,66 @@ export interface FakePage {
   elements: { selector: string; tag: string; text?: string; href?: string; type?: string }[];
 }
 
+// Browser Run's own list of running sessions: it outlives any one driver,
+// as the real sessions outlive a DO that is evicted.
+export const browserRun = new Set<string>();
+
 export class FakeDriver implements BrowserDriver {
   pages = new Map<string, FakePage>();
   url = "about:blank";
+  // The session this driver is connected to; null on a cold driver.
   sessionId: string | null = null;
   launched = 0;
+  reconnected = 0;
   closed = 0;
+  failClose = false;
+  failLaunch = false;
   handoffActive = false;
   handoffResult: { success: boolean; reason?: string } | null = null;
   filled = new Map<string, string>();
 
+  // evict forgets the connection, as a new PuppeteerDriver after a DO
+  // restart starts with none; the session keeps running in Browser Run.
+  evict(): void {
+    this.sessionId = null;
+  }
+
+  // expire ends the session on Browser Run's side (its keep-alive ran out).
+  expire(): void {
+    for (const id of this.owned) browserRun.delete(id);
+    this.sessionId = null;
+  }
+
+  private owned = new Set<string>();
+
   async open(sessionId: string | undefined): Promise<{ sessionId: string; created: boolean }> {
-    if (this.sessionId && sessionId === this.sessionId) return { sessionId, created: false };
+    if (await this.attach(sessionId)) return { sessionId: this.sessionId!, created: false };
+    if (this.failLaunch) throw new Error("concurrent session limit reached");
     this.sessionId = `bs_${crypto.randomUUID().slice(0, 8)}`;
+    browserRun.add(this.sessionId);
+    this.owned.add(this.sessionId);
     this.launched++;
     this.url = "about:blank";
     return { sessionId: this.sessionId, created: true };
+  }
+
+  async attach(sessionId: string | undefined): Promise<boolean> {
+    if (this.sessionId && browserRun.has(this.sessionId) && (!sessionId || sessionId === this.sessionId)) return true;
+    if (!sessionId || !browserRun.has(sessionId)) {
+      this.sessionId = null;
+      return false;
+    }
+    this.sessionId = sessionId;
+    this.reconnected++;
+    return true;
+  }
+
+  async alive(sessionId: string): Promise<boolean> {
+    return browserRun.has(sessionId);
+  }
+
+  private connected(): void {
+    if (!this.sessionId || !browserRun.has(this.sessionId)) throw new Error("browser session is not open");
   }
 
   async evaluate<T>(expression: string): Promise<T> {
@@ -250,6 +294,7 @@ export class FakeDriver implements BrowserDriver {
   }
 
   async liveView(mode: "tab" | "full"): Promise<string> {
+    this.connected();
     return `https://live.browser.run/${this.sessionId}?mode=${mode}`;
   }
 
@@ -259,17 +304,27 @@ export class FakeDriver implements BrowserDriver {
   }
 
   async handoffState(): Promise<HandoffInfo> {
+    this.connected();
     return { active: this.handoffActive, ...(this.handoffActive ? { handoffId: "hnd_fake" } : {}) };
   }
 
   async handoffComplete(success: boolean, reason: string | undefined): Promise<void> {
+    this.connected();
+    if (!this.handoffActive) throw new Error("no handoff in progress");
     this.handoffActive = false;
     this.handoffResult = { success, ...(reason ? { reason } : {}) };
   }
 
-  async close(): Promise<void> {
-    this.closed++;
+  async close(sessionId?: string): Promise<void> {
+    const attached = this.sessionId;
     this.sessionId = null;
+    for (const id of new Set([attached, sessionId])) {
+      if (!id || !browserRun.has(id)) continue;
+      if (this.failClose) throw new Error("Browser Run did not answer");
+      browserRun.delete(id);
+      this.closed++;
+    }
     this.url = "about:blank";
   }
+
 }

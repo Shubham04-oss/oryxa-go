@@ -18,6 +18,12 @@ export interface BrowserDriver {
   // open connects to sessionId when it's still alive, or launches a new
   // session; it reports the session it is on and whether it is new.
   open(sessionId: string | undefined): Promise<{ sessionId: string; created: boolean }>;
+  // attach connects to sessionId when it's still alive and never launches
+  // one: it reports false when that session has ended.
+  attach(sessionId: string | undefined): Promise<boolean>;
+  // alive asks Browser Run whether sessionId is still running, without
+  // connecting to it, so asking doesn't keep it awake.
+  alive(sessionId: string): Promise<boolean>;
   // evaluate runs a page script and returns its value.
   evaluate<T>(expression: string): Promise<T>;
   navigate(url: string): Promise<void>;
@@ -27,7 +33,11 @@ export interface BrowserDriver {
   handoff(instructions: string, timeoutMs: number): Promise<string>;
   handoffState(): Promise<HandoffInfo>;
   handoffComplete(success: boolean, reason: string | undefined): Promise<void>;
-  close(): Promise<void>;
+  // close ends the session: the one this driver is on, or else sessionId,
+  // which it connects to first (after a DO restart the driver starts with
+  // nothing attached). A session that already ended is not an error; failing
+  // to reach one that is still running is.
+  close(sessionId?: string): Promise<void>;
 }
 
 export class PuppeteerDriver implements BrowserDriver {
@@ -40,22 +50,34 @@ export class PuppeteerDriver implements BrowserDriver {
   ) {}
 
   async open(sessionId: string | undefined): Promise<{ sessionId: string; created: boolean }> {
-    if (this.browser?.connected && this.page) return { sessionId: this.browser.sessionId(), created: false };
-    if (sessionId) {
-      try {
-        this.browser = await puppeteer.connect(this.binding as never, sessionId);
-        const pages = await this.browser.pages();
-        this.page = pages[0] ?? (await this.browser.newPage());
-        await this.page.setViewport(VIEWPORT);
-        return { sessionId, created: false };
-      } catch {
-        // The session ended (its keep-alive ran out): start a new one.
-      }
-    }
+    if (await this.attach(sessionId)) return { sessionId: this.browser!.sessionId(), created: false };
     this.browser = await puppeteer.launch(this.binding as never, { keep_alive: this.keepAliveMs, recording: true });
     this.page = (await this.browser.pages())[0] ?? (await this.browser.newPage());
     await this.page.setViewport(VIEWPORT);
     return { sessionId: this.browser.sessionId(), created: true };
+  }
+
+  async attach(sessionId: string | undefined): Promise<boolean> {
+    if (this.browser?.connected && this.page && (!sessionId || this.browser.sessionId() === sessionId)) return true;
+    if (!sessionId) return false;
+    try {
+      this.browser = await puppeteer.connect(this.binding as never, sessionId);
+      const pages = await this.browser.pages();
+      this.page = pages[0] ?? (await this.browser.newPage());
+      await this.page.setViewport(VIEWPORT);
+      return true;
+    } catch {
+      // The session ended (its keep-alive ran out).
+      this.browser = null;
+      this.page = null;
+      return false;
+    }
+  }
+
+  async alive(sessionId: string): Promise<boolean> {
+    if (this.browser?.connected && this.browser.sessionId() === sessionId) return true;
+    const sessions = await puppeteer.sessions(this.binding as never);
+    return sessions.some((session) => session.sessionId === sessionId);
   }
 
   private current(): Page {
@@ -120,10 +142,20 @@ export class PuppeteerDriver implements BrowserDriver {
     await this.cdp("Cloudflare.handoffComplete", { success, ...(reason ? { reason } : {}) });
   }
 
-  async close(): Promise<void> {
-    const browser = this.browser;
+  async close(sessionId?: string): Promise<void> {
+    const attached = this.browser;
     this.browser = null;
     this.page = null;
-    if (browser) await browser.close().catch(() => undefined);
+    if (attached?.connected) {
+      const id = attached.sessionId();
+      await attached.close().catch(() => undefined);
+      if (!sessionId || id === sessionId) return;
+    }
+    if (!sessionId) return;
+    // Nothing attached: reconnect to the stored session to end it, unless
+    // Browser Run says it has already gone.
+    if (!(await this.alive(sessionId))) return;
+    const browser = await puppeteer.connect(this.binding as never, sessionId);
+    await browser.close();
   }
 }

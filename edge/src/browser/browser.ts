@@ -6,6 +6,11 @@
 // A member can take over (handoff): while they have control, the agent's
 // calls are refused with conflict until the member hands back (resume).
 // Sessions are recorded by Browser Run; screenshots go to R2 under the run.
+//
+// Only the agent's calls start a browser. Watching (live) and handing back
+// reconnect to the session that is running and never launch one, and every
+// close reconnects to the stored session first, because after the DO is
+// evicted its driver starts with nothing attached (B2, B3).
 import { DurableObject } from "cloudflare:workers";
 import {
   ClickRequest,
@@ -37,6 +42,14 @@ import {
 
 export const BROWSER_IDLE_MS = 10 * 60 * 1000;
 const LIVE_VIEW_MS = 15 * 60 * 1000;
+// A link that lets a member type into the page is short-lived; the pane
+// fetches a new one before it expires (B13).
+const CONTROL_VIEW_MS = 5 * 60 * 1000;
+// The DO's own alarm closes a session the room's sweep left open, this long
+// after the sweep should have closed it, and retries a close that failed.
+const BACKSTOP_GRACE_MS = 2 * 60 * 1000;
+const CLOSE_RETRY_MS = 60 * 1000;
+const MAX_CLOSE_RETRIES = 10;
 const DEFAULT_HANDOFF_MS = 10 * 60 * 1000;
 const MAX_SCREENSHOT_BYTES = 10 << 20;
 
@@ -55,7 +68,12 @@ interface Handoff {
   reason: string;
   startedAt: number;
   member: string;
+  // Older handoffs have no timeout stored: they get the default.
+  timeoutMs?: number;
 }
+
+// A stopped browser, as the reply to watching or handing it back.
+const STOPPED = "this browser has stopped";
 
 export class BrowserDO extends DurableObject<Env> {
   private driverInstance: BrowserDriver | null = null;
@@ -76,15 +94,70 @@ export class BrowserDO extends DurableObject<Env> {
     const events: ChildEvent[] = [];
     try {
       await this.serialize(async () => {
-        const sessionId = await this.ctx.storage.get<string>("session");
-        await this.driver().close();
-        await this.ctx.storage.delete(["session", "handoff"]);
+        const sessionId = await this.closeSession();
         if (sessionId) events.push({ type: "browser.stopped", summary: `Browser closed (${reason})`, data: { reason, browserSession: sessionId } });
       });
       return { status: 200, body: { stopped: true }, events };
     } catch (error) {
       return childError(error, events);
     }
+  }
+
+  // alarm closes what the room's sweep didn't: a session idle past the
+  // limit (the room's own stop failed or never came), or one whose close
+  // failed. It never runs while a handoff is still within its time.
+  async alarm(): Promise<void> {
+    await this.serialize(async () => {
+      const sessionId = await this.ctx.storage.get<string>("session");
+      if (!sessionId) return;
+      const due = await this.closeDue();
+      if (due > Date.now()) {
+        await this.ctx.storage.setAlarm(due);
+        return;
+      }
+      try {
+        await this.closeSession();
+      } catch (error) {
+        console.error(JSON.stringify({ msg: "closing idle browser failed", error: String(error) }));
+      }
+    });
+  }
+
+  // closeSession ends the stored session (reconnecting to it when the driver
+  // has nothing attached) and only then forgets it. When the close fails, the
+  // id stays and the alarm tries again, a bounded number of times.
+  private async closeSession(): Promise<string | undefined> {
+    const sessionId = await this.ctx.storage.get<string>("session");
+    try {
+      await this.driver().close(sessionId);
+    } catch (error) {
+      const retries = ((await this.ctx.storage.get<number>("closeRetries")) ?? 0) + 1;
+      if (retries <= MAX_CLOSE_RETRIES) {
+        await this.ctx.storage.put("closeRetries", retries);
+        await this.ctx.storage.setAlarm(Date.now() + CLOSE_RETRY_MS);
+      } else {
+        // Browser Run's keep-alive ends it in the end; stop retrying.
+        await this.ctx.storage.delete(["session", "handoff", "closeRetries", "lastUsedAt"]);
+      }
+      throw new EdgeError("unavailable", `the browser could not be closed: ${String((error as Error).message ?? error)}`, true);
+    }
+    await this.ctx.storage.delete(["session", "handoff", "closeRetries", "lastUsedAt"]);
+    return sessionId;
+  }
+
+  // closeDue is when an unused session should be closed: the idle limit
+  // after the agent last used it, or the end of an open handoff if later.
+  private async closeDue(): Promise<number> {
+    if ((await this.ctx.storage.get<number>("closeRetries")) !== undefined) return 0;
+    const lastUsed = (await this.ctx.storage.get<number>("lastUsedAt")) ?? 0;
+    const handoff = await this.ctx.storage.get<Handoff>("handoff");
+    const handoffEnd = handoff ? handoff.startedAt + (handoff.timeoutMs ?? DEFAULT_HANDOFF_MS) : 0;
+    return Math.max(lastUsed + BROWSER_IDLE_MS, handoffEnd) + BACKSTOP_GRACE_MS;
+  }
+
+  private async used(): Promise<void> {
+    await this.ctx.storage.put("lastUsedAt", Date.now());
+    await this.ctx.storage.setAlarm(await this.closeDue());
   }
 
   private serialize<T>(work: () => Promise<T>): Promise<T> {
@@ -117,9 +190,12 @@ export class BrowserDO extends DurableObject<Env> {
     try {
       opened = await this.driver().open(stored);
     } catch (error) {
-      throw new EdgeError("unavailable", `the browser did not start: ${String(error)}`, true);
+      const reason = String((error as Error).message ?? error).slice(0, 300);
+      events.push({ type: "browser.failed", summary: "The browser didn't start", data: { reason } });
+      throw new EdgeError("unavailable", `the browser did not start: ${reason}`, true);
     }
     if (opened.sessionId !== stored) await this.ctx.storage.put("session", opened.sessionId);
+    await this.used();
     if (opened.created) {
       await this.ctx.storage.delete("handoff");
       events.push({ type: "browser.started", summary: "Browser started", data: { browserSession: opened.sessionId, recording: true } });
@@ -127,10 +203,42 @@ export class BrowserDO extends DurableObject<Env> {
     return opened.created;
   }
 
+  // attached reconnects to the running session and never starts one. When
+  // the session has ended, it forgets it, says so in the log, and refuses
+  // with conflict: watching or handing back must not launch a browser.
+  private async attached(events: ChildEvent[]): Promise<void> {
+    const stored = await this.ctx.storage.get<string>("session");
+    if (stored && (await this.driver().attach(stored))) return;
+    if (stored) {
+      await this.ctx.storage.delete(["session", "handoff", "lastUsedAt"]);
+      events.push({ type: "browser.stopped", summary: "Browser closed (it had ended)", data: { reason: "ended", browserSession: stored } });
+    }
+    throw new EdgeError("conflict", STOPPED);
+  }
+
+  // handoffOver reports whether a stored handoff has run past its time.
+  private handoffOver(handoff: Handoff): boolean {
+    return Date.now() - handoff.startedAt >= (handoff.timeoutMs ?? DEFAULT_HANDOFF_MS);
+  }
+
+  private async endHandoff(handoff: Handoff, events: ChildEvent[]): Promise<void> {
+    await this.ctx.storage.delete("handoff");
+    events.push({
+      type: "browser.handoff.timeout",
+      summary: "Nobody took over in time; the agent has the browser back",
+      data: { handoffId: handoff.handoffId },
+      durationMs: Date.now() - handoff.startedAt,
+    });
+  }
+
   // agentTurn refuses an agent's action while a member has control.
-  private async agentTurn(): Promise<void> {
+  private async agentTurn(events: ChildEvent[]): Promise<void> {
     const handoff = await this.ctx.storage.get<Handoff>("handoff");
     if (!handoff) return;
+    if (this.handoffOver(handoff)) {
+      await this.endHandoff(handoff, events);
+      return;
+    }
     const state = await this.driver()
       .handoffState()
       .catch(() => ({ active: true }));
@@ -144,13 +252,15 @@ export class BrowserDO extends DurableObject<Env> {
         const { url } = NavigateRequest.parse(body);
         const target = checkURL(url);
         const recreated = await this.session(events);
-        await this.agentTurn();
+        await this.agentTurn(events);
         const started = Date.now();
         try {
           await this.driver().navigate(target.toString());
           await this.driver().waitUntilReady();
         } catch (error) {
-          throw new EdgeError("invalid_request", `navigation failed: ${String((error as Error).message ?? error)}`);
+          const reason = String((error as Error).message ?? error).slice(0, 300);
+          events.push({ type: "browser.failed", summary: `Couldn't open ${target.hostname}`, data: { url: target.toString(), reason } });
+          throw new EdgeError("invalid_request", `navigation failed: ${reason}`);
         }
         const page = await this.snapshot();
         events.push({ type: "browser.navigate", summary: `Opened ${hostOf(page.url) || target.hostname}`, data: { url: page.url, title: page.title }, durationMs: Date.now() - started });
@@ -166,7 +276,7 @@ export class BrowserDO extends DurableObject<Env> {
         const { selector } = ClickRequest.parse(body);
         checkSelector(selector);
         const recreated = await this.session(events);
-        await this.agentTurn();
+        await this.agentTurn(events);
         await this.pageScript(clickExpression(selector));
         await this.driver().waitUntilReady();
         const page = await this.snapshot();
@@ -178,7 +288,7 @@ export class BrowserDO extends DurableObject<Env> {
         checkSelector(selector);
         if (new TextEncoder().encode(text).length > MAX_FILL_BYTES) throw new EdgeError("too_large", "text exceeds the 100 KiB fill limit");
         const recreated = await this.session(events);
-        await this.agentTurn();
+        await this.agentTurn(events);
         await this.pageScript(fillExpression(selector, text));
         const page = await this.snapshot();
         // The text itself stays out of the log: it may be personal.
@@ -198,17 +308,18 @@ export class BrowserDO extends DurableObject<Env> {
         return { key, mimeType: "image/png", width: VIEWPORT.width, height: VIEWPORT.height, data: base64Encode(image), ...(recreated ? { sessionRecreated: true } : {}) };
       }
       case "reset": {
-        const sessionId = await this.ctx.storage.get<string>("session");
-        await this.driver().close();
-        await this.ctx.storage.delete(["session", "handoff"]);
+        // Reset promises the cookies are gone: report success only once the
+        // old session is really closed.
+        const sessionId = await this.closeSession();
         events.push({ type: "browser.reset", summary: "Browser reset: cookies and pages cleared", data: { browserSession: sessionId ?? null } });
         return { reset: true };
       }
       case "live": {
         const { mode } = LiveRequest.parse(body);
-        await this.session(events);
-        const url = await this.driver().liveView(mode ?? "tab", LIVE_VIEW_MS);
-        return { url, expiresAt: new Date(Date.now() + LIVE_VIEW_MS).toISOString() };
+        await this.attached(events);
+        const lifetime = mode === "full" ? CONTROL_VIEW_MS : LIVE_VIEW_MS;
+        const url = await this.driver().liveView(mode ?? "tab", lifetime);
+        return { url, expiresAt: new Date(Date.now() + lifetime).toISOString() };
       }
       case "handoff": {
         const request = HandoffRequest.parse(body);
@@ -217,7 +328,8 @@ export class BrowserDO extends DurableObject<Env> {
         if (existing) throw new EdgeError("conflict", "a handoff is already open");
         const timeout = request.timeoutMs ?? DEFAULT_HANDOFF_MS;
         const handoffId = await this.driver().handoff(request.reason, timeout);
-        await this.ctx.storage.put("handoff", { handoffId, reason: request.reason, startedAt: Date.now(), member: context.member } satisfies Handoff);
+        await this.ctx.storage.put("handoff", { handoffId, reason: request.reason, startedAt: Date.now(), member: context.member, timeoutMs: timeout } satisfies Handoff);
+        await this.used();
         const live = await this.driver().liveView("tab", Math.max(timeout, LIVE_VIEW_MS));
         events.push({ type: "browser.handoff", summary: `Asked a member to take over: ${request.reason.slice(0, 200)}`, data: { handoffId, reason: request.reason.slice(0, 1_000) } });
         return { handoffId, live: { url: live, expiresAt: new Date(Date.now() + Math.max(timeout, LIVE_VIEW_MS)).toISOString() } };
@@ -225,7 +337,22 @@ export class BrowserDO extends DurableObject<Env> {
       case "handoff/state": {
         const handoff = await this.ctx.storage.get<Handoff>("handoff");
         if (!handoff) return { active: false };
-        const state = await this.driver().handoffState().catch(() => ({ active: true }));
+        if (this.handoffOver(handoff)) {
+          await this.endHandoff(handoff, events);
+          return { active: false, handoffId: handoff.handoffId };
+        }
+        // A session that has ended has no handoff open: say so rather than
+        // guessing it is still active.
+        const sessionId = await this.ctx.storage.get<string>("session");
+        const alive = sessionId ? await this.driver().alive(sessionId).catch(() => true) : false;
+        if (!alive) {
+          await this.ctx.storage.delete("handoff");
+          return { active: false, handoffId: handoff.handoffId };
+        }
+        const state = await this.driver()
+          .attach(sessionId)
+          .then((attached) => (attached ? this.driver().handoffState() : { active: false }))
+          .catch(() => ({ active: true }));
         if (!state.active) {
           await this.ctx.storage.delete("handoff");
           return { active: false, handoffId: handoff.handoffId };
@@ -236,9 +363,19 @@ export class BrowserDO extends DurableObject<Env> {
         const request = ResumeRequest.parse(body);
         const handoff = await this.ctx.storage.get<Handoff>("handoff");
         if (!handoff) throw new EdgeError("conflict", "no handoff is open");
-        await this.session(events);
-        await this.driver().handoffComplete(request.success, request.note);
+        await this.attached(events);
+        try {
+          await this.driver().handoffComplete(request.success, request.note);
+        } catch (error) {
+          // The handoff already ended on Browser Run's side (it timed out):
+          // the agent has the browser back, which is what the member wants.
+          const state = await this.driver()
+            .handoffState()
+            .catch(() => ({ active: true }));
+          if (state.active) throw error;
+        }
         await this.ctx.storage.delete("handoff");
+        await this.used();
         const page = await this.snapshot();
         events.push({
           type: "browser.resume",
