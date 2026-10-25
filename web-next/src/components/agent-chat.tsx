@@ -86,6 +86,43 @@ type ChatState = PrimaryChatActivity["state"]
  */
 const RUN_SETTLE_MS = 2000
 
+/**
+ * How long a run may stream nothing before the chat asks Go whether it is
+ * still running, and how often it asks again while it stays quiet: a stream
+ * whose last frame never arrived would otherwise read "Working" for ever.
+ */
+export const RUN_WATCHDOG_MS = 45_000
+
+/**
+ * How long after a run starts in this chat Go's word that nothing runs is
+ * believed: a thread read just as the member sent may predate the run.
+ */
+const RUN_START_GRACE_MS = 5000
+
+/**
+ * Whether the conversation's latest message is the agent's and ends with its
+ * run's recorded end (Go's run_completed or run_failed): the run is over,
+ * whatever the stream says, as when its finish frame never arrived. A
+ * session-expired failure is the chat's own, and is sent again.
+ */
+export function endsWithRunEnd(
+  messages: readonly ThreadChatMessage[]
+): boolean {
+  const last = messages.at(-1)
+  if (last?.role !== "assistant") return false
+  for (let index = last.parts.length - 1; index >= 0; index -= 1) {
+    const part = last.parts[index]
+    if (part.type !== "data-oryxa") continue
+    const item = part.data
+    if (item.type === "delta") continue
+    return (
+      item.type === "run_completed" ||
+      (item.type === "run_failed" && item.code !== sessionExpiredCode)
+    )
+  }
+  return false
+}
+
 function composerLabel(agentName?: string): string {
   return agentName ? `Message ${agentName}` : "Message your agent"
 }
@@ -926,11 +963,26 @@ function ThreadChat({
       })
   }
 
-  const running =
+  const streaming =
     resending ||
     chat.status === "submitted" ||
     chat.status === "streaming" ||
     chat.isServerStreaming
+
+  // What says a run is over besides the stream (C2): its recorded end at
+  // the end of the conversation, or Go's run store, read after it started.
+  // Either ends "Working" though the stream never finished.
+  const recordedEnd = endsWithRunEnd(chat.messages)
+  // When the latest run started streaming here (0 for none yet).
+  const ranSince = useRef(0)
+  const wasStreaming = useRef(false)
+  if (streaming && !wasStreaming.current) ranSince.current = Date.now()
+  wasStreaming.current = streaming
+  const serverIdle =
+    detail.data?.active_run === false &&
+    detail.dataUpdatedAt >=
+      (ranSince.current === 0 ? 0 : ranSince.current + RUN_START_GRACE_MS)
+  const running = streaming && !recordedEnd && !serverIdle
 
   // Whether the run is over, as far as this chat can tell: the member
   // stopped it, or nothing has streamed while the socket has been open a
@@ -948,7 +1000,25 @@ function ThreadChat({
     const timer = setTimeout(() => setSettled(true), RUN_SETTLE_MS)
     return () => clearTimeout(timer)
   }, [connection, running])
-  const ended = !running && (stopped || settled)
+  const ended = !running && (stopped || settled || recordedEnd || serverIdle)
+
+  // While a run looks alive, a stream quiet for a while, or the page coming
+  // back into view, asks Go again (`active_run`, and the history the merge
+  // below takes in), so a run whose end never arrived stops "Working".
+  const refetchDetail = detail.refetch
+  const looksLive = streaming || !ended
+  useEffect(() => {
+    if (!looksLive) return
+    const timer = setInterval(() => void refetchDetail(), RUN_WATCHDOG_MS)
+    const visible = () => {
+      if (document.visibilityState === "visible") void refetchDetail()
+    }
+    document.addEventListener("visibilitychange", visible)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener("visibilitychange", visible)
+    }
+  }, [looksLive, chat.messages, refetchDetail])
 
   // A new conversation's first message goes once its socket is open. Not
   // on mount: useChat stops a request its effects' cleanup finds in flight,
@@ -968,12 +1038,14 @@ function ThreadChat({
   const reconciled = useRef<unknown>(undefined)
   useEffect(() => {
     const history = detail.data
-    if (!history || running || connection !== "open") return
+    // Once Go says nothing runs, its history is whole: merge it even with a
+    // socket that is down or a stream that never said it finished.
+    if (!history || running || (connection !== "open" && !serverIdle)) return
     if (reconciled.current === history) return
     reconciled.current = history
     const merged = reconcileChatMessages(chat.messages, history.items)
     if (merged !== chat.messages) chat.setMessages(merged)
-  }, [chat, connection, detail.data, running])
+  }, [chat, connection, detail.data, running, serverIdle])
 
   // A thread deleted elsewhere: its socket would only be turned away.
   const missing =

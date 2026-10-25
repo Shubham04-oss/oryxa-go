@@ -14,7 +14,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useReducer, useState } from "react"
 import type { ReactElement } from "react"
-import { AgentChat } from "./agent-chat"
+import { AgentChat, RUN_WATCHDOG_MS } from "./agent-chat"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
 import {
   initialPrimaryChat,
@@ -155,6 +155,8 @@ function stubApi({
   /** Conversations Go no longer has (the list may still name them). */
   gone = [] as string[],
   rememberLatest = true,
+  /** Go's word on whether a run answers the thread now (`active_run`). */
+  activeRun = undefined as boolean | undefined,
 } = {}) {
   if (rememberLatest && lastChosenChat(scope, LEO) === null) {
     const last = threads.find(
@@ -193,6 +195,7 @@ function stubApi({
           ...thread(detail[1], ""),
           items,
           pending_confirmations: pending,
+          ...(activeRun === undefined ? {} : { active_run: activeRun }),
         })
       }
       if (path === "/v1/organizations/org_1/agents") {
@@ -421,6 +424,69 @@ describe("AgentChat", () => {
     updateChat({ status: "ready" })
     expect(row()?.getAttribute("data-state")).toBe("interrupted")
     expect(row()?.textContent).toContain("Interrupted")
+  })
+
+  describe("a run whose end the stream never delivered (C2)", () => {
+    const card = () => document.querySelector("article.agent-run")
+    afterEach(() => vi.useRealTimers())
+
+    it("ends Working on the run's recorded end, though the stream still says it streams", async () => {
+      const items: Item[] = [
+        {
+          type: "message",
+          id: "ev_1",
+          author: "member",
+          text: "Which deploy?",
+        },
+        { type: "run_started", id: "run_1.started", run_id: "run_1" },
+        { type: "message", id: "ev_2", author: "Leo", text: "Release 42." },
+        { type: "run_completed", id: "run_1.ended", run_id: "run_1" },
+      ]
+      stubApi({ threads: [thread("th_1", "Which deploy?")], items })
+      hooks.chat.messages = itemsToChatMessages(items)
+      hooks.chat.status = "streaming"
+      renderChat()
+      await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+      // The socket never even opens: the record alone says it is over.
+      await waitFor(() => expect(card()).toBeTruthy())
+      expect(card()?.getAttribute("data-status")).toBe("done")
+      expect(screen.queryByRole("button", { name: "Stop response" })).toBeNull()
+    })
+
+    it("asks Go once the stream has been quiet, and ends Working when no run answers the thread", async () => {
+      const items: Item[] = [
+        { type: "message", id: "ev_1", author: "member", text: "Look it up" },
+        { type: "tool_call", id: "ev_2", call_id: "c1", tool: "web_search" },
+      ]
+      const calls = stubApi({
+        threads: [thread("th_1", "Look it up")],
+        items,
+        activeRun: false,
+      })
+      hooks.chat.messages = itemsToChatMessages(items)
+      hooks.chat.status = "streaming"
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] })
+      renderChat()
+      await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+      open("org_1~th_1")
+      await waitFor(() => expect(card()).toBeTruthy())
+      // Go's answer from as the run started is not believed.
+      expect(card()?.getAttribute("data-status")).toBe("working")
+      const reads = () =>
+        calls.filter(
+          (call) => call === "GET /v1/organizations/org_1/threads/th_1"
+        ).length
+      const before = reads()
+
+      await act(async () => {
+        vi.advanceTimersByTime(RUN_WATCHDOG_MS)
+      })
+      await waitFor(() => expect(reads()).toBeGreaterThan(before))
+      await waitFor(() =>
+        expect(card()?.getAttribute("data-status")).not.toBe("working")
+      )
+      expect(screen.queryByRole("button", { name: "Stop response" })).toBeNull()
+    })
   })
 
   describe("a tool call that only looks unfinished", () => {

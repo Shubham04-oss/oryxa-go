@@ -62,6 +62,12 @@ export type ThreadDetail = Thread & {
    * a message is refused with `confirmation_pending` until it does.
    */
   pending_confirmations: string[]
+  /**
+   * Whether a run answers the thread now, from Go's run store (its lease),
+   * not its history. Absent when Go can't say. A chat that missed a run's
+   * last frame learns from it that the run is over (C2).
+   */
+  active_run?: boolean
 }
 
 export type ItemType =
