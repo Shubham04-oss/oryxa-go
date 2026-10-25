@@ -8,16 +8,32 @@ import { ArrowLeft, Globe, Hand, SquareTerminal } from "lucide-react"
 import { BrowserPane } from "./browser-pane"
 import { SandboxPane } from "./sandbox-pane"
 import { timeAgo } from "./agents-format"
-import {
-  askedForHand,
-  childKey,
-  childLabel,
-  listChildren,
-} from "@/lib/live/children"
+import { childKey, childLabel, listChildren } from "@/lib/live/children"
 import type { LiveChild } from "@/lib/live/children"
 import type { LiveEvent, LiveRoom } from "@/lib/live/client"
+import { ApiError } from "@/lib/api/client"
 import { useRoomLog } from "@/lib/live/use-room-log"
+import {
+  isAskingForHand,
+  useChildRunning,
+  useRunningPredicate,
+} from "./browser-pane-state"
 import "./live.css"
+
+/**
+ * The list a room the edge doesn't have yet answers with: an agent creates
+ * the room on its first call, so a chat that never ran code or browsed has
+ * none, and that is "nothing live", not an error (B9, F12).
+ */
+const NO_ROOM = new WeakSet<LiveChild[]>()
+
+/** How often to look again for a room the edge doesn't have yet. */
+const NO_ROOM_POLL_MS = 60_000
+
+/** Whether the room's list came back empty because the room doesn't exist yet. */
+export function isNoRoom(children: LiveChild[] | undefined): boolean {
+  return children !== undefined && NO_ROOM.has(children)
+}
 
 /** The room's children, refreshed whenever the log says one changed. */
 export function useRoomChildren(
@@ -29,13 +45,30 @@ export function useRoomChildren(
   const active = enabled && room !== undefined
   const children = useQuery({
     queryKey: childKey(organizationId, room ?? { kind: "thread", id: "" }),
-    queryFn: ({ signal }) =>
-      listChildren(organizationId, room ?? { kind: "thread", id: "" }, signal),
+    queryFn: async ({ signal }) => {
+      try {
+        return await listChildren(
+          organizationId,
+          room ?? { kind: "thread", id: "" },
+          signal
+        )
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) {
+          const none: LiveChild[] = []
+          NO_ROOM.add(none)
+          return none
+        }
+        throw error
+      }
+    },
     enabled: active,
     retry: false,
+    // A room that doesn't exist has no log to follow: look again now and then.
+    refetchInterval: (query) =>
+      isNoRoom(query.state.data) ? NO_ROOM_POLL_MS : false,
   })
   const log = useRoomLog(organizationId, room, {
-    enabled: active && children.isSuccess,
+    enabled: active && children.isSuccess && !isNoRoom(children.data),
   })
   const lastChildEvent = [...log.events]
     .reverse()
@@ -59,17 +92,18 @@ function ChildIcon({ child }: { child: LiveChild }) {
 
 function ChildTile({
   child,
+  running,
   asked,
   viewerId,
   onOpen,
 }: {
   child: LiveChild
+  running: boolean
   /** The agent is asking for a hand with this browser (from the room's log). */
   asked: boolean
   viewerId?: string
   onOpen: (child: LiveChild) => void
 }) {
-  const running = child.status === "running"
   const label = childLabel(child, viewerId)
   return (
     <button
@@ -111,18 +145,25 @@ export function LiveChildren({
   viewerId,
   onOpen,
   title = "Sandbox and browser",
+  shared,
 }: {
   organizationId: string
   room: LiveRoom | undefined
   viewerId?: string
   onOpen: (child: LiveChild) => void
   title?: string
+  /** The room's children and log when the page already follows them. */
+  shared?: ReturnType<typeof useRoomChildren>
 }) {
-  const { children, log } = useRoomChildren(organizationId, room)
+  const own = useRoomChildren(organizationId, room, {
+    enabled: shared === undefined,
+  })
+  const { children, log } = shared ?? own
+  const running = useRunningPredicate(organizationId, room, log.events)
   if (!room || !children.data || children.data.length === 0) return null
   const sorted = [...children.data].sort(
     (a, b) =>
-      Number(b.status === "running") - Number(a.status === "running") ||
+      Number(running(b)) - Number(running(a)) ||
       b.lastUsedAt.localeCompare(a.lastUsedAt)
   )
   return (
@@ -133,10 +174,11 @@ export function LiveChildren({
           <ChildTile
             key={`${child.kind}:${child.name}`}
             child={child}
+            running={running(child)}
             asked={
               child.kind === "browser" &&
-              child.status === "running" &&
-              askedForHand(log.events, child.name)
+              running(child) &&
+              isAskingForHand(log.events, child.name)
             }
             viewerId={viewerId}
             onOpen={onOpen}
@@ -169,6 +211,9 @@ export function LivePane({
   const own = useRoomLog(organizationId, room, {
     enabled: events === undefined,
   })
+  const log = events ?? own.events
+  // The header says what the pane says: both follow the same state.
+  const running = useChildRunning(organizationId, room, child, log)
   const label = childLabel(child, viewerId)
   return (
     <div className="live-viewer" aria-label={label} role="region">
@@ -185,7 +230,7 @@ export function LivePane({
           <ChildIcon child={child} />
         </span>
         <strong>{label}</strong>
-        <small>{child.status === "running" ? "Running" : "Stopped"}</small>
+        <small>{running ? "Running" : "Stopped"}</small>
       </header>
       {child.kind === "sandbox" ? (
         <SandboxPane
@@ -199,7 +244,7 @@ export function LivePane({
           organizationId={organizationId}
           room={room}
           child={child}
-          events={events ?? own.events}
+          events={log}
           agentName={agentName}
         />
       )}
@@ -342,9 +387,8 @@ export function RoomLive({
     return <p className="live-quiet">Looking for live work…</p>
   if (children.isError) {
     return (
-      <p className="live-quiet">
-        Nothing live here yet. When an agent runs code or browses for this room,
-        it shows up here.
+      <p className="live-quiet" role="alert">
+        Couldn't load this room's live work. Try again in a moment.
       </p>
     )
   }

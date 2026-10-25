@@ -49,6 +49,8 @@ type fakeConnector struct {
 	clients   []*fakeAutomation
 	endpoints []string
 	err       error
+	// failures fails this many of the next connects.
+	failures int
 }
 
 func (f *fakeConnector) connect(_ context.Context, endpoint string) (automationClient, error) {
@@ -57,6 +59,10 @@ func (f *fakeConnector) connect(_ context.Context, endpoint string) (automationC
 	f.endpoints = append(f.endpoints, endpoint)
 	if f.err != nil {
 		return nil, f.err
+	}
+	if f.failures > 0 {
+		f.failures--
+		return nil, errors.New("dial failed")
 	}
 	client := &fakeAutomation{}
 	f.clients = append(f.clients, client)
@@ -295,5 +301,151 @@ func TestNewManagerValidatesOptions(t *testing.T) {
 		if _, err := newManager(&fakeRuntime{}, options); err == nil {
 			t.Fatalf("newManager accepted options %+v", options)
 		}
+	}
+}
+
+func TestManagerStopsBrowserIdlePastTheLimit(t *testing.T) {
+	now := time.Date(2026, time.October, 25, 12, 0, 0, 0, time.UTC)
+	api := &fakeRuntime{}
+	connector := &fakeConnector{}
+	manager, err := newManager(api, Options{
+		connector:      connector,
+		SessionTimeout: time.Hour,
+		IdleTimeout:    10 * time.Minute,
+		resolver:       publicResolver(),
+		now:            func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Invoke(t.Context(), "chat", Request{Action: Snapshot}); err != nil {
+		t.Fatal(err)
+	}
+
+	now = now.Add(9 * time.Minute)
+	if err := manager.sweepIdle(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.stops) != 0 {
+		t.Fatalf("stopped a browser used 9 minutes ago: %v", api.stops)
+	}
+	// Using it again moves the idle clock.
+	if _, err := manager.Invoke(t.Context(), "chat", Request{Action: Snapshot}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(9 * time.Minute)
+	if err := manager.sweepIdle(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.stops) != 0 {
+		t.Fatalf("stopped a browser in use: %v", api.stops)
+	}
+
+	now = now.Add(time.Minute)
+	if err := manager.sweepIdle(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(api.stops, []string{"browser-1"}) || !connector.clients[0].closed {
+		t.Fatalf("stops = %v, automation closed = %v", api.stops, connector.clients[0].closed)
+	}
+	manager.mu.Lock()
+	remaining := len(manager.sessions)
+	manager.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("idle browser still tracked: %d", remaining)
+	}
+
+	// The chat's next call starts a fresh browser.
+	result, err := manager.Invoke(t.Context(), "chat", Request{Action: Snapshot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.SessionRecreated || len(api.starts) != 2 {
+		t.Fatalf("recreated = %v, starts = %d", result.SessionRecreated, len(api.starts))
+	}
+}
+
+func TestManagerIdleSweepRetriesAFailedStop(t *testing.T) {
+	now := time.Date(2026, time.October, 25, 12, 0, 0, 0, time.UTC)
+	api := &fakeRuntime{}
+	manager, err := newManager(api, Options{connector: &fakeConnector{}, SessionTimeout: time.Hour, resolver: publicResolver(), now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Invoke(t.Context(), "chat", Request{Action: Snapshot}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(DefaultIdleTimeout)
+	api.stopErr = errors.New("throttled")
+	if err := manager.sweepIdle(t.Context()); err == nil {
+		t.Fatal("a failed stop was not reported")
+	}
+	api.stopErr = nil
+	if err := manager.sweepIdle(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.stops) != 2 {
+		t.Fatalf("stops = %v", api.stops)
+	}
+}
+
+func TestManagerReconnectsAfterABrokenStream(t *testing.T) {
+	api := &fakeRuntime{}
+	connector := &fakeConnector{}
+	manager, err := newManager(api, Options{connector: connector, SessionTimeout: time.Hour, resolver: publicResolver()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Invoke(t.Context(), "chat", Request{Action: Snapshot}); err != nil {
+		t.Fatal(err)
+	}
+	connector.clients[0].err = &transportError{errors.New("receive CDP Runtime.evaluate: i/o timeout")}
+	if _, err := manager.Invoke(t.Context(), "chat", Request{Action: Snapshot}); err == nil {
+		t.Fatal("the broken stream's error was not returned")
+	}
+	if !connector.clients[0].closed {
+		t.Fatal("the broken stream was kept")
+	}
+
+	result, err := manager.Invoke(t.Context(), "chat", Request{Action: Snapshot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SessionRecreated || len(api.starts) != 1 || len(api.stops) != 0 {
+		t.Fatalf("recreated = %v, starts = %d, stops = %v", result.SessionRecreated, len(api.starts), api.stops)
+	}
+	if len(connector.clients) != 2 || connector.endpoints[1] != connector.endpoints[0] {
+		t.Fatalf("reconnects = %v", connector.endpoints)
+	}
+
+	// A page error is the page's, not the stream's: the stream stays.
+	connector.clients[1].err = errors.New("CDP Runtime.evaluate failed (-32000): no element")
+	if _, err := manager.Invoke(t.Context(), "chat", Request{Action: Snapshot}); err == nil {
+		t.Fatal("the page error was not returned")
+	}
+	if connector.clients[1].closed {
+		t.Fatal("a page error closed the stream")
+	}
+}
+
+func TestManagerStartsANewBrowserWhenReconnectFails(t *testing.T) {
+	api := &fakeRuntime{}
+	connector := &fakeConnector{}
+	manager, err := newManager(api, Options{connector: connector, SessionTimeout: time.Hour, resolver: publicResolver()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Invoke(t.Context(), "chat", Request{Action: Snapshot}); err != nil {
+		t.Fatal(err)
+	}
+	connector.clients[0].err = &transportError{errors.New("send CDP Runtime.evaluate: broken pipe")}
+	_, _ = manager.Invoke(t.Context(), "chat", Request{Action: Snapshot})
+	connector.failures = 1
+	result, err := manager.Invoke(t.Context(), "chat", Request{Action: Snapshot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.SessionRecreated || len(api.starts) != 2 || !slices.Equal(api.stops, []string{"browser-1"}) {
+		t.Fatalf("recreated = %v, starts = %d, stops = %v", result.SessionRecreated, len(api.starts), api.stops)
 	}
 }

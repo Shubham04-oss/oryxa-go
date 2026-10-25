@@ -1,11 +1,12 @@
 // The browser through the room (A2 + A3): the browser_* tools' calls, URL
 // checks, screenshots to R2, handoff to a member and back, and who may drive
 // whose browser.
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { type Event, type LogResponse, PageResponse } from "../src/contracts";
-import { setDriverFactory } from "../src/browser/browser";
-import { FakeDriver, drivers } from "./fakes";
+import { type Event, type LogResponse, PageResponse, browserDOName } from "../src/contracts";
+import { BROWSER_IDLE_MS, setDriverFactory } from "../src/browser/browser";
+import { FakeDriver, browserRun, drivers } from "./fakes";
 import { type TokenOptions, call } from "./tokens";
 
 let counter = 0;
@@ -22,6 +23,22 @@ function post(path: string, body: unknown = {}, options: TokenOptions = {}) {
 
 const web = () => (exports as unknown as { WebEdge: Fetcher }).WebEdge;
 const asMember = (member: string) => ({ "x-oryxa-member": JSON.stringify({ org: "org_1", member }) });
+
+async function logTypes(): Promise<string[]> {
+  return ((await (await call(`${base}/log`, { tokenOptions: { room } })).json()) as LogResponse).events.map((event) => event.type);
+}
+
+function browserStub(session = "usr_1") {
+  return env.BROWSER_SESSION.getByName(browserDOName("org_1", room, session));
+}
+
+function roomStub() {
+  return env.ROOM.getByName(`org/org_1/room/thread/${room.id}`);
+}
+
+function watch(path: string, init: RequestInit = {}, member = "usr_1") {
+  return web().fetch(`https://edge.test${base}${path}`, { ...init, headers: asMember(member) });
+}
 
 const LOGIN = "https://bank.example/login";
 const HOME = "https://bank.example/home";
@@ -212,5 +229,184 @@ describe("watching and handing back (A15)", () => {
       body: JSON.stringify({ success: true }),
     });
     expect(ownResume.status).toBe(200);
+  });
+});
+
+// B2: after the DO is evicted its driver has nothing attached, and closing
+// must still end the Browser Run session it stored.
+describe("closing after the DO restarts", () => {
+  it("stop by request reconnects to the stored session and ends it", async () => {
+    await post("/browser/usr_1/navigate", { url: LOGIN });
+    const session = driver().sessionId!;
+    driver().evict();
+    expect(browserRun.has(session)).toBe(true);
+
+    const stopped = await call(`${base}/browser/usr_1`, { method: "DELETE", tokenOptions: { room } });
+    expect(stopped.status).toBe(200);
+    expect(browserRun.has(session)).toBe(false);
+    expect(driver().closed).toBe(1);
+    expect(await logTypes()).toContain("browser.stopped");
+  });
+
+  it("the room's idle sweep ends a session the evicted DO stored", async () => {
+    await post("/browser/usr_1/navigate", { url: LOGIN });
+    const session = driver().sessionId!;
+    driver().evict();
+    await runInDurableObject(roomStub(), (_instance, state) => {
+      state.storage.sql.exec("UPDATE children SET last_used_at = ?", Date.now() - BROWSER_IDLE_MS - 1);
+    });
+    expect(await runDurableObjectAlarm(roomStub())).toBe(true);
+    expect(browserRun.has(session)).toBe(false);
+    const children = (await (await call(`${base}/children`, { tokenOptions: { room } })).json()) as { children: { status: string }[] };
+    expect(children.children[0]!.status).toBe("stopped");
+  });
+
+  it("reset ends the old session, and reports failure while it can't", async () => {
+    await post("/browser/usr_1/navigate", { url: LOGIN });
+    const session = driver().sessionId!;
+    driver().evict();
+    driver().failClose = true;
+    expect((await post("/browser/usr_1/reset")).status).toBe(503);
+    expect(browserRun.has(session)).toBe(true);
+
+    driver().failClose = false;
+    expect((await post("/browser/usr_1/reset")).status).toBe(200);
+    expect(browserRun.has(session)).toBe(false);
+  });
+
+  it("retries a failed close from its own alarm", async () => {
+    await post("/browser/usr_1/navigate", { url: LOGIN });
+    const session = driver().sessionId!;
+    driver().evict();
+    driver().failClose = true;
+    await call(`${base}/browser/usr_1`, { method: "DELETE", tokenOptions: { room } });
+    expect(browserRun.has(session)).toBe(true);
+
+    driver().failClose = false;
+    expect(await runDurableObjectAlarm(browserStub())).toBe(true);
+    expect(browserRun.has(session)).toBe(false);
+  });
+
+  it("closes a session the room never stopped once it is idle past the limit", async () => {
+    await post("/browser/usr_1/navigate", { url: LOGIN });
+    const session = driver().sessionId!;
+    driver().evict();
+    // Not idle yet: the alarm leaves it running.
+    expect(await runDurableObjectAlarm(browserStub())).toBe(true);
+    expect(browserRun.has(session)).toBe(true);
+
+    await runInDurableObject(browserStub(), async (_instance, state) => {
+      await state.storage.put("lastUsedAt", Date.now() - BROWSER_IDLE_MS - 3 * 60_000);
+    });
+    expect(await runDurableObjectAlarm(browserStub())).toBe(true);
+    expect(browserRun.has(session)).toBe(false);
+  });
+});
+
+// B3: watching never starts a browser.
+describe("opening the live view", () => {
+  it("reconnects to a running session after a restart", async () => {
+    await post("/browser/usr_1/navigate", { url: LOGIN });
+    driver().evict();
+    const live = await watch("/browser/usr_1/live", { method: "POST", body: "{}" });
+    expect(live.status).toBe(200);
+    expect(driver().launched).toBe(1);
+    expect(driver().reconnected).toBe(1);
+  });
+
+  it("refuses with conflict, and launches nothing, when the session has ended", async () => {
+    await post("/browser/usr_1/navigate", { url: LOGIN });
+    driver().expire();
+    const live = await watch("/browser/usr_1/live", { method: "POST", body: "{}" });
+    expect(live.status).toBe(409);
+    expect(await live.text()).toContain("has stopped");
+    expect(driver().launched).toBe(1);
+    const types = await logTypes();
+    expect(types.filter((type) => type === "browser.started")).toHaveLength(1);
+    expect(types.at(-1)).toBe("browser.stopped");
+
+    // The agent's next call still starts a fresh one.
+    const next = PageResponse.parse(await (await post("/browser/usr_1/snapshot")).json());
+    expect(next.sessionRecreated).toBe(true);
+  });
+
+  it("keeps a session that didn't answer once but is still running", async () => {
+    await post("/browser/usr_1/navigate", { url: LOGIN });
+    const session = driver().sessionId!;
+    driver().evict();
+    driver().failAttach = true;
+    expect((await watch("/browser/usr_1/live", { method: "POST", body: "{}" })).status).toBe(503);
+    driver().failAttach = false;
+    expect((await watch("/browser/usr_1/live", { method: "POST", body: "{}" })).status).toBe(200);
+    expect(driver().sessionId).toBe(session);
+    expect(driver().launched).toBe(1);
+  });
+
+  it("gives a control link a short life", async () => {
+    await post("/browser/usr_1/navigate", { url: LOGIN });
+    const tab = (await (await watch("/browser/usr_1/live", { method: "POST", body: "{}" })).json()) as { expiresAt: string };
+    const full = (await (await watch("/browser/usr_1/live", { method: "POST", body: JSON.stringify({ mode: "full" }) })).json()) as { expiresAt: string };
+    expect(Date.parse(full.expiresAt)).toBeLessThan(Date.parse(tab.expiresAt));
+    expect(Date.parse(full.expiresAt) - Date.now()).toBeLessThanOrEqual(5 * 60_000);
+  });
+});
+
+// B8: a handoff nobody answered, or on a session that ended, is over.
+describe("a handoff that is over", () => {
+  it("reports inactive once the session has ended", async () => {
+    await post("/browser/usr_1/navigate", { url: LOGIN });
+    await post("/browser/usr_1/handoff", { reason: "Sign in" });
+    driver().expire();
+    const state = await watch("/browser/usr_1/handoff");
+    expect(await state.json()).toMatchObject({ active: false });
+    expect(driver().launched).toBe(1);
+  });
+
+  it("times out, says so in the log, and gives the agent the browser back", async () => {
+    await post("/browser/usr_1/navigate", { url: LOGIN });
+    await post("/browser/usr_1/handoff", { reason: "Sign in", timeoutMs: 60_000 });
+    await runInDurableObject(browserStub(), async (_instance, state) => {
+      const handoff = (await state.storage.get<{ startedAt: number }>("handoff"))!;
+      await state.storage.put("handoff", { ...handoff, startedAt: Date.now() - 61_000 });
+    });
+    const state = await watch("/browser/usr_1/handoff");
+    expect(await state.json()).toMatchObject({ active: false });
+    expect(await logTypes()).toContain("browser.handoff.timeout");
+    expect((await post("/browser/usr_1/click", { selector: "a.home" })).status).toBe(200);
+  });
+
+  it("hand back succeeds when Browser Run already ended the handoff", async () => {
+    await post("/browser/usr_1/navigate", { url: LOGIN });
+    await post("/browser/usr_1/handoff", { reason: "Sign in" });
+    driver().handoffActive = false;
+    driver().evict();
+    const resumed = await watch("/browser/usr_1/resume", { method: "POST", body: JSON.stringify({ success: true }) });
+    expect(resumed.status).toBe(200);
+    expect(driver().launched).toBe(1);
+  });
+
+  it("hand back on an ended session launches nothing", async () => {
+    await post("/browser/usr_1/navigate", { url: LOGIN });
+    await post("/browser/usr_1/handoff", { reason: "Sign in" });
+    driver().expire();
+    const resumed = await watch("/browser/usr_1/resume", { method: "POST", body: JSON.stringify({ success: true }) });
+    expect(resumed.status).toBe(409);
+    expect(driver().launched).toBe(1);
+  });
+});
+
+// B10: a browser that can't start, or a page that can't open, says why.
+describe("failures in the log", () => {
+  it("logs browser.failed when the browser can't start", async () => {
+    await post("/browser/usr_1/navigate", { url: LOGIN });
+    driver().expire();
+    driver().failLaunch = true;
+    expect((await post("/browser/usr_1/snapshot")).status).toBe(503);
+    expect(await logTypes()).toContain("browser.failed");
+  });
+
+  it("logs browser.failed when a page can't open", async () => {
+    expect((await post("/browser/usr_1/navigate", { url: "https://nowhere.example/" })).status).toBe(400);
+    expect(await logTypes()).toContain("browser.failed");
   });
 });
