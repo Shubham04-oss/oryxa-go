@@ -137,6 +137,56 @@ export function originLabel(request: AgentRequest): "Slack" | "Oryxa" {
   return originOf(request) === "slack" ? "Slack" : "Oryxa"
 }
 
+/**
+ * Where a request stands, in the few words a row, a list or Home says it
+ * (D5): the one map of status to label every short form reads, so one
+ * request reads the same wherever it shows. The card's own status line
+ * (`statusOf`) says the same thing at length. `agentName` is the member's
+ * agent, for "Answered by Krude".
+ */
+export function statusLabel(
+  request: AgentRequest,
+  reader: Reader,
+  agentName?: string
+): string {
+  const owner = sideOf(request, reader.viewerId) === "owner"
+  const who = shortName(reader, request.target.user_id, request.target)
+  if (
+    isExpired(request, reader.now) &&
+    request.status !== "review" &&
+    request.status !== "withheld"
+  )
+    return "Expired"
+  switch (request.status) {
+    case "pending":
+      if (owner)
+        return needsOwnerReply(request)
+          ? "Wants your reply"
+          : "Waiting for your OK"
+      return `Waiting for ${who}`
+    case "approved":
+      return "Working on it"
+    case "review":
+      return owner ? "Answer held for you" : `Waiting for ${who} to review`
+    case "completed": {
+      if (isOwnerWritten(request))
+        return owner ? "Answered by you" : `Answered by ${who}`
+      const agent =
+        (owner ? agentName?.trim() : undefined) ||
+        request.target.agent_name.trim()
+      return agent ? `Answered by ${agent}` : "Answered"
+    }
+    case "rejected":
+      return "Declined"
+    case "failed":
+      return "Couldn’t be answered"
+    case "withheld":
+      return "Not shared"
+    case "expired":
+      return "Expired"
+  }
+}
+
 /** The card's title: who asked whom. Slack asks name the owner, who is asked in person; the rest name the agent. */
 export function requestTitle(request: AgentRequest, reader: Reader): string {
   const asker = capitalized(askerName(request, reader))

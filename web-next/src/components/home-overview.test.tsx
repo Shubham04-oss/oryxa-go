@@ -812,12 +812,8 @@ it("lists waiting teammate requests as rows with one action that opens that exac
   expect(rows[0].textContent).toContain(
     "Waiting for your OK · Slack · 30 min ago"
   )
-  expect(rows[1].textContent).toContain(
-    "Your agent’s answer is held for you · Oryxa"
-  )
-  expect(rows[2].textContent).toContain(
-    "Needs your own reply · Oryxa · 5 min ago"
-  )
+  expect(rows[1].textContent).toContain("Answer held for you · Oryxa")
+  expect(rows[2].textContent).toContain("Wants your reply · Oryxa · 5 min ago")
   // Deciding happens in Requests: no inline cards, held answers or replies.
   expect(screen.queryByText("Held answer with personal data")).toBeNull()
   expect(screen.queryByText("The agent shared this answer")).toBeNull()

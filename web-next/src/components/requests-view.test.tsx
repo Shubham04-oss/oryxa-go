@@ -29,6 +29,7 @@ import {
   fakeGo,
   inboxPath,
   lease,
+  members,
   requestPath,
   sentPath,
   slackRequest,
@@ -39,6 +40,9 @@ import { AGENT_REQUESTS_POLL_MS } from "@/lib/agents/queries"
 import type { AgentRequest } from "@/lib/agents/agent-requests"
 
 let client: QueryClient
+
+/** A member who is not in the members list. */
+const KENJI = "user-kenji"
 
 /** A request the member sent to Raya in Slack. */
 const sentRequest: AgentRequest = slackRequest({
@@ -318,7 +322,8 @@ describe("the origin filter", () => {
     await screen.findAllByText("Explain the service boundary.")
     expect(screen.queryByText("What is the plan for the EU launch?")).toBeNull()
 
-    fireEvent.click(screen.getByRole("button", { name: "All" }))
+    // Pressed again, the chip lets every channel back in.
+    fireEvent.click(screen.getByRole("button", { name: "Oryxa" }))
     await screen.findAllByText("What is the plan for the EU launch?")
     expect(screen.getAllByText("Explain the service boundary.")).toBeTruthy()
   })
@@ -327,7 +332,7 @@ describe("the origin filter", () => {
     renderView({
       [`GET ${inboxPath}`]: listRoute(() => [agentRequest()]),
     })
-    await screen.findByText("Explain the service boundary.")
+    await screen.findAllByText("Explain the service boundary.")
 
     fireEvent.click(screen.getByRole("button", { name: "Slack" }))
 
@@ -414,7 +419,12 @@ describe("a list that keeps each request where it was", () => {
 
     // Its answer was held for review, and a new ask came in besides.
     served = [
-      slackRequest({ id: "irq_new", task: "A brand new ask." }),
+      // From someone else: a conversation of its own.
+      slackRequest({
+        id: "irq_new",
+        task: "A brand new ask.",
+        requester: { user_id: KENJI, agent_id: "agt_k", agent_name: "Kai" },
+      }),
       {
         ...answered,
         status: "review",
@@ -662,7 +672,7 @@ describe("the page as the shell shows it", () => {
       </QueryClientProvider>
     )
 
-    await screen.findByText("What is the plan for the EU launch?")
+    await screen.findAllByText("What is the plan for the EU launch?")
   })
 })
 
@@ -675,6 +685,7 @@ describe("the board's Requests", () => {
           id: "irq_reply",
           answer_by: "owner",
           task: "Can we move the launch?",
+          requester: { user_id: KENJI, agent_id: "agt_k", agent_name: "Kai" },
         }),
         earlier,
       ]),
@@ -835,5 +846,109 @@ describe("chats a tool waits in", () => {
         screen.queryByRole("button", { name: /Clean up the drive/ })
       ).toBeNull()
     )
+  })
+})
+
+describe("conversations", () => {
+  const minutes = (n: number) =>
+    new Date(Date.parse("2026-09-29T11:00:00Z") + n * 60_000).toISOString()
+  /** Seven asks Raya made in a row, as Go lists them: the latest first. */
+  const seven = Array.from({ length: 7 }, (_, i) =>
+    slackRequest({
+      id: `irq_${i}`,
+      task: `Question ${i + 1}?`,
+      status: i === 6 ? "pending" : "completed",
+      result:
+        i === 6
+          ? undefined
+          : {
+              status: "completed",
+              summary: `Answer ${i + 1}.`,
+              content: "",
+              tools_used: [],
+              artifacts: [],
+              completed_at: minutes(i * 5 + 1),
+            },
+      created_at: minutes(i * 5),
+    })
+  ).reverse()
+
+  it("shows one teammate's run of asks as one row, and reads them as a thread", async () => {
+    renderView({ [`GET ${inboxPath}`]: listRoute(() => seven) })
+    const list = await screen.findByRole("list", { name: "Inbox" })
+    await within(list).findByText("Question 7?")
+    const rows = within(list).getAllByRole("button")
+    expect(rows).toHaveLength(1)
+    expect(rows[0].textContent).toContain("7 messages")
+    // Six were answered; one waits, and the count is of asks.
+    expect(waitingHeading(1, list)).toBeTruthy()
+
+    // The waiting ask opens, with the whole exchange above it, in order.
+    const thread = await screen.findByRole("region", {
+      name: "Conversation with Raya Patel",
+    })
+    const asks = within(thread).getAllByRole("button")
+    expect(
+      asks.map((ask) => ask.querySelector(".requests-thread-what")?.textContent)
+    ).toEqual(Array.from({ length: 7 }, (_, i) => `Question ${i + 1}?`))
+    expect(asks[6].getAttribute("aria-current")).toBe("true")
+    expect(within(asks[0]).getByText("Answer 1.")).toBeTruthy()
+    expect(asks[0].textContent).toContain("Answered by Krude")
+
+    fireEvent.click(asks[2])
+    await waitFor(() =>
+      expect(
+        within(thread).getAllByRole("button")[2].getAttribute("aria-current")
+      ).toBe("true")
+    )
+    expect(rows[0].getAttribute("aria-current")).toBe("true")
+  })
+
+  it("tells apart members who share a first name, and calls the member's own asks You", async () => {
+    const twin = "user-raya-two"
+    renderView({
+      [`GET /v1/organizations/${ORG}/members`]: () => ({
+        members: [
+          ...members,
+          {
+            ...members[1],
+            user_id: twin,
+            email: "raya.k@example.com",
+            display_name: "Raya",
+          },
+        ],
+      }),
+      [`GET ${inboxPath}`]: listRoute(() => [
+        slackRequest({ id: "irq_raya", created_at: minutes(0) }),
+        slackRequest({
+          id: "irq_twin",
+          task: "From the other Raya.",
+          requester: { user_id: twin, agent_id: "agt_r2", agent_name: "R2" },
+          created_at: minutes(1),
+        }),
+        slackRequest({
+          id: "irq_mine",
+          task: "A note to myself.",
+          requester: {
+            user_id: OWNER,
+            agent_id: "agt_krude",
+            agent_name: "Krude",
+          },
+          created_at: minutes(2),
+        }),
+      ]),
+    })
+    const list = await screen.findByRole("list", { name: "Inbox" })
+    await within(list).findByText("From the other Raya.")
+    const heads = Array.from(list.querySelectorAll(".requests-row-head")).map(
+      (head) => head.textContent
+    )
+    expect(
+      heads.some((head) => head.startsWith("Raya Patelraya@example.com"))
+    ).toBe(true)
+    expect(
+      heads.some((head) => head.startsWith("Rayaraya.k@example.com"))
+    ).toBe(true)
+    expect(heads.some((head) => head.startsWith("You·"))).toBe(true)
   })
 })

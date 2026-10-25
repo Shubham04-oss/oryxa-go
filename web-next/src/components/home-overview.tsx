@@ -16,7 +16,8 @@ import {
   unreadCount,
   unreadWords,
 } from "./teamspace-format"
-import { originLabel } from "./request-card-format"
+import { originLabel, statusLabel } from "./request-card-format"
+import { partyName } from "./requests-thread"
 import { refreshRequests, usePeopleNames } from "./requests-view-queries"
 import { clockTime } from "./direct-message-format"
 import {
@@ -666,6 +667,17 @@ function HomeDesk({
             )
             const review = request.status === "review"
             const reply = !review && needsOwnerReply(request)
+            // A first name, unless another member shares it (H5): then the
+            // whole name, and their email beside it; "You" for the member's
+            // own asks.
+            const party = partyName(request.requester, viewer, people)
+            const shown =
+              party.name === "You"
+                ? "You"
+                : party.hint
+                  ? party.name
+                  : firstName(asker)
+            const whose = shown === "You" ? "your" : `${shown}’s`
             return (
               <li key={request.id}>
                 <div className="home-item">
@@ -679,24 +691,29 @@ function HomeDesk({
                   </span>
                   <span className="home-item-copy">
                     <span>
-                      <strong>{firstName(asker)}</strong>{" "}
+                      <strong>{shown}</strong>{" "}
                       {request.task.trim() || request.purpose.trim()}
                     </span>
                     <small>
-                      {review
-                        ? "Your agent’s answer is held for you"
-                        : reply
-                          ? "Needs your own reply"
-                          : "Waiting for your OK"}{" "}
-                      · {originLabel(request)} ·{" "}
-                      {agoPhrase(request.created_at, now)}
+                      {[
+                        party.hint,
+                        statusLabel(request, {
+                          viewerId: viewer,
+                          nameOf: people.nameOf,
+                          now,
+                        }),
+                        originLabel(request),
+                        agoPhrase(request.created_at, now),
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
                     </small>
                   </span>
                   <Button
                     className="home-item-action"
                     variant="outline"
                     size="sm"
-                    aria-label={`${review ? "Review" : reply ? "Reply to" : "Decide on"} ${firstName(asker)}’s request`}
+                    aria-label={`${review ? "Review" : reply ? "Reply to" : "Decide on"} ${whose} request`}
                     onClick={() => onOpenRequests(request.id)}
                   >
                     {review ? "Review" : reply ? "Reply" : "Decide"}

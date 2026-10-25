@@ -29,6 +29,7 @@ import {
   shareAnswerName,
   sideOf,
   statusOf,
+  statusLabel,
   waitsOnOwner,
   whenPhrase,
   winnerLine,
@@ -751,6 +752,80 @@ describe("where a request stands", () => {
 
     expect(statusOf(done, owner).text).toBe("Answered.")
     expect(statusOf(done, asker).text).toBe("Answered.")
+  })
+})
+
+describe("statusLabel: the one map of status to its short words (D5)", () => {
+  const later = new Date(NOW + 3600_000).toISOString()
+  const pending = slackRequest({ expires_at: later })
+  it.each<[string, AgentRequest, "owner" | "asker", string]>([
+    ["pending, to its owner", pending, "owner", "Waiting for your OK"],
+    ["pending, to its asker", pending, "asker", "Waiting for Ada"],
+    [
+      "a reply asked for",
+      { ...pending, answer_by: "owner" },
+      "owner",
+      "Wants your reply",
+    ],
+    [
+      "approved",
+      approvedRequest("summary", { expires_at: later }),
+      "owner",
+      "Working on it",
+    ],
+    [
+      "held, to its owner",
+      { ...pending, status: "review" },
+      "owner",
+      "Answer held for you",
+    ],
+    [
+      "held, to its asker",
+      { ...pending, status: "review" },
+      "asker",
+      "Waiting for Ada to review",
+    ],
+    [
+      "answered by the agent",
+      { ...pending, status: "completed" },
+      "owner",
+      "Answered by Krude",
+    ],
+    [
+      "answered in the owner's words",
+      repliedRequest("Yes."),
+      "owner",
+      "Answered by you",
+    ],
+    [
+      "answered in the owner's words, to its asker",
+      repliedRequest("Yes."),
+      "asker",
+      "Answered by Ada",
+    ],
+    ["declined", { ...pending, status: "rejected" }, "owner", "Declined"],
+    [
+      "failed",
+      { ...pending, status: "failed" },
+      "owner",
+      "Couldn’t be answered",
+    ],
+    ["withheld", { ...pending, status: "withheld" }, "asker", "Not shared"],
+    ["expired", { ...pending, status: "expired" }, "owner", "Expired"],
+    [
+      "pending past its time",
+      { ...pending, expires_at: new Date(NOW - 1).toISOString() },
+      "owner",
+      "Expired",
+    ],
+  ])("%s → %s", (_, request, side, words) => {
+    expect(statusLabel(request, side === "owner" ? owner : asker)).toBe(words)
+  })
+
+  it("names the member's own agent when it answered", () => {
+    expect(statusLabel({ ...pending, status: "completed" }, owner, "Leo")).toBe(
+      "Answered by Leo"
+    )
   })
 })
 
