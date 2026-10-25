@@ -71,6 +71,7 @@ export class CallStore {
         PRIMARY KEY (call_id, segment_id)
       );
       CREATE TABLE IF NOT EXISTS call_webhooks (id TEXT PRIMARY KEY, at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS call_agent_names (call_id TEXT NOT NULL, name TEXT NOT NULL, PRIMARY KEY (call_id, name));
     `);
   }
 
@@ -179,6 +180,33 @@ export class CallStore {
 
   dropSegments(callId: string): void {
     this.sql.exec("DELETE FROM call_segments WHERE call_id = ?", callId);
+  }
+
+  // agentNames lists the names the room's agents go by in a call.
+  agentNames(callId: string): string[] {
+    return this.sql
+      .exec<{ name: string }>("SELECT name FROM call_agent_names WHERE call_id = ? ORDER BY rowid", callId)
+      .toArray()
+      .map((row) => row.name);
+  }
+
+  // addAgentNames keeps up to max names for a call, and reports whether any
+  // was new.
+  addAgentNames(callId: string, names: string[], max: number): boolean {
+    let added = false;
+    for (const name of names) {
+      const clean = name.replace(/\s+/g, " ").trim();
+      if (!clean) continue;
+      const count = this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM call_agent_names WHERE call_id = ?", callId).one().n;
+      if (count >= max) break;
+      const exists = this.sql
+        .exec("SELECT 1 FROM call_agent_names WHERE call_id = ? AND lower(name) = lower(?)", callId, clean)
+        .toArray().length;
+      if (exists) continue;
+      this.sql.exec("INSERT INTO call_agent_names (call_id, name) VALUES (?, ?)", callId, clean);
+      added = true;
+    }
+    return added;
   }
 
   // seenWebhook reports whether a webhook delivery, by RealtimeKit's

@@ -22,7 +22,9 @@ import {
   RecordingRequest,
   TranscriptRequest,
 } from "./contracts";
+import { voiceProviders } from "../voice/providers";
 import { callProvider } from "./providers";
+import { notesPossible, queueNotes } from "./notes";
 import { saveRecording, switchRecording } from "./recording";
 import { type CallRow, CallStore } from "./store";
 import { acceptTranscript, recordAgentSegment, saveFinalTranscript, saveLiveTranscript } from "./transcript";
@@ -34,6 +36,8 @@ export interface CallRoom {
   sql: SqlStorage;
   env: Env;
   waitUntil(promise: Promise<unknown>): void;
+  // wake asks the room's alarm to run at, or sooner: the notes outbox.
+  wake(at: number): void;
 }
 
 export interface RoomIdentity {
@@ -45,6 +49,23 @@ export interface RoomIdentity {
 // The agent's name, as the call shows it and as members address it.
 export function agentName(env: Env): string {
   return env.VOICE_AGENT_NAME?.trim() || "Krude";
+}
+
+// MAX_AGENT_NAMES bounds the names the agent answers to in one call.
+const MAX_AGENT_NAMES = 12;
+
+// agentNames is every name the agent answers to in a call: its own, then
+// the names the room shows for its agents (T3), as members said them on
+// joining. A member who sees "Arlo" in the room says "Arlo".
+export function agentNames(env: Env, store: CallStore, callId: string | undefined): string[] {
+  const names = [agentName(env), ...(callId ? store.agentNames(callId) : [])];
+  const seen = new Set<string>();
+  return names.filter((name) => {
+    const key = name.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 // meetingTitle names a call's meeting so a RealtimeKit webhook finds its way
@@ -120,7 +141,7 @@ export async function handleCall(ctx: CallRoom, request: Request, rest: string, 
   switch (rest) {
     case "/call/join": {
       const body = await readJson(request, JoinRequest, 4 << 10);
-      return json(await serialized(ctx.room, () => join(ctx, store, identity, member, body.name ?? member)));
+      return json(await serialized(ctx.room, () => join(ctx, store, identity, member, body.name ?? member, body.agents ?? [])));
     }
     case "/call/leave":
       await serialized(ctx.room, () => leave(ctx, store, identity, member));
@@ -195,13 +216,23 @@ function requirePresent(store: CallStore, call: CallRow, member: string): void {
 
 function view(ctx: CallRoom, store: CallStore, call: CallRow | undefined): CallView | null {
   if (!call) return null;
+  const identity = ctx.room.identity();
+  const providers = voiceProviders(ctx.env);
   return {
     callId: call.id,
     startedAt: call.started_at,
     startedBy: call.started_by,
     participants: store.present(call.id).map((row) => ({ member: row.member, name: row.name, joinedAt: row.joined_at })),
     recording: store.recording(call),
-    agent: { present: Boolean(call.agent_present), name: agentName(ctx.env) },
+    agent: {
+      present: Boolean(call.agent_present),
+      name: agentName(ctx.env),
+      names: agentNames(ctx.env, store, call.id),
+      // Whether the agent can answer, and whether this call will leave
+      // notes: the call surface promises neither when it can't (T1, T2).
+      canAnswer: Boolean(providers.brain && providers.speech),
+      notes: identity ? notesPossible(ctx, identity) : false,
+    },
   };
 }
 
@@ -209,7 +240,14 @@ function newCallId(): string {
   return `call_${crypto.randomUUID().replaceAll("-", "")}`;
 }
 
-async function join(ctx: CallRoom, store: CallStore, identity: RoomIdentity, member: string, name: string): Promise<JoinResponse> {
+async function join(
+  ctx: CallRoom,
+  store: CallStore,
+  identity: RoomIdentity,
+  member: string,
+  name: string,
+  agents: string[],
+): Promise<JoinResponse> {
   const provider = callProvider(ctx.env);
   let call = store.active();
   if (!call) {
@@ -230,6 +268,7 @@ async function join(ctx: CallRoom, store: CallStore, identity: RoomIdentity, mem
       team: identity.team,
       callId,
       present: true,
+      names: agentNames(ctx.env, store, callId),
     });
     append(ctx, {
       actor: { type: "agent", id: "voice" },
@@ -245,6 +284,7 @@ async function join(ctx: CallRoom, store: CallStore, identity: RoomIdentity, mem
   if (previous) await revoke(provider, call, previous.participant_id, "rejoin");
   const participant = await provider.addParticipant(call.meeting_id, { member, name, preset: PRESET_MEMBER });
   store.join(call.id, member, name, participant.id, new Date().toISOString());
+  if (store.addAgentNames(call.id, agents, MAX_AGENT_NAMES)) await voice(ctx, identity).setNames(agentNames(ctx.env, store, call.id));
   await voice(ctx, identity).joined(member);
   if (!previous || previous.left_at !== null) {
     append(ctx, {
@@ -304,6 +344,8 @@ export async function endCall(
     summary: `The call ended: ${reason}`,
     data: { callId: call.id, startedAt: call.started_at },
   });
+  // The notes take what they need first: saving the transcript drops it.
+  queueNotes(ctx, store, identity, call, at);
   ctx.waitUntil(saveLiveTranscript(ctx, store, identity, call.id));
 }
 

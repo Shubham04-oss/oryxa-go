@@ -32,6 +32,8 @@ export interface CallInfo {
   team: string;
   callId: string;
   present: boolean;
+  // names is every name the agent answers to in this call (T3).
+  names?: string[];
 }
 
 // RECENT_LINES is how much of the call the model and the work agent read.
@@ -64,8 +66,6 @@ export class VoiceDO extends DurableObject<Env> {
   // generation is dropped.
   private generation = 0;
   private speaking: { utteranceId: string; generation: number } | undefined;
-  private lastSpokeAt = 0;
-  private lastAnswered: string | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -93,6 +93,22 @@ export class VoiceDO extends DurableObject<Env> {
     else this.sql.exec("DELETE FROM voice_state WHERE key = 'call'");
   }
 
+  // followUp is who the agent last answered and when it stopped talking,
+  // kept in storage so a question right after an answer still counts as
+  // addressed when the object was evicted or redeployed in between.
+  private followUp(): { member: string; at: number } | undefined {
+    const row = this.sql.exec<{ value: string }>("SELECT value FROM voice_state WHERE key = 'follow_up'").toArray()[0];
+    return row ? (JSON.parse(row.value) as { member: string; at: number }) : undefined;
+  }
+
+  private saveFollowUp(member: string, at: number): void {
+    this.sql.exec("INSERT OR REPLACE INTO voice_state (key, value) VALUES ('follow_up', ?)", JSON.stringify({ member, at }));
+  }
+
+  private names(call: CallInfo): string[] {
+    return call.names?.length ? call.names : [agentName(this.env)];
+  }
+
   private recent(limit = RECENT_LINES): Line[] {
     return this.sql
       .exec<{ name: string; text: string }>("SELECT name, text FROM (SELECT * FROM voice_lines ORDER BY at DESC, id DESC LIMIT ?) ORDER BY at, id", limit)
@@ -113,6 +129,7 @@ export class VoiceDO extends DurableObject<Env> {
 
   async start(call: CallInfo): Promise<void> {
     this.sql.exec("DELETE FROM voice_lines");
+    this.sql.exec("DELETE FROM voice_state WHERE key = 'follow_up'");
     this.sql.exec("DELETE FROM voice_present");
     this.saveCall(call);
     this.broadcast({ type: "voice.state", present: call.present, name: agentName(this.env) });
@@ -153,6 +170,12 @@ export class VoiceDO extends DurableObject<Env> {
     }
   }
 
+  // setNames updates the names the agent answers to, as members join.
+  async setNames(names: string[]): Promise<void> {
+    const call = this.call();
+    if (call) this.saveCall({ ...call, names });
+  }
+
   async setPresent(present: boolean): Promise<void> {
     const call = this.call();
     if (!call) return;
@@ -172,9 +195,12 @@ export class VoiceDO extends DurableObject<Env> {
       if (segment.partial) continue;
       this.remember(segment.id, segment.speaker, segment.name, segment.text, segment.at);
       if (!call.present) continue;
-      const followUp = this.lastAnswered === segment.speaker && Date.now() - this.lastSpokeAt < FOLLOW_UP_MS;
-      const address = addressedTo(segment.text, [agentName(this.env)], followUp);
+      const last = this.followUp();
+      const followUp = last?.member === segment.speaker && Date.now() - last.at < FOLLOW_UP_MS;
+      const address = addressedTo(segment.text, this.names(call), followUp);
       if (!address.addressed) continue;
+      // The asker sees what the agent heard, so a mishearing is visible.
+      this.sendTo(segment.speaker, { type: "voice.heard", text: segment.text });
       this.ctx.waitUntil(this.respond(call, segment, address.request));
     }
   }
@@ -239,7 +265,9 @@ export class VoiceDO extends DurableObject<Env> {
     const providers = voiceProviders(this.env);
     const generation = ++this.generation;
     if (!providers.brain) {
+      // Silence would look like a miss: the asker is told why (T2).
       console.warn(JSON.stringify({ msg: "voice model not configured" }));
+      this.sendTo(segment.speaker, { type: "voice.trouble", reason: "no_model" });
       return;
     }
     const recent = this.recent();
@@ -248,6 +276,7 @@ export class VoiceDO extends DurableObject<Env> {
       reply = await providers.brain.reply({ agentName: agentName(this.env), memberName: segment.name, request, recent });
     } catch (error) {
       console.error(JSON.stringify({ msg: "voice model failed", error: String(error) }));
+      this.sendTo(segment.speaker, { type: "voice.trouble", reason: "model_failed" });
       await this.speak(call, "Sorry, I didn't catch that. Could you say it again?", segment.speaker, generation);
       return;
     }
@@ -343,7 +372,10 @@ export class VoiceDO extends DurableObject<Env> {
     );
     this.broadcast({ type: "voice.speaking", utteranceId, text });
     try {
-      if (!speech) throw new Error("speech not configured");
+      if (!speech) {
+        this.sendTo(answering, { type: "voice.trouble", reason: "no_speech" });
+        throw new Error("speech not configured");
+      }
       const pieces = sentences(text);
       for (let seq = 0; seq < pieces.length; seq++) {
         const audio = await speech.synthesize(pieces[seq]!);
@@ -354,8 +386,7 @@ export class VoiceDO extends DurableObject<Env> {
       console.error(JSON.stringify({ msg: "speak in a call", error: String(error) }));
     } finally {
       if (this.speaking?.utteranceId === utteranceId) this.speaking = undefined;
-      this.lastSpokeAt = Date.now();
-      this.lastAnswered = answering;
+      this.saveFollowUp(answering, Date.now());
     }
   }
 

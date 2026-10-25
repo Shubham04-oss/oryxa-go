@@ -24,6 +24,7 @@ import {
 import type { Env } from "../env";
 import { EdgeError, discardBody, json, readJson, toResponse } from "../http";
 import { type CallOp, type CallRoom, handleCall, handleCallOp, isCallPath, removeMember as removeFromCall } from "../call/index";
+import { notesDue, runNotes } from "../call/notes";
 import { Children } from "./children";
 
 export const CLAIMS_HEADER = "x-oryxa-edge-claims";
@@ -346,7 +347,19 @@ export class RoomDO extends DurableObject<Env> {
   // ---- the call (edge/src/call) ----
 
   private callRoom(): CallRoom {
-    return { room: this, sql: this.sql, env: this.env, waitUntil: (promise) => this.ctx.waitUntil(promise) };
+    return {
+      room: this,
+      sql: this.sql,
+      env: this.env,
+      waitUntil: (promise) => this.ctx.waitUntil(promise),
+      wake: (at) => this.ctx.waitUntil(this.wake(at)),
+    };
+  }
+
+  // wake sets the room's alarm for at, unless it is already due sooner.
+  private async wake(at: number): Promise<void> {
+    const current = await this.ctx.storage.getAlarm();
+    if (current === null || current > at) await this.ctx.storage.setAlarm(at);
   }
 
   // callOp is the call's RPC entry, for the Worker's RealtimeKit webhook and
@@ -556,9 +569,15 @@ export class RoomDO extends DurableObject<Env> {
       console.error(JSON.stringify({ msg: "room log flush failed", error: String(error) }));
     }
     await this.children.sweep();
+    try {
+      await runNotes(this.callRoom());
+    } catch (error) {
+      console.error(JSON.stringify({ msg: "a call's notes failed", error: String(error) }));
+    }
     const pending = this.sql.exec("SELECT 1 FROM events WHERE flushed = 0 LIMIT 1").toArray().length > 0;
     const next = this.children.nextSweep();
-    const due = [pending ? Date.now() + (failed ? 30_000 : FLUSH_DELAY_MS) : null, next].filter(
+    const notes = notesDue(this.sql);
+    const due = [pending ? Date.now() + (failed ? 30_000 : FLUSH_DELAY_MS) : null, next, notes === null ? null : Math.max(notes, Date.now() + 1_000)].filter(
       (value): value is number => value !== null,
     );
     if (due.length) await this.ctx.storage.setAlarm(Math.min(...due));
