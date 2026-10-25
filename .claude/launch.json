@@ -4,7 +4,10 @@
     {
       "name": "oryxa",
       "runtimeExecutable": "sh",
-      "runtimeArgs": ["-c", "set -a && . ./.env && exec go run ./cmd/oryxa"],
+      "runtimeArgs": [
+        "-c",
+        "set -a && . ./.env && exec go run ./cmd/oryxa"
+      ],
       "port": 8080
     },
     {
@@ -15,6 +18,15 @@
         "set -a && . ./.env && go build -o agents/primary/bin/devui ./agents/primary/cmd/devui && exec agents/primary/bin/devui"
       ],
       "port": 8087
+    },
+    {
+      "name": "web-next-a1",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "ssh -N -o ExitOnForwardFailure=yes -L 8080:localhost:8080 oryxa-a1 & trap 'kill $!' EXIT INT TERM; cd web-next && npx --yes pnpm@12.4.2 exec vite dev --port 3001 --strictPort"
+      ],
+      "port": 3001
     },
     {
       "name": "web-next-dev-stack",
