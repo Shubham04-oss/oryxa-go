@@ -228,6 +228,8 @@ type Service struct {
 	initialState    map[string]any
 	drain           *Drain
 	subagents       Subagents
+	// now is the time; tests move it to expire confirmations.
+	now func() time.Time
 }
 
 // New returns the service.
@@ -255,6 +257,7 @@ func New(config Config) (*Service, error) {
 		unattended = config.Agent
 	}
 	return &Service{
+		now:             time.Now,
 		appName:         config.AppName,
 		agent:           config.Agent,
 		unattended:      unattended,
@@ -412,10 +415,11 @@ func (service *Service) Get(ctx context.Context, member Member, threadID string)
 	// than read from state, which a thread not run since may not hold.
 	tally := tallyArtifacts(history)
 	thread.ArtifactCount, thread.LatestArtifact = len(tally.names), artifactRef(tally.latest)
+	pending, expired := waitingConfirmations(history, service.agent.Name(), service.now())
 	return Detail{
 		Thread:  thread,
-		Items:   displayAgent(historyItems(history), service.agent.Name(), member.AgentName),
-		Pending: nonNil(pendingConfirmations(history, service.agent.Name())),
+		Items:   expireItems(displayAgent(historyItems(history), service.agent.Name(), member.AgentName), expired),
+		Pending: nonNil(pending),
 	}, nil
 }
 

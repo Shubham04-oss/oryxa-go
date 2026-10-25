@@ -273,7 +273,14 @@ func (run *Run) prepare(ctx context.Context, message string, input RunInput) err
 		}
 		run.guardInput = sidePublicationGuardInput(encoded, len(history) > 0)
 	}
-	pending := pendingConfirmations(history, service.agent.Name())
+	pending, expired := waitingConfirmations(history, service.agent.Name(), service.now())
+	if len(expired) > 0 {
+		// Answered as expired before anything else, so the member's message
+		// goes ahead and those tools never run.
+		if err := service.sessions.AppendEvent(ctx, stored, expiryEvent(ctx, expired)); err != nil {
+			return fmt.Errorf("expire confirmations: %w", err)
+		}
+	}
 	if message != "" {
 		if len(pending) > 0 {
 			return ErrConfirmationPending

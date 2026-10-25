@@ -1,6 +1,7 @@
 package threads
 
 import (
+	"context"
 	"encoding/json"
 	"maps"
 	"slices"
@@ -51,7 +52,20 @@ const (
 	ConfirmationPending  = "pending"
 	ConfirmationApproved = "approved"
 	ConfirmationDeclined = "declined"
+	// ConfirmationExpired is a confirmation nobody answered within
+	// ConfirmationTTL. Its tool never runs, and it no longer holds the
+	// thread: the member's next message goes ahead.
+	ConfirmationExpired = "expired"
 )
+
+// ConfirmationTTL is how long a confirmation waits for the member. One left
+// longer is expired: it would otherwise hold its thread forever, refusing
+// every message, and keep the thread at the top of what needs the member.
+const ConfirmationTTL = 24 * time.Hour
+
+// expiredKey marks the answer Oryxa stores for an expired confirmation, so
+// the history tells it from one the member declined.
+const expiredKey = "expired"
 
 // AuthorMember is who a member's own messages are from, and AuthorApps who
 // sent a message carrying events from their connected apps. Everything else
@@ -199,7 +213,7 @@ func displayAgent(items []Item, machineName, displayName string) []Item {
 // eventItems turns one finished event into items, in the order its parts
 // came in. Confirmations take their status from answers; a confirmation
 // answers does not hold is pending.
-func eventItems(event *session.Event, answers map[string]bool) []Item {
+func eventItems(event *session.Event, answers map[string]string) []Item {
 	if bracket, ok := bracketOf(event); ok {
 		return []Item{bracket}
 	}
@@ -296,7 +310,7 @@ func eventItems(event *session.Event, answers map[string]bool) []Item {
 
 // confirmationItem describes a confirmation request by the call it holds
 // back: the tool, what it would be called with, and why it asks.
-func confirmationItem(event *session.Event, call *genai.FunctionCall, answers map[string]bool) (Item, bool) {
+func confirmationItem(event *session.Event, call *genai.FunctionCall, answers map[string]string) (Item, bool) {
 	original, err := toolconfirmation.OriginalCallFrom(call)
 	if err != nil {
 		return Item{}, false
@@ -309,11 +323,8 @@ func confirmationItem(event *session.Event, call *genai.FunctionCall, answers ma
 	if decodeInto(call.Args["toolConfirmation"], &requested) {
 		item.Hint = memberHint(requested.Hint)
 	}
-	if confirmed, answered := answers[call.ID]; answered {
-		item.Status = ConfirmationDeclined
-		if confirmed {
-			item.Status = ConfirmationApproved
-		}
+	if status, answered := answers[call.ID]; answered {
+		item.Status = status
 	}
 	return item, true
 }
@@ -331,10 +342,11 @@ func memberHint(hint string) string {
 	return strings.TrimSpace(hint)
 }
 
-// confirmationAnswers collects the member's answers to confirmations, by the
-// ID of the confirmation request they answer.
-func confirmationAnswers(events []*session.Event) map[string]bool {
-	answers := map[string]bool{}
+// confirmationAnswers collects how each answered confirmation stands —
+// approved, declined or expired — by the ID of the confirmation request the
+// answer names.
+func confirmationAnswers(events []*session.Event) map[string]string {
+	answers := map[string]string{}
 	for _, event := range events {
 		if event == nil || event.Author != adkUserAuthor || event.Content == nil {
 			continue
@@ -343,19 +355,27 @@ func confirmationAnswers(events []*session.Event) map[string]bool {
 			if part == nil || part.FunctionResponse == nil || part.FunctionResponse.Name != toolconfirmation.FunctionCallName {
 				continue
 			}
-			answers[part.FunctionResponse.ID] = confirmedIn(part.FunctionResponse.Response)
+			response := part.FunctionResponse.Response
+			switch {
+			case response[expiredKey] == true:
+				answers[part.FunctionResponse.ID] = ConfirmationExpired
+			case confirmedIn(response):
+				answers[part.FunctionResponse.ID] = ConfirmationApproved
+			default:
+				answers[part.FunctionResponse.ID] = ConfirmationDeclined
+			}
 		}
 	}
 	return answers
 }
 
-// pendingConfirmations lists the confirmations agentName asked for that the
-// member has not answered yet, in the order they were asked. Only the agent
-// running the thread can ask its member to confirm something, the same rule
-// ADK applies when it resumes one.
-func pendingConfirmations(events []*session.Event, agentName string) []string {
+// waitingConfirmations lists the confirmations agentName asked for that
+// nothing has answered yet, in the order they were asked: those the member
+// can still answer, and those asked ConfirmationTTL or more before now,
+// which have expired. Only the agent running the thread can ask its member
+// to confirm something, the same rule ADK applies when it resumes one.
+func waitingConfirmations(events []*session.Event, agentName string, now time.Time) (pending, expired []string) {
 	answers := confirmationAnswers(events)
-	var pending []string
 	for _, event := range events {
 		if event == nil || event.Author != agentName || event.Content == nil {
 			continue
@@ -364,12 +384,51 @@ func pendingConfirmations(events []*session.Event, agentName string) []string {
 			if part == nil || part.FunctionCall == nil || part.FunctionCall.Name != toolconfirmation.FunctionCallName {
 				continue
 			}
-			if _, answered := answers[part.FunctionCall.ID]; !answered {
+			if _, answered := answers[part.FunctionCall.ID]; answered {
+				continue
+			}
+			if !event.Timestamp.IsZero() && now.Sub(event.Timestamp) >= ConfirmationTTL {
+				expired = append(expired, part.FunctionCall.ID)
+			} else {
 				pending = append(pending, part.FunctionCall.ID)
 			}
 		}
 	}
-	return pending
+	return pending, expired
+}
+
+// expireInvocation names the invocation an expiry's event belongs to. It is
+// no run's: it answers confirmations nobody answered in time.
+const expireInvocation = "oryxa-expire-confirmations"
+
+// expiryEvent answers the expired confirmations ids as declined, marked
+// expired, so their tools never run and a later run finds nothing waiting.
+// ADK leaves confirmation answers out of what the model reads, and resumes
+// a tool only from the member's latest answers, so this changes nothing the
+// agent sees.
+func expiryEvent(ctx context.Context, ids []string) *session.Event {
+	parts := make([]*genai.Part, 0, len(ids))
+	for _, id := range ids {
+		parts = append(parts, &genai.Part{FunctionResponse: &genai.FunctionResponse{
+			ID:       id,
+			Name:     toolconfirmation.FunctionCallName,
+			Response: map[string]any{"confirmed": false, expiredKey: true},
+		}})
+	}
+	event := session.NewEvent(ctx, expireInvocation)
+	event.Author = adkUserAuthor
+	event.Content = &genai.Content{Role: genai.RoleUser, Parts: parts}
+	return event
+}
+
+// expireItems marks the confirmations in expired as expired in items.
+func expireItems(items []Item, expired []string) []Item {
+	for index := range items {
+		if items[index].Type == ItemConfirmation && slices.Contains(expired, items[index].CallID) {
+			items[index].Status = ConfirmationExpired
+		}
+	}
+	return items
 }
 
 // confirmedIn reads a confirmation answer the way ADK does: the decision
