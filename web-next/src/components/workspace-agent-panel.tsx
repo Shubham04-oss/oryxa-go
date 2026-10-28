@@ -546,9 +546,10 @@ export function WorkspaceAgentPanel({
             </Button>
           </>
         )}
-        <button
-          className="workspace-icon-button"
-          type="button"
+        <Button
+          className="workspace-right-toggle"
+          variant="outline"
+          size="icon"
           aria-label={
             expanded
               ? "Collapse agent panel"
@@ -562,36 +563,20 @@ export function WorkspaceAgentPanel({
         >
           {expanded ? (
             <>
-              <PanelRightClose
-                className="workspace-panel-toggle-desktop"
-                size={18}
-                strokeWidth={1.7}
-              />
-              <ArrowRight
-                className="workspace-panel-toggle-mobile"
-                size={17}
-                strokeWidth={1.7}
-              />
+              <PanelRightClose className="workspace-panel-toggle-desktop" />
+              <ArrowRight className="workspace-panel-toggle-mobile" />
             </>
           ) : (
             <>
-              <PanelRightOpen
-                className="workspace-panel-toggle-desktop"
-                size={18}
-                strokeWidth={1.7}
-              />
-              <ArrowLeft
-                className="workspace-panel-toggle-mobile"
-                size={17}
-                strokeWidth={1.7}
-              />
+              <PanelRightOpen className="workspace-panel-toggle-desktop" />
+              <ArrowLeft className="workspace-panel-toggle-mobile" />
               {/* A phone has no rail, so its edge control carries the DMs' unread. */}
               {unread > 0 && (
                 <span className="workspace-panel-unread" aria-hidden="true" />
               )}
             </>
           )}
-        </button>
+        </Button>
       </div>
       {expanded && (
         <Tabs

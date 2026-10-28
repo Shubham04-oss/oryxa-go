@@ -646,10 +646,29 @@ describe("WorkspaceShell navigation", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "Chats with your agent" })
     )
-    // The Chats page is the agent session, its header "Chats"; the agent
-    // panel steps aside for it.
-    expect(await screen.findByRole("heading", { name: "Chats" })).toBeTruthy()
+    // The Chats page is the agent session, its header "Chats" alone; the
+    // agent panel steps aside for it.
+    const heading = await screen.findByRole("heading", { name: "Chats" })
+    expect(heading.closest("header")?.textContent).toBe("Chats")
     expect(shell?.getAttribute("data-right")).toBe("collapsed")
+    // It is a sidebar page, so the sidebar stays and marks it: any other
+    // page is one click away, with no Back to find first.
+    expect(shell?.getAttribute("data-view")).toBe("browse")
+    const sidebar = screen.getByRole("complementary", {
+      name: "Workspace navigation",
+    })
+    expect(
+      within(sidebar)
+        .getByRole("button", { name: "Chats with your agent" })
+        .getAttribute("aria-current")
+    ).toBe("page")
+    expect(
+      screen.queryByRole("button", { name: "Back to workspace" })
+    ).toBeNull()
+    fireEvent.click(within(sidebar).getByRole("button", { name: /^Requests/ }))
+    expect(
+      await screen.findByRole("heading", { name: "Requests", level: 1 })
+    ).toBeTruthy()
   })
 
   // Agents mode's focused work is real data now: agents-mode.test.tsx.

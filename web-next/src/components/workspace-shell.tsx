@@ -52,7 +52,6 @@ import { agentsQueryOptions } from "@/lib/agents/queries"
 import { primaryAgent } from "@/lib/agents/policy"
 import { useAgentsMode } from "@/hooks/use-agents-mode"
 import type { AgentsFocusTarget } from "@/hooks/use-agents-mode"
-import { useNeedsYouCount } from "@/hooks/use-needs-you"
 import { useVisibleHeight } from "@/hooks/use-visible-height"
 import { signOut } from "@/lib/auth/client"
 import type { Organization, Role, Session } from "@/lib/auth/client"
@@ -315,8 +314,9 @@ function WorkspaceShellContent({
   const agentWork =
     activeMode === "agents" && selectedOrganization ? agentsMode.focus : null
   // An open teamspace keeps the sidebar (TeamspaceHome board): its page
-  // carries its own "Teamspaces / <name>" crumbs.
-  const isFocused = Boolean(primaryWork || agentWork)
+  // carries its own "Teamspaces / <name>" crumbs. So does Chats, a sidebar
+  // page: the sidebar marks it, so the member can leave it for any other.
+  const isFocused = Boolean((primaryWork && !primaryChats) || agentWork)
   // The teamspace on the page: the agent panel offers its teammates.
   const pageTeamspaceId =
     !primaryWork && !agentWork && selectedOrganization && teamspaces.openId
@@ -628,12 +628,6 @@ function WorkspaceShellContent({
     if (section !== "requests") setRequestFocus(null)
   }, [section])
   useRequestsEntry(openRequestsSection)
-  // Requests' header says how many wait on the member (the same read the
-  // agent panel counts).
-  const requestsWaiting = useNeedsYouCount(
-    session && section === "requests" ? selectedOrganization?.id : undefined,
-    viewerId
-  )
 
   // Today's widgets, on the page and in the agent panel's At a glance tab.
   const homeOverviewKey = JSON.stringify([selectedOrganization?.id, viewerId])
@@ -764,11 +758,20 @@ function WorkspaceShellContent({
         )}
         {primaryWork && selectedOrganization ? (
           <div className="workspace-focus workspace-primary-focus">
-            <FocusHeader
-              title={primaryChats ? "Chats" : "Agent overview"}
-              kind={primaryChats ? "Only you see these" : "Primary agent"}
-              onBack={closePrimaryWork}
-            />
+            {primaryChats ? (
+              // A sidebar page's header, as every other's: its title alone.
+              <header className="workspace-header">
+                <div className="workspace-header-detail">
+                  <h1>Chats</h1>
+                </div>
+              </header>
+            ) : (
+              <FocusHeader
+                title="Agent overview"
+                kind="Primary agent"
+                onBack={closePrimaryWork}
+              />
+            )}
             <AgentSession
               chatSlotRef={setPrimaryChatSlot}
               chatLabel={`Conversation with ${
@@ -895,17 +898,7 @@ function WorkspaceShellContent({
                 <LibraryHeading organizationId={selectedOrganization?.id} />
               ) : (
                 <div className="workspace-header-detail">
-                  <div>
-                    <h1>{heading}</h1>
-                    {section === "requests" &&
-                      requestsWaiting !== undefined && (
-                        <small>
-                          {requestsWaiting > 0
-                            ? `${requestsWaiting} waiting for you`
-                            : "All clear"}
-                        </small>
-                      )}
-                  </div>
+                  <h1>{primaryChats ? "Chats" : heading}</h1>
                 </div>
               )}
             </header>

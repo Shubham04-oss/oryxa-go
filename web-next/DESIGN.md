@@ -165,7 +165,10 @@ not permission to copy every incidental value into a new component.
     teamspace's teammates and their agents, below the member's own (§3, "Side
     conversations"); elsewhere it does not. Collapsed, the panel's rail shows
     one icon per view (the agent, At a glance with the needs count, DMs), and
-    each opens the panel on that view. A tab without a
+    each opens the panel on that view. The two rails mirror each other: the
+    same 32px outline toggle on the header row, and 40px tiles from the same
+    line (y=62) holding 32px icon squares 4px apart, every icon centred on
+    its rail, so no icon or highlight spills past its tile. A tab without a
     live service shows a one-line empty state, never example people, rooms or
     messages.
 - The sidebar's tiles, in order (each heading in quiet capitals, with its
@@ -208,7 +211,9 @@ not permission to copy every incidental value into a new component.
   agent shows that work's title, and a teamspace its "Teamspaces / <name>"
   crumbs. Back navigation lives there.
   Do not repeat the page title, a hero slogan, or a generic description at
-  the top of the main canvas. No preview badge in the header.
+  the top of the main canvas. No preview badge in the header. A sidebar
+  page's header is its title alone: no count, status or description under
+  it (only a detail, such as a person or a teamspace, names its kind there).
 - Desktop panel toggles use left/right panel glyphs so back navigation remains
   visually distinct. On mobile, the two circular edge controls use arrows,
   as previously chosen for that layout. Keep accessible expand/collapse names.
@@ -589,8 +594,10 @@ not permission to copy every incidental value into a new component.
     is the library's, Save sits alone at the right, and removing an app is
     its own danger row with a destructive confirm.
 - **Chats** (ChatsNew; `chats-page.tsx`): the member's chats with their
-  agent as a page. It is the agent session (a focused view, the header
-  "Chats · Only you see these") with a 280px list tile before the chat:
+  agent as a page. It is the agent session with a 280px list tile before
+  the chat. It is a sidebar page, not a focused view: the sidebar stays (as
+  its rail) and marks Chats, so any other page is one click away, and the
+  header is the title "Chats" alone, with no Back (owner, 28 Oct 2026):
   Search chats (by title, in the page), Today and Earlier groups, each row
   its title and how long ago, "Needs approval" where that is known (the open
   chat, or details the chat already read; the list never reads every
@@ -1191,7 +1198,9 @@ not permission to copy every incidental value into a new component.
   says "Every ask answered." under a small scene. Below 1100px the card
   replaces the list while one is opened, with "Back to all requests".
   - **To the RequestsNew / RequestsClear boards** (15 Oct 2026). The header
-    reads "Requests" over "N waiting for you" or "All clear", and the agent
+    reads "Requests" alone, as every sidebar page's header is its title with
+    no line under it (owner, 28 Oct 2026: a subheading there breaks the
+    header's design language; the sidebar's badge carries the count), and the agent
     panel collapses as Requests opens, so the open request takes the width
     (the member may still open it). The list tile has a search (a `ui/button`
     that opens a field, filtering what the lists hold, Escape to close), the

@@ -567,31 +567,37 @@
   gap: 10px;
   min-height: 56px;
 }
-.workspace-shell[data-right="collapsed"] .workspace-right-top .workspace-icon-button {
+.workspace-right-toggle { flex: none; border-radius: 999px; }
+.workspace-shell[data-right="collapsed"] .workspace-right-top .workspace-right-toggle {
   margin: 0 auto;
 }
 
+/* Collapsed, the panel's rail mirrors the left sidebar's (workspace-sidebar.css):
+   the same 32px toggle on the header row, then a 40px tile from y=62 holding
+   32px icon squares 4px apart, every centre on the rail's middle. */
 .workspace-right-rail {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  margin-top: 9px;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
   padding: 4px;
   border-radius: 14px;
   background: var(--workspace-canvas);
 }
 .workspace-rail-button {
   display: grid;
-  width: 100%;
-  min-height: 40px;
+  width: 32px;
+  height: 32px;
   place-items: center;
   border: 0;
-  border-radius: 10px;
+  border-radius: 9px;
   background: transparent;
   color: var(--tone-aaaaaa);
 }
 .workspace-rail-button:hover { background: var(--tone-2a2a2a); color: var(--tone-efefef); }
-.workspace-rail-button .workspace-avatar { width: 26px; height: 26px; }
+.workspace-rail-button .workspace-avatar { width: 24px; height: 24px; }
+.workspace-rail-button .workspace-unread-badge { top: -3px; right: -4px; }
 
 /* The panel's header (DESIGN.md §2): the agent, "Only you · in {place}",
    History, New chat and the collapse toggle, on the header's 56px row. */
@@ -865,21 +871,12 @@
   }
   .workspace-shell[data-right="collapsed"] .workspace-right-top { height: 0; min-height: 0; }
   .workspace-shell[data-right="collapsed"] .workspace-right-rail { display: none; }
-  .workspace-shell[data-right="collapsed"] .workspace-right-top .workspace-icon-button {
+  .workspace-shell[data-right="collapsed"] .workspace-right-top .workspace-right-toggle {
     position: absolute;
     top: 20px;
     right: 12px;
-    justify-content: center;
-    width: 36px;
-    height: 36px;
     margin: 0;
-    padding: 0;
-    border: 1px solid var(--tone-404040);
-    border-radius: 50%;
-    background: var(--tone-292929);
-    color: var(--tone-dddddd);
   }
-  .workspace-shell[data-right="collapsed"] .workspace-right-top .workspace-icon-button:hover { background: var(--tone-363636); }
   .workspace-shell[data-left="expanded"] .workspace-left {
     position: absolute;
     z-index: 5;

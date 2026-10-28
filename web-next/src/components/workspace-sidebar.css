@@ -260,17 +260,20 @@ button.workspace-sidebar-heading[aria-current="page"] { color: var(--text); }
   height: 56px;
   min-height: 56px;
 }
+/* A 40px tile of 32px icon squares 4px apart, as the agent panel's rail
+   (workspace.css): an icon never spills past its tile's edge. */
 .workspace-shell[data-left="collapsed"] .workspace-sidebar-tile { padding: 4px; }
+.workspace-shell[data-left="collapsed"] .workspace-sidebar-tile [data-slot="sidebar-menu"] { gap: 4px; }
 .workspace-shell[data-left="collapsed"] .workspace-sidebar-item {
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
   padding: 0;
 }
 .workspace-shell[data-left="collapsed"] .workspace-sidebar-tile li:has(.workspace-sidebar-count) .workspace-sidebar-item { padding: 0; }
 .workspace-shell[data-left="collapsed"] .workspace-sidebar-count.is-badge {
-  top: 3px;
-  right: 2px;
+  top: -3px;
+  right: -4px;
   min-width: 15px;
   height: 15px;
   padding: 0 4px;

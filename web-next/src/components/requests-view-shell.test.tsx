@@ -228,7 +228,7 @@ describe("Requests in the workspace shell", () => {
     ).toBe("page")
   })
 
-  it("gives the open request the width and says in the header how many wait", async () => {
+  it("gives the open request the width under a header that is its title alone", async () => {
     const { container } = renderShell()
     fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
     expect(
@@ -245,10 +245,11 @@ describe("Requests in the workspace shell", () => {
     expect(
       container.querySelector(".workspace-shell")?.getAttribute("data-right")
     ).toBe("collapsed")
+    // Like every sidebar page's, Requests' header is its title, with no
+    // count or "All clear" under it: the sidebar's badge carries the count.
     const header = container.querySelector(".workspace-header") as HTMLElement
-    expect(
-      await within(header).findByText(/^(\d+ waiting for you|All clear)$/)
-    ).toBeTruthy()
+    expect(header.textContent).toBe("Requests")
+    expect(within(header).queryByText(/waiting for you|All clear/)).toBeNull()
   })
 
   it("is where the Agent overview's waiting-for-you number leads", async () => {
